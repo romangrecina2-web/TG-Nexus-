@@ -21,7 +21,7 @@ GitHub Pages продолжает публиковать сайт из ветк�
 
 1. Создайте новый Blueprint в Render и выберите этот GitHub-репозиторий. В корне уже лежит `render.yaml`.
 2. Во время создания сервиса задайте `BOT_TOKEN` значением токена, полученного у @BotFather. **Не добавляйте токен в GitHub, config.js или сообщения.**
-3. `WEB_APP_URL`, `ALLOWED_ORIGINS` и `WEBHOOK_SECRET` уже описаны в Blueprint. Render сгенерирует секрет webhook.
+3. `WEB_APP_URL` и `ALLOWED_ORIGINS` уже описаны в Blueprint. Backend сам создаёт случайный hex-секрет для webhook при запуске и регистрирует его в Telegram.
 4. После публикации скопируйте публичный адрес backend-сервиса, например `https://имя-сервиса.onrender.com`.
 5. Откройте `config.js` и укажите этот адрес в `apiBaseUrl`, без завершающего слэша:
    ```js
