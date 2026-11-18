@@ -1,0 +1,13 @@
+{
+  "name": "tg-shell-bot-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secure Telegram bot backend for the GitHub Pages mini app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
