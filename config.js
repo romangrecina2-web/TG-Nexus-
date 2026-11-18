@@ -1,4 +1,4 @@
-// Адрес backend-сервера. Заполните после создания сервиса Render.
+// Адрес backend-сервера Render.
 window.APP_CONFIG = Object.freeze({
-  apiBaseUrl: ""
+  apiBaseUrl: "https://tg-shell-bot-api.onrender.com"
 });
