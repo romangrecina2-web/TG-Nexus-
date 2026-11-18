@@ -12,7 +12,5 @@ services:
         sync: false
       - key: WEB_APP_URL
         value: https://romangrecina2-web.github.io/TG-test-/
-      - key: WEBHOOK_SECRET
-        generateValue: true
       - key: ALLOWED_ORIGINS
         value: https://romangrecina2-web.github.io
