@@ -603,7 +603,7 @@ async function runCodingAgents(c,userMessage,signal,onProgress){
     try{
       var response=await fetch(base()+'/chat/completions',{
         method:'POST',signal:signal,headers:hdrs(),
-        body:JSON.stringify({model:model,temperature:0.2,max_tokens:420,messages:[{role:'system',content:prompt},{role:'user',content:context}]})
+        body:JSON.stringify({model:model,max_tokens:420,messages:[{role:'system',content:prompt},{role:'user',content:context}]})
       });
       if(!response.ok)throw await httpErr(response);
       var data=await response.json(),message=data.choices&&data.choices[0]&&data.choices[0].message,content=message&&message.content;
