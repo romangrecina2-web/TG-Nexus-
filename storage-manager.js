@@ -80,7 +80,7 @@ function describeStorageError(error) {
     return {
       status: 503,
       code,
-      message: 'Сервер не может шифровать API-ключи: DATA_ENCRYPTION_KEY отсутствует или имеет неверный формат. Требуется 64 шестнадцатеричных символа.'
+      message: 'Сервер не может шифровать API-ключи: DATA_ENCRYPTION_KEY отсутствует или неверен. Нужен 32-байтовый ключ в hex (64 символа) или base64.'
     };
   }
   if (code === 'ERR_INVALID_URL') {
