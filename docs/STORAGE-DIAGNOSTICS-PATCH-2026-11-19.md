@@ -11,7 +11,7 @@ It changes storage initialization and error reporting. It does not change the pr
 - A failed initialization clears its cached Promise, allowing a later request to retry.
 - A module returning `false` is treated as missing persistent storage rather than as successful initialization.
 - Telegram webhook commands that do not need persistence (`/start` and `/help`) no longer depend on database initialization.
-- Added a `GET /ready` endpoint that initializes bot storage and executes `SELECT 1`. The existing `GET /health` remains a liveness check.
+- Added a `GET /ready` endpoint that initializes bot storage, validates the AES-256 encryption key, and executes `SELECT 1`. The existing `GET /health` remains a liveness check.
 - Bot settings errors now include stable machine-readable codes and safe, actionable Russian messages.
 - API URL, API key, model, missing database URL, encryption-key format, PostgreSQL authentication, missing database, permission, and connectivity errors are distinguished.
 - Server logs include the subsystem, error name, and technical code, but not raw error messages, request bodies, Telegram initData, or provider keys.
@@ -21,6 +21,7 @@ It changes storage initialization and error reporting. It does not change the pr
 | Code | Meaning |
 | --- | --- |
 | `DATABASE_URL_MISSING` | PostgreSQL connection string is not configured |
+| `DATABASE_URL_INVALID` | PostgreSQL connection string is present but malformed |
 | `DATA_ENCRYPTION_KEY_INVALID` | AES-256 key is missing or not 64 hex characters |
 | `POSTGRES_AUTH_FAILED` | PostgreSQL rejected the credentials |
 | `POSTGRES_DATABASE_MISSING` | Database named in the connection string was not found |
