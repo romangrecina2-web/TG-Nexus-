@@ -115,7 +115,7 @@ var storageOK=true;
 try{localStorage.setItem('_t','1');localStorage.removeItem('_t')}catch(e){storageOK=false}
 
 function host(u){try{return new URL(u).hostname}catch(e){return String(u||'')}}
-function def(){return{v:2,cfg:{url:PRESETS.or.url,model:PRESETS.or.model,models:[PRESETS.or.model],wallpaperEnabled:false,sys:'Ты умный и дружелюбный ассистент. Отвечай по-русски, если не просят иначе. Пиши ясно и по делу.',temp:'',max:'',reasoning:'auto',internet:false,sandbox:false,sandboxInternet:false,multiAgent:false,agentCount:3,auto:true,sumAt:10000,keep:4,pinCap:4000,askCode:true,balOn:true,minBal:10,balBase:'',balUsage:0,keys:{}},mem:[],chats:[],cur:null,stats:{day:'',n:0}}}
+function def(){return{v:2,cfg:{url:PRESETS.or.url,model:PRESETS.or.model,models:[PRESETS.or.model],wallpaperEnabled:false,sys:'Ты умный и дружелюбный ассистент. Отвечай по-русски, если не просят иначе. Пиши ясно и по делу.',temp:'',max:'',reasoning:'auto',internet:false,sandbox:false,sandboxInternet:false,multiAgent:false,agentCount:3,sandboxTimeout:60,auto:true,sumAt:10000,keep:4,pinCap:4000,askCode:true,balOn:true,minBal:10,balBase:'',balUsage:0,keys:{}},mem:[],chats:[],cur:null,stats:{day:'',n:0}}}
 function makeId(){return 'm_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
 function fixChat(c){
   c.msgs=(c.msgs||[]).filter(function(m){return m.role==='user'||(m.content&&m.content.indexOf('\u26A0')!==0)||(m.role==='assistant'&&(m.originalVersion||m.regenVersions))});
@@ -136,7 +136,7 @@ function norm(d){
   d.cfg=d.cfg||{};for(var k in b.cfg)if(!(k in d.cfg))d.cfg[k]=b.cfg[k];
   d.cfg.keys=d.cfg.keys||{};d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
   if(d.cfg.model&&d.cfg.models.indexOf(d.cfg.model)<0)d.cfg.models.unshift(d.cfg.model);
-  d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;d.cfg.sandbox=!!d.cfg.sandbox;d.cfg.sandboxInternet=!!d.cfg.sandboxInternet;if(!d.cfg.sandbox)d.cfg.sandboxInternet=false;d.cfg.multiAgent=!!d.cfg.multiAgent;d.cfg.agentCount=Math.max(1,Math.min(20,Math.round(Number(d.cfg.agentCount)||3)));
+  d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;d.cfg.sandbox=!!d.cfg.sandbox;d.cfg.sandboxInternet=!!d.cfg.sandboxInternet;if(!d.cfg.sandbox)d.cfg.sandboxInternet=false;d.cfg.multiAgent=!!d.cfg.multiAgent;d.cfg.agentCount=Math.max(1,Math.min(20,Math.round(Number(d.cfg.agentCount)||3)));d.cfg.sandboxTimeout=Math.max(1,Math.min(3600,Math.round(Number(d.cfg.sandboxTimeout)||60)));
   d.mem=d.mem||[];d.chats=(d.chats||[]).map(fixChat);d.chats.forEach(function(c){if(!c.model)c.model=d.cfg.model});d.stats=d.stats||b.stats;
   if(d.cur&&!d.chats.some(function(c){return c.id===d.cur}))d.cur=null;
   return d;
@@ -557,7 +557,8 @@ function sandboxRun(code){
       'parent.postMessage({token:TOKEN,status:"готово",output:out.slice(0,10000)},"*")'+
       '}catch(e){parent.postMessage({token:TOKEN,status:"ошибка",output:(e&&e.stack?e.stack:String(e)).slice(0,10000)},"*")}})();<\\/script></body></html>';
     frame.srcdoc=src;document.body.appendChild(frame);
-    timer=setTimeout(function(){finish({status:'тайм-аут',output:internetEnabled?'Выполнение остановлено через 15 секунд.':'Выполнение остановлено через 6 секунд.'})},internetEnabled?15000:6000);
+    var timeoutSeconds=Math.max(1,Math.min(3600,Math.round(Number(S.cfg.sandboxTimeout)||60)));
+    timer=setTimeout(function(){finish({status:'тайм-аут',output:'Выполнение остановлено через '+timeoutSeconds+' сек.'})},timeoutSeconds*1000);
   });
 }
 var codeRe=/(?:напиши|напишите|создай|создайте|сделай|сделайте|сгенерируй|сгенерируйте|разработай|разработайте|реализуй)\s+(?:(?:мне|нам|пожалуйста|простой|простую|простое|небольшой|небольшую|рабочий|рабочую)\s+){0,3}(?:код|кода|скрипт|скрипта|программу|приложение|сайт|страницу|функцию|бота|игру|плагин|расширение|парсер|калькулятор|html|python|javascript)(?![а-яёa-z])|(?:напиши|напишите|сгенерируй)[\s\S]{0,40}\sкод(?![а-яё])|(?:напиши|напишите|создай|сделай)\s+(?:[а-яё]+\s+){0,2}на\s+(?:python|javascript|js|html|css|java|c\+\+|php)(?![a-z+])/i;
@@ -855,7 +856,7 @@ function hint(){
 }
 function fillSet(){
   $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён. Вставьте новый, чтобы заменить':'Вставьте ключ OpenRouter';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
-  $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
+  $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
   $('#cSumAt').value=S.cfg.sumAt;$('#cKeep').value=S.cfg.keep;$('#cPinCap').value=S.cfg.pinCap;$('#cMinBal').value=S.cfg.minBal;
@@ -919,6 +920,10 @@ $('#cMultiAgent').addEventListener('change',function(){
 $('#cAgentCount').addEventListener('input',function(){
   var value=Math.max(1,Math.min(20,Math.round(Number(this.value)||1)));
   this.value=value;$('#agentCountValue').textContent=value;S.cfg.agentCount=value;save();
+});
+$('#cSandboxTimeout').addEventListener('change',function(){
+  var value=Math.max(1,Math.min(3600,Math.round(Number(this.value)||60)));
+  this.value=value;S.cfg.sandboxTimeout=value;save();toast('Тайм-аут песочницы: '+value+' сек.');
 });
 $('#cAuto').addEventListener('change',function(){S.cfg.auto=this.checked;save()});
 $('#kEye').onclick=function(){var k=$('#cKey');k.type=k.type==='password'?'text':'password';this.textContent=k.type==='password'?'Показать':'Скрыть'};
