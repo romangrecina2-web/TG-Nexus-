@@ -530,7 +530,7 @@ function sandboxRun(code){
         'const publicFetch=async(input,init)=>{',
         'if(++networkCalls>10)throw new Error("Лимит: не более 10 сетевых запросов за один запуск.");',
         'const request=(typeof Request!=="undefined"&&input instanceof Request)?input:null;',
-        'const raw=request?request.url:String(input);const target=new URL(raw);const h=target.hostname.toLowerCase();',
+        'const raw=request?request.url:String(input);const target=new URL(raw);const hostName=target.hostname.toLowerCase();const h=hostName.endsWith(".")?hostName.slice(0,-1):hostName;',
         'if(target.protocol!=="https:"||target.username||target.password)throw new Error("Разрешены только HTTPS-адреса без логина и пароля.");',
         'if(h.indexOf(".")<1||h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local")||h.endsWith(".internal")||/^[0-9.]+$/.test(h)||h.indexOf(":")!==-1)throw new Error("Локальные адреса и IP-адреса заблокированы.");',
         'const opts=Object.assign({},request?{method:request.method,headers:request.headers,body:request.body?await request.clone().arrayBuffer():undefined}:{},init||{});',
