@@ -79,3 +79,25 @@ GitHub Pages продолжает публиковать сайт из ветк�
 - JavaScript-песочница работает в отдельном sandboxed iframe без allow-same-origin. Сетевой режим включается отдельно; он ограничен HTTPS, CORS, количеством запросов и размером ответа, но не является серверным DNS/IP-фильтром.
 
 Подробности, ограничения и рекомендации по настройке GitHub/Render см. в [SECURITY.md](./SECURITY.md) и [отчёте обновления](./docs/SECURITY-UPDATE-2026-11-19.md). Перед публикацией запускайте npm test.
+
+
+## Telegram AI chat (feature branch)
+
+The Telegram chat backend uses PostgreSQL for durable user settings and conversation history.
+
+Required Render environment variables for this feature:
+- `DATABASE_URL`: connection string for a persistent PostgreSQL database.
+- `DATA_ENCRYPTION_KEY`: exactly 64 hexadecimal characters (32 random bytes), used for AES-256-GCM encryption of provider API keys at rest. Generate with `openssl rand -hex 32`.
+- Existing `BOT_TOKEN`, `WEB_APP_URL`, `ALLOWED_ORIGINS` remain required as applicable.
+
+The Mini App stores the active provider key in that browser's `localStorage` for convenience and syncs it to the backend using verified Telegram Mini App initData. The backend stores only an encrypted copy. A different API URL clears the locally saved key. This increases convenience but means browser scripts/extensions with access to the page may be able to read the key; protect the account and avoid untrusted browser extensions.
+
+Telegram commands implemented in this branch:
+- `/chat` and `/new`: create a conversation.
+- `/stop`: stop the active conversation while retaining its transcript.
+- `/model_info`: list saved model IDs and the active model.
+- `/model <provider/model>` or `/model-<provider/model>`: select and save a model ID.
+
+The active conversation is marked sleeping after 60 seconds without a new message; its transcript remains in PostgreSQL. Render's own free-service sleep behavior remains separate and is controlled by Render (typically 15 minutes without inbound traffic).
+
+This branch does not yet include GitHub OAuth/repository permissions or GitHub-backed code analysis. Those require a GitHub OAuth App (client ID/secret and callback URL) or GitHub App credentials, plus a separate permission and repository-selection flow. Do not paste GitHub credentials into chat or commit them to the repository.
