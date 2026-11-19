@@ -295,7 +295,7 @@ async function handleStart(message) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
       !message.from || message.chat.id !== message.from.id) return;
 
-  const text = 'На данный момент бот находится в разработке. Нажмите на мини-приложение, чтобы начать пользоваться.';
+  const text = 'TG Shell готов к работе. Настройте API URL, ключ и модель в Mini App, затем используйте /chat или /new. Команды: /chat, /new, /stop, /model_info, /model <provider/model>.';
   await telegramApi('sendMessage', {
     chat_id: message.chat.id,
     text,
@@ -456,7 +456,7 @@ async function handleGithubApi(req, res, pathname) {
     }
     return json(res, 404, { ok: false, error: 'GitHub endpoint not found.' });
   } catch (error) {
-    const status = /DATABASE_URL|PostgreSQL|хранилище|не настроен/i.test(error.message) ? 503 : 400;
+    const status = /DATABASE_URL|DATA_ENCRYPTION_KEY|PostgreSQL|хранилище|не настроен/i.test(error.message) ? 503 : 400;
     return json(res, status, { ok: false, error: String(error.message || 'GitHub integration error').slice(0, 500) });
   }
 }
