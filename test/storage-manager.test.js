@@ -95,7 +95,7 @@ test('storage errors explain missing configuration without exposing secrets', ()
   const encryption = describeStorageError({ code: 'DATA_ENCRYPTION_KEY_INVALID' });
   assert.equal(encryption.status, 503);
   assert.equal(encryption.code, 'DATA_ENCRYPTION_KEY_INVALID');
-  assert.match(encryption.message, /64 шестнадцатеричных символа/);
+  assert.match(encryption.message, /64 символа.*base64/);
 });
 
 test('PostgreSQL errors are translated into actionable but safe diagnostics', () => {
