@@ -22,8 +22,19 @@ test('readiness encryption-key validation rejects missing or malformed keys', ()
       () => botChat.validateEncryptionKey(),
       { code: 'DATA_ENCRYPTION_KEY_INVALID' }
     );
+    process.env.DATA_ENCRYPTION_KEY = 'not-a-valid-secret';
+    assert.throws(
+      () => botChat.validateEncryptionKey(),
+      { code: 'DATA_ENCRYPTION_KEY_INVALID' }
+    );
     process.env.DATA_ENCRYPTION_KEY = 'ab'.repeat(32);
     assert.equal(botChat.validateEncryptionKey(), true);
+
+    const base64Key = Buffer.alloc(32, 0xab).toString('base64');
+    process.env.DATA_ENCRYPTION_KEY = base64Key;
+    assert.equal(botChat.validateEncryptionKey(), true);
+    const encrypted = botChat.encrypt('render-generated-key-test');
+    assert.equal(botChat.decrypt(encrypted), 'render-generated-key-test');
   } finally {
     if (previous === undefined) delete process.env.DATA_ENCRYPTION_KEY;
     else process.env.DATA_ENCRYPTION_KEY = previous;
