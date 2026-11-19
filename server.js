@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { URL } = require('node:url');
+const botChat = require('./bot-chat');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
@@ -327,6 +328,8 @@ async function handleWebhook(req, res) {
         chat_id: message.chat.id,
         text: 'Откройте мини-приложение кнопкой внизу чата или кнопкой «Открыть мини-приложение».'
       });
+    } else {
+      await botChat.handleUpdate(update);
     }
   } catch (error) {
     // Do not log request bodies, Telegram initData, or user file contents.
@@ -384,6 +387,25 @@ async function handleSendCode(req, res) {
         ? error.message
         : 'Telegram не смог принять файл. Повторите попытку позже.'
     });
+  }
+}
+
+async function handleBotSettings(req, res) {
+  if (!/^application\\/json(?:\\s*;|$)/i.test(req.headers['content-type'] || '')) {
+    return json(res, 415, { ok: false, error: 'Ожидается Content-Type: application/json.' });
+  }
+  let payload;
+  try { payload = parseJson(await readBody(req, 12 * 1024)); }
+  catch (error) { return json(res, error.status || 400, { ok: false, error: error.message }); }
+  const auth = validateTelegramInitData(payload && payload.initData);
+  if (!auth) return json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram.' });
+  try {
+    await botChat.saveSettings(auth.id, payload.apiBase, payload.apiKey, payload.model);
+    return json(res, 200, { ok: true });
+  } catch (error) {
+    const status = /DATABASE_URL|DATA_ENCRYPTION_KEY|PostgreSQL/.test(error.message) ? 503 : 400;
+    return json(res, status, { ok: false, error: status === 503
+      ? 'Хранилище бота не настроено на сервере.' : error.message });
   }
 }
 
