@@ -895,7 +895,89 @@ function memList(){
     li.appendChild(s);li.appendChild(b);u.appendChild(li);
   });
 }
-function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on';syncBotSettings()}
+var githubInstallUrl='',githubStatusCache=null;
+async function githubRequest(path,payload){
+  if(!TG||!TG.initData)throw new Error('Откройте Mini App из Telegram.');
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
+  if(!apiBase)throw new Error('Backend не настроен в config.js.');
+  var response=await fetch(apiBase+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({initData:TG.initData},payload||{}))});
+  var data=await response.json().catch(function(){return{}});
+  if(!response.ok||!data.ok)throw new Error(data.error||('HTTP '+response.status));
+  return data;
+}
+function githubNote(message,bad){var el=$('#ghStatus');el.textContent=message;el.className='note'+(bad?' bad':' ok')}
+function selectedGithubRepo(){return $('#ghRepo').value||''}
+async function refreshGithubStatus(){
+  if(!$('#ghStatus'))return;
+  try{
+    var data=await githubRequest('/api/github/status'),status=data.status||{};githubStatusCache=status;
+    githubInstallUrl=status.installUrl||'';
+    var install=$('#ghInstall');install.innerHTML='';
+    (status.installations||[]).forEach(function(item){var option=document.createElement('option');option.value=String(item.id);option.textContent=item.account+' · '+item.targetType+' · '+item.repositorySelection;install.appendChild(option)});
+    if(!install.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='Нет установок GitHub App';install.appendChild(empty)}
+    $('#ghInstallApp').hidden=!status.connected||!githubInstallUrl;
+    $('#ghDisconnect').disabled=!status.connected;
+    install.disabled=!status.connected||!(status.installations||[]).length;
+    if(status.connected){githubNote('Подключён GitHub: '+status.login+'. Установок приложения: '+(status.installations||[]).length+'. '+((status.installations||[]).length?'Выберите установку ниже.':'Установите GitHub App для доступа к репозиториям.'));
+      if(install.value)await loadGithubRepositories();
+    }else{githubNote('GitHub не подключён. Сначала выполните авторизацию.');$('#ghRepo').innerHTML='<option value="">Нет доступных репозиториев</option>';$('#ghFiles').innerHTML=''}
+  }catch(error){githubNote('GitHub: '+String(error.message||error),true)}
+}
+async function loadGithubRepositories(){
+  var installationId=$('#ghInstall').value;if(!installationId)return;
+  try{
+    githubNote('Загружаю список репозиториев…');
+    var data=await githubRequest('/api/github/repositories',{installationId:installationId});
+    var sel=$('#ghRepo');sel.innerHTML='';
+    (data.repositories||[]).forEach(function(repo){var option=document.createElement('option');option.value=repo.fullName;option.textContent=repo.fullName+(repo.private?' · private':' · public');sel.appendChild(option)});
+    if(!sel.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='В этой установке нет доступных репозиториев';sel.appendChild(empty)}
+    $('#ghFiles').innerHTML='';githubNote('Репозиториев доступно: '+(data.repositories||[]).length+'.');
+  }catch(error){githubNote('Не удалось загрузить репозитории: '+String(error.message||error),true)}
+}
+async function loadGithubTree(){
+  var full=selectedGithubRepo(),installationId=$('#ghInstall').value;if(!full||!installationId)return githubNote('Сначала выберите установку и репозиторий.',true);
+  var parts=full.split('/');
+  try{
+    githubNote('Читаю дерево файлов '+full+'…');
+    var data=await githubRequest('/api/github/tree',{installationId:installationId,owner:parts[0],repo:parts[1]}),tree=data.tree||{};
+    var sel=$('#ghFiles');sel.innerHTML='';
+    (tree.files||[]).forEach(function(file){var option=document.createElement('option');option.value=file.path;option.textContent=file.path+' · '+file.size+' Б'+(file.tooLarge?' · больше 512 КБ':'');option.disabled=!!file.tooLarge;sel.appendChild(option)});
+    if(!sel.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='Файлы не найдены';sel.appendChild(empty)}
+    githubNote('Файлов в списке: '+(tree.files||[]).length+(tree.truncated?' (дерево ограничено первыми 500 файлами)':'')+'. Выберите до пяти небольших файлов.');
+  }catch(error){githubNote('Не удалось получить дерево: '+String(error.message||error),true)}
+}
+async function attachGithubFiles(){
+  var selected=Array.prototype.filter.call($('#ghFiles').options,function(option){return option.selected&&!option.disabled&&option.value;});
+  if(!selected.length)return githubNote('Выберите хотя бы один файл.',true);
+  if(selected.length+pendingFiles.length>5)return githubNote('В запросе может быть не больше пяти файлов. Сначала уберите лишние вложения.',true);
+  var full=selectedGithubRepo(),parts=full.split('/'),installationId=$('#ghInstall').value,added=0;
+  for(var i=0;i<selected.length;i++){
+    var path=selected[i].value;
+    if(pendingFiles.some(function(file){return file.githubPath===full+'/'+path}))continue;
+    try{
+      var data=await githubRequest('/api/github/file',{installationId:installationId,owner:parts[0],repo:parts[1],path:path});
+      var file=data.file;if(!file||typeof file.content!=='string')throw new Error('GitHub не вернул текстовое содержимое.');
+      pendingFiles.push({name:full+'/'+file.path,type:'text/plain',size:file.size,text:file.content,githubPath:full+'/'+file.path});added++;
+    }catch(error){githubNote('Файл '+path+': '+String(error.message||error),true)}
+  }
+  renderPending();
+  if(added){githubNote('Добавлено файлов: '+added+'. Напишите задачу в чате, например: «Проанализируй структуру и найди ошибки».');toast('Файлы GitHub добавлены в запрос')}
+}
+$('#ghConnect').onclick=async function(){
+  try{githubNote('Создаю защищённую ссылку GitHub OAuth…');var data=await githubRequest('/api/github/connect');if(!data.url)throw new Error('Сервер не вернул ссылку авторизации.');
+    if(TG&&TG.openLink)TG.openLink(data.url);else window.location.href=data.url;
+  }catch(error){githubNote('Не удалось подключить GitHub: '+String(error.message||error),true)}
+};
+$('#ghRefresh').onclick=refreshGithubStatus;
+$('#ghDisconnect').onclick=async function(){
+  if(!confirm('Отключить GitHub и удалить сохранённые токены?'))return;
+  try{await githubRequest('/api/github/disconnect');$('#ghRepo').innerHTML='';$('#ghFiles').innerHTML='';await refreshGithubStatus();githubNote('GitHub отключён. Сохранённые токены удалены.')}catch(error){githubNote('Не удалось отключить GitHub: '+String(error.message||error),true)}
+};
+$('#ghInstallApp').onclick=function(){if(!githubInstallUrl)return;if(TG&&TG.openLink)TG.openLink(githubInstallUrl);else window.open(githubInstallUrl,'_blank','noopener')};
+$('#ghInstall').addEventListener('change',loadGithubRepositories);
+$('#ghLoadFiles').onclick=loadGithubTree;
+$('#ghAttachFiles').onclick=attachGithubFiles;
+function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on';syncBotSettings();refreshGithubStatus()}
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
