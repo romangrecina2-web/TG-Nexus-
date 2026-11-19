@@ -291,7 +291,7 @@ async function handleStart(message) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
       !message.from || message.chat.id !== message.from.id) return;
 
-  const text = 'На данный момент бот находится в разработке. Нажмите на мини-приложение, чтобы начать пользоваться.';
+  const text = 'TG-test готов к работе. Откройте Mini App, чтобы настроить провайдера и API-ключ, или отправьте /chat, чтобы продолжить разговор.';
   await telegramApi('sendMessage', {
     chat_id: message.chat.id,
     text,
@@ -338,6 +338,7 @@ async function handleWebhook(req, res) {
   } catch (error) {
     // Do not log request bodies, Telegram initData, or user file contents.
     console.error('Webhook processing failed.');
+    return json(res, 503, { ok: false });
   }
 
   return json(res, 200, { ok: true });
@@ -606,10 +607,10 @@ async function handleTelegramChatMessage(message) {
     }
   }
 }
-let updateWorkerRunning = false;
+let activeUpdateWorkers = 0;
 async function processUpdateQueue() {
-  if (updateWorkerRunning) return;
-  updateWorkerRunning = true;
+  if (activeUpdateWorkers >= 3) return;
+  activeUpdateWorkers += 1;
   try {
     const item = await storage.claimNextUpdate();
     if (!item) return;
@@ -621,7 +622,7 @@ async function processUpdateQueue() {
       console.error('Telegram chat update processing failed.');
     }
   } catch { console.error('Telegram update queue unavailable.'); }
-  finally { updateWorkerRunning = false; }
+  finally { activeUpdateWorkers -= 1; }
 }
 function startUpdateWorker() {
   const timer = setInterval(processUpdateQueue, 1000);
@@ -653,6 +654,19 @@ async function configureWebhook() {
       url: webhookUrl,
       secret_token: WEBHOOK_SECRET,
       allowed_updates: ['message']
+    });
+    await telegramApi('setMyCommands', {
+      commands: [
+        { command: 'start', description: 'Запустить бота' },
+        { command: 'help', description: 'Список команд' },
+        { command: 'chat', description: 'Продолжить разговор' },
+        { command: 'new', description: 'Начать новый разговор' },
+        { command: 'stop', description: 'Остановить разговор' },
+        { command: 'model_info', description: 'Сохранённые модели' },
+        { command: 'model', description: 'Выбрать модель: /model-идентификатор' },
+        { command: 'github', description: 'Подключить GitHub' },
+        { command: 'repos', description: 'Список репозиториев' }
+      ]
     });
     console.log('Telegram webhook configured.');
   } catch {
@@ -710,7 +724,7 @@ if (require.main === module) {
         if (enabled) startUpdateWorker();
         else console.log('Persistent chat storage disabled: DATABASE_URL is missing.');
       }).catch(() => console.error('Persistent storage initialization failed.'));
-    configureWebhook().catch(() => console.error('Webhook setup failed.'));
+
   });
 }
 
