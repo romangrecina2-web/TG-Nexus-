@@ -175,7 +175,7 @@ function assistantApiBase(){return String((window.APP_CONFIG&&window.APP_CONFIG.
 async function syncAssistantSettings(showError){
   if(!TG||!TG.initData||!assistantApiBase())return false;
   try{
-    var r=await fetch(assistantApiBase()+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':TG.initData},body:JSON.stringify({apiBase:S.cfg.url,apiKey:S.cfg.apiKey||'',model:S.cfg.model})});
+    var r=await fetch(assistantApiBase()+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':TG.initData},body:JSON.stringify({apiBase:S.cfg.url,apiKey:S.cfg.apiKey||'',model:S.cfg.model,models:S.cfg.models||[]})});
     var j=await r.json().catch(function(){return{}});
     if(!r.ok||!j.ok)throw new Error(j.error||'Не удалось сохранить настройки для Telegram-бота.');
     return true;
@@ -1255,7 +1255,18 @@ $('#cBalMan').addEventListener('change',async function(){
 });
 
 var TG=(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData)?Telegram.WebApp:null;
-if(ACTIVE_KEY)setTimeout(function(){syncAssistantSettings(false)},800);
+async function loadAssistantSettings(){
+  if(!TG||!TG.initData||!assistantApiBase())return;
+  try{
+    var r=await fetch(assistantApiBase()+'/api/settings',{headers:{'X-Telegram-Init-Data':TG.initData}});
+    var j=await r.json().catch(function(){return{}});
+    if(!r.ok||!j.ok)return;
+    (j.models||[]).forEach(function(model){addSavedModel(model)});
+    if(j.model){S.cfg.model=j.model;addSavedModel(j.model)}
+    saveNow();renderSavedModels();fillChatModel();updSub();
+  }catch(e){}
+}
+if(TG)setTimeout(async function(){await loadAssistantSettings();if(ACTIVE_KEY)await syncAssistantSettings(false)},800);
 async function githubRequest(path,options){
   if(!TG||!TG.initData)throw new Error('Откройте приложение из Telegram.');
   var baseUrl=assistantApiBase();if(!baseUrl)throw new Error('Не настроен адрес backend в config.js.');
