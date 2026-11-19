@@ -3,6 +3,13 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { URL } = require('node:url');
+const botChat = require('./bot-chat');
+const github = require('./github-integration');
+let storagePromise = null;
+function ensureStorage() {
+  if (!storagePromise) storagePromise = Promise.all([botChat.init(), github.init()]);
+  return storagePromise;
+}
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
@@ -288,7 +295,7 @@ async function handleStart(message) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
       !message.from || message.chat.id !== message.from.id) return;
 
-  const text = 'На данный момент бот находится в разработке. Нажмите на мини-приложение, чтобы начать пользоваться.';
+  const text = 'TG Shell готов к работе. Настройте API URL, ключ и модель в Mini App, затем используйте /chat или /new. Команды: /chat, /new, /stop, /model_info, /model <provider/model>.';
   await telegramApi('sendMessage', {
     chat_id: message.chat.id,
     text,
@@ -317,6 +324,7 @@ async function handleWebhook(req, res) {
   }
 
   try {
+    await ensureStorage();
     const message = update && update.message;
     const text = message && typeof message.text === 'string' ? message.text.trim() : '';
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
@@ -327,6 +335,8 @@ async function handleWebhook(req, res) {
         chat_id: message.chat.id,
         text: 'Откройте мини-приложение кнопкой внизу чата или кнопкой «Открыть мини-приложение».'
       });
+    } else {
+      await botChat.handleUpdate(update);
     }
   } catch (error) {
     // Do not log request bodies, Telegram initData, or user file contents.
@@ -387,6 +397,91 @@ async function handleSendCode(req, res) {
   }
 }
 
+async function readAuthenticatedPayload(req, res, limit) {
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
+    json(res, 415, { ok: false, error: 'Ожидается Content-Type: application/json.' });
+    return null;
+  }
+  let payload;
+  try { payload = parseJson(await readBody(req, limit || 16 * 1024)); }
+  catch (error) { json(res, error.status || 400, { ok: false, error: error.message }); return null; }
+  const auth = validateTelegramInitData(payload && payload.initData);
+  if (!auth) { json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram.' }); return null; }
+  if (!checkRateLimit(auth.id)) { json(res, 429, { ok: false, error: 'Слишком много запросов. Попробуйте позже.' }); return null; }
+  return { payload: payload, userId: auth.id };
+}
+
+async function handleBotSettings(req, res) {
+  const auth = await readAuthenticatedPayload(req, res, 12 * 1024);
+  if (!auth) return;
+  try {
+    await ensureStorage();
+    if (auth.payload.clear === true || auth.payload.apiKey === '') await botChat.clearSettings(auth.userId);
+    else await botChat.saveSettings(auth.userId, auth.payload.apiBase, auth.payload.apiKey, auth.payload.model);
+    return json(res, 200, { ok: true });
+  } catch (error) {
+    const status = /DATABASE_URL|DATA_ENCRYPTION_KEY|PostgreSQL|storage/i.test(error.message) ? 503 : 400;
+    return json(res, status, { ok: false, error: status === 503 ? 'Хранилище бота не настроено на сервере.' : error.message });
+  }
+}
+
+async function handleGithubApi(req, res, pathname) {
+  const auth = await readAuthenticatedPayload(req, res, 24 * 1024);
+  if (!auth) return;
+  const p = auth.payload;
+  try {
+    await ensureStorage();
+    if (pathname === '/api/github/connect') {
+      const url = await github.beginOAuth(auth.userId);
+      return json(res, 200, { ok: true, url: url });
+    }
+    if (pathname === '/api/github/status') {
+      const status = await github.getStatus(auth.userId);
+      return json(res, 200, { ok: true, status: status });
+    }
+    if (pathname === '/api/github/disconnect') {
+      await github.disconnect(auth.userId);
+      return json(res, 200, { ok: true });
+    }
+    if (pathname === '/api/github/repositories') {
+      const repositories = await github.listRepositories(auth.userId, Number(p.installationId));
+      return json(res, 200, { ok: true, repositories: repositories });
+    }
+    if (pathname === '/api/github/tree') {
+      const tree = await github.listTree(auth.userId, Number(p.installationId), p.owner, p.repo);
+      return json(res, 200, { ok: true, tree: tree });
+    }
+    if (pathname === '/api/github/file') {
+      const file = await github.readFile(auth.userId, Number(p.installationId), p.owner, p.repo, p.path, p.ref);
+      return json(res, 200, { ok: true, file: file });
+    }
+    return json(res, 404, { ok: false, error: 'GitHub endpoint not found.' });
+  } catch (error) {
+    const status = /DATABASE_URL|DATA_ENCRYPTION_KEY|PostgreSQL|хранилище|не настроен/i.test(error.message) ? 503 : 400;
+    return json(res, status, { ok: false, error: String(error.message || 'GitHub integration error').slice(0, 500) });
+  }
+}
+
+async function handleGithubCallback(req, res, url) {
+  try {
+    await ensureStorage();
+    if (url.searchParams.get('error')) throw new Error('Авторизация GitHub отменена или отклонена.');
+    const result = await github.handleCallback(url.searchParams.get('code'), url.searchParams.get('state'));
+    const redirect = new URL(WEB_APP_URL);
+    redirect.searchParams.set('github', 'connected');
+    redirect.searchParams.set('github_user', result.login);
+    applySecurityHeaders(res);
+    res.writeHead(303, { location: redirect.toString() });
+    return res.end();
+  } catch (error) {
+    const redirect = new URL(WEB_APP_URL);
+    redirect.searchParams.set('github', 'error');
+    redirect.searchParams.set('reason', String(error.message || 'Не удалось завершить авторизацию').slice(0, 180));
+    applySecurityHeaders(res);
+    res.writeHead(303, { location: redirect.toString() });
+    return res.end();
+  }
+}
 async function configureWebhook() {
   const baseUrl = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
   if (!BOT_TOKEN || !baseUrl) {
@@ -443,6 +538,15 @@ function createServer() {
       if (req.method === 'POST' && url.pathname === '/api/send-code') {
         return handleSendCode(req, res);
       }
+      if (req.method === 'POST' && url.pathname === '/api/bot-settings') {
+        return handleBotSettings(req, res);
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/api/github/')) {
+        return handleGithubApi(req, res, url.pathname);
+      }
+      if (req.method === 'GET' && url.pathname === '/github/callback') {
+        return handleGithubCallback(req, res, url);
+      }
       return json(res, 404, { ok: false, error: 'Not found.' });
     }).catch(() => {
       if (!res.headersSent) json(res, 500, { ok: false, error: 'Internal server error.' });
@@ -461,6 +565,7 @@ if (require.main === module) {
   const server = createServer();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('Bot API listening on port ' + PORT);
+    ensureStorage().catch(() => console.error('Database initialization failed.'));
     configureWebhook().catch(() => console.error('Webhook setup failed.'));
   });
 }

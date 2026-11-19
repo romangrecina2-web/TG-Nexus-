@@ -157,6 +157,7 @@ function load(){
   return norm(s);
 }
 var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+try{var savedCredential=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null');if(savedCredential&&savedCredential.url===S.cfg.url&&typeof savedCredential.key==='string')ACTIVE_KEY=savedCredential.key}catch(e){}
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
@@ -170,6 +171,33 @@ function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
+function persistApiKey(){
+  try{
+    if(ACTIVE_KEY)localStorage.setItem('tg_bot_api_credential',JSON.stringify({url:S.cfg.url,key:ACTIVE_KEY}));
+    else localStorage.removeItem('tg_bot_api_credential');
+  }catch(e){toast('Не удалось сохранить API-ключ в памяти браузера')}
+}
+var botSettingsSyncQueue=Promise.resolve();
+function syncBotSettings(clear){
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
+  if(!TG||!TG.initData||!apiBase)return Promise.resolve(false);
+  if(!clear&&!ACTIVE_KEY)return Promise.resolve(false);
+  var payload={initData:TG.initData,apiBase:S.cfg.url,apiKey:clear?'':ACTIVE_KEY,model:S.cfg.model,clear:!!clear};
+  var execute=async function(){
+    try{
+      var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      var result=await response.json().catch(function(){return{}});
+      if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
+      return true;
+    }catch(error){
+      toast('Не удалось синхронизировать настройки бота: '+String(error.message||error).slice(0,180));
+      return false;
+    }
+  };
+  var task=botSettingsSyncQueue.then(execute,execute);
+  botSettingsSyncQueue=task.then(function(){return true},function(){return false});
+  return task;
+}
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
 function memText(){return S.mem.length?'\n\nЧто ты знаешь о пользователе (учитывай это, но не пересказывай без нужды):\n- '+S.mem.join('\n- '):''}
@@ -848,7 +876,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -856,7 +884,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ действует до закрытия вкладки':'Ключ не сохраняется. Вставьте его для этой вкладки';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён на этом устройстве':'Вставьте API-ключ';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -874,15 +902,97 @@ function memList(){
     li.appendChild(s);li.appendChild(b);u.appendChild(li);
   });
 }
-function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on'}
+var githubInstallUrl='',githubStatusCache=null;
+async function githubRequest(path,payload){
+  if(!TG||!TG.initData)throw new Error('Откройте Mini App из Telegram.');
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
+  if(!apiBase)throw new Error('Backend не настроен в config.js.');
+  var response=await fetch(apiBase+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({initData:TG.initData},payload||{}))});
+  var data=await response.json().catch(function(){return{}});
+  if(!response.ok||!data.ok)throw new Error(data.error||('HTTP '+response.status));
+  return data;
+}
+function githubNote(message,bad){var el=$('#ghStatus');el.textContent=message;el.className='note'+(bad?' bad':' ok')}
+function selectedGithubRepo(){return $('#ghRepo').value||''}
+async function refreshGithubStatus(){
+  if(!$('#ghStatus'))return;
+  try{
+    var data=await githubRequest('/api/github/status'),status=data.status||{};githubStatusCache=status;
+    githubInstallUrl=status.installUrl||'';
+    var install=$('#ghInstall');install.innerHTML='';
+    (status.installations||[]).forEach(function(item){var option=document.createElement('option');option.value=String(item.id);option.textContent=item.account+' · '+item.targetType+' · '+item.repositorySelection;install.appendChild(option)});
+    if(!install.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='Нет установок GitHub App';install.appendChild(empty)}
+    $('#ghInstallApp').hidden=!status.connected||!githubInstallUrl;
+    $('#ghDisconnect').disabled=!status.connected;
+    install.disabled=!status.connected||!(status.installations||[]).length;
+    if(status.connected){githubNote('Подключён GitHub: '+status.login+'. Установок приложения: '+(status.installations||[]).length+'. '+((status.installations||[]).length?'Выберите установку ниже.':'Установите GitHub App для доступа к репозиториям.'));
+      if(install.value)await loadGithubRepositories();
+    }else{githubNote('GitHub не подключён. Сначала выполните авторизацию.');$('#ghRepo').innerHTML='<option value="">Нет доступных репозиториев</option>';$('#ghFiles').innerHTML=''}
+  }catch(error){githubNote('GitHub: '+String(error.message||error),true)}
+}
+async function loadGithubRepositories(){
+  var installationId=$('#ghInstall').value;if(!installationId)return;
+  try{
+    githubNote('Загружаю список репозиториев…');
+    var data=await githubRequest('/api/github/repositories',{installationId:installationId});
+    var sel=$('#ghRepo');sel.innerHTML='';
+    (data.repositories||[]).forEach(function(repo){var option=document.createElement('option');option.value=repo.fullName;option.textContent=repo.fullName+(repo.private?' · private':' · public');sel.appendChild(option)});
+    if(!sel.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='В этой установке нет доступных репозиториев';sel.appendChild(empty)}
+    $('#ghFiles').innerHTML='';githubNote('Репозиториев доступно: '+(data.repositories||[]).length+'.');
+  }catch(error){githubNote('Не удалось загрузить репозитории: '+String(error.message||error),true)}
+}
+async function loadGithubTree(){
+  var full=selectedGithubRepo(),installationId=$('#ghInstall').value;if(!full||!installationId)return githubNote('Сначала выберите установку и репозиторий.',true);
+  var parts=full.split('/');
+  try{
+    githubNote('Читаю дерево файлов '+full+'…');
+    var data=await githubRequest('/api/github/tree',{installationId:installationId,owner:parts[0],repo:parts[1]}),tree=data.tree||{};
+    var sel=$('#ghFiles');sel.innerHTML='';
+    (tree.files||[]).forEach(function(file){var option=document.createElement('option');option.value=file.path;option.textContent=file.path+' · '+file.size+' Б'+(file.tooLarge?' · больше 512 КБ':'');option.disabled=!!file.tooLarge;sel.appendChild(option)});
+    if(!sel.options.length){var empty=document.createElement('option');empty.value='';empty.textContent='Файлы не найдены';sel.appendChild(empty)}
+    githubNote('Файлов в списке: '+(tree.files||[]).length+(tree.truncated?' (дерево ограничено первыми 500 файлами)':'')+'. Выберите до пяти небольших файлов.');
+  }catch(error){githubNote('Не удалось получить дерево: '+String(error.message||error),true)}
+}
+async function attachGithubFiles(){
+  var selected=Array.prototype.filter.call($('#ghFiles').options,function(option){return option.selected&&!option.disabled&&option.value;});
+  if(!selected.length)return githubNote('Выберите хотя бы один файл.',true);
+  if(selected.length+pendingFiles.length>5)return githubNote('В запросе может быть не больше пяти файлов. Сначала уберите лишние вложения.',true);
+  var full=selectedGithubRepo(),parts=full.split('/'),installationId=$('#ghInstall').value,added=0;
+  for(var i=0;i<selected.length;i++){
+    var path=selected[i].value;
+    if(pendingFiles.some(function(file){return file.githubPath===full+'/'+path}))continue;
+    try{
+      var data=await githubRequest('/api/github/file',{installationId:installationId,owner:parts[0],repo:parts[1],path:path});
+      var file=data.file;if(!file||typeof file.content!=='string')throw new Error('GitHub не вернул текстовое содержимое.');
+      pendingFiles.push({name:full+'/'+file.path,type:'text/plain',size:file.size,text:file.content,githubPath:full+'/'+file.path});added++;
+    }catch(error){githubNote('Файл '+path+': '+String(error.message||error),true)}
+  }
+  renderPending();
+  if(added){githubNote('Добавлено файлов: '+added+'. Напишите задачу в чате, например: «Проанализируй структуру и найди ошибки».');toast('Файлы GitHub добавлены в запрос')}
+}
+$('#ghConnect').onclick=async function(){
+  try{githubNote('Создаю защищённую ссылку GitHub OAuth…');var data=await githubRequest('/api/github/connect');if(!data.url)throw new Error('Сервер не вернул ссылку авторизации.');
+    if(TG&&TG.openLink)TG.openLink(data.url);else window.location.href=data.url;
+  }catch(error){githubNote('Не удалось подключить GitHub: '+String(error.message||error),true)}
+};
+$('#ghRefresh').onclick=refreshGithubStatus;
+$('#ghDisconnect').onclick=async function(){
+  if(!confirm('Отключить GitHub и удалить сохранённые токены?'))return;
+  try{await githubRequest('/api/github/disconnect');$('#ghRepo').innerHTML='';$('#ghFiles').innerHTML='';await refreshGithubStatus();githubNote('GitHub отключён. Сохранённые токены удалены.')}catch(error){githubNote('Не удалось отключить GitHub: '+String(error.message||error),true)}
+};
+$('#ghInstallApp').onclick=function(){if(!githubInstallUrl)return;if(TG&&TG.openLink)TG.openLink(githubInstallUrl);else window.open(githubInstallUrl,'_blank','noopener')};
+$('#ghInstall').addEventListener('change',loadGithubRepositories);
+$('#ghLoadFiles').onclick=loadGithubTree;
+$('#ghAttachFiles').onclick=attachGithubFiles;
+function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on';syncBotSettings();refreshGithubStatus()}
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim()});
-$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';el.placeholder='Ключ действует до закрытия вкладки';await $('#bTest').onclick()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
+$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();persistApiKey()});
+$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;persistApiKey();el.value='';el.placeholder='Ключ сохранён на этом устройстве';await $('#bTest').onclick();await syncBotSettings()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
-$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
+$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel();syncBotSettings()}});
 $('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
 function renderSavedModels(){
   var box=$('#savedModels');if(!box)return;box.innerHTML='';
