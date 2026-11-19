@@ -562,50 +562,6 @@ function sandboxRun(code){
     timer=setTimeout(function(){finish({status:'тайм-аут',output:'Выполнение остановлено через '+timeoutSeconds+' сек.'})},timeoutSeconds*1000);
   });
 }
-var codeRe=
-    var internetEnabled=!!S.cfg.sandboxInternet;
-    var frame=document.createElement('iframe'),token='sb_'+Date.now()+'_'+Math.random().toString(36).slice(2),done=false,timer;
-    frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('aria-hidden','true');
-    frame.style.cssText='position:fixed;width:1px;height:1px;left:-10px;top:-10px;border:0;opacity:0;pointer-events:none';
-    var bytes=unescape(encodeURIComponent(code)),b64=btoa(bytes);
-    var csp="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; connect-src "+(internetEnabled?"https:":"'none'")+"; media-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none';";
-    var networkBootstrap=internetEnabled
-      ? [
-        'const nativeFetch=window.fetch.bind(window);let networkCalls=0;',
-        'const publicFetch=async(input,init)=>{',
-        'if(++networkCalls>10)throw new Error("Лимит: не более 10 сетевых запросов за один запуск.");',
-        'const request=(typeof Request!=="undefined"&&input instanceof Request)?input:null;',
-        'const raw=request?request.url:String(input);const target=new URL(raw);const hostName=target.hostname.toLowerCase();const h=hostName.endsWith(".")?hostName.slice(0,-1):hostName;',
-        'if(target.protocol!=="https:"||target.username||target.password)throw new Error("Разрешены только HTTPS-адреса без логина и пароля.");',
-        'if(h.indexOf(".")<1||h==="localhost"||h.endsWith(".localhost")||h.endsWith(".local")||h.endsWith(".internal")||/^[0-9.]+$/.test(h)||h.indexOf(":")!==-1)throw new Error("Локальные адреса и IP-адреса заблокированы.");',
-        'const opts=Object.assign({},request?{method:request.method,headers:request.headers,body:request.body?await request.clone().arrayBuffer():undefined}:{},init||{});',
-        'const method=String(opts.method||"GET").toUpperCase();if(!["GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS"].includes(method))throw new Error("HTTP-метод запрещён.");',
-        'opts.method=method;opts.mode="cors";opts.credentials="omit";opts.redirect="error";',
-        'const response=await nativeFetch(target.href,opts);if(!response.body||!response.body.getReader)return response;',
-        'const reader=response.body.getReader();const chunks=[];let size=0;',
-        'while(true){const item=await reader.read();if(item.done)break;size+=item.value.byteLength;if(size>2097152){await reader.cancel();throw new Error("Ответ превышает лимит 2 МБ.");}chunks.push(item.value);}',
-        'const body=chunks.length?new Blob(chunks):null;return new Response(body,{status:response.status,statusText:response.statusText,headers:response.headers});',
-        '};'
-      ].join('')
-      : 'const publicFetch=()=>Promise.reject(new Error("Сеть отключена в песочнице. Включите сетевой доступ в настройках."));';
-    function finish(result){if(done)return;done=true;clearTimeout(timer);window.removeEventListener('message',onMessage);frame.remove();resolve(result)}
-    function onMessage(ev){if(ev.source!==frame.contentWindow||ev.origin!=='null')return;var d=ev.data;if(!d||d.token!==token)return;finish({status:d.status||'готово',output:String(d.output||'').slice(0,10000)})}
-    window.addEventListener('message',onMessage);
-    var src='<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'"></head><body><script>(async function(){'+
-      'const TOKEN='+JSON.stringify(token)+';const source=decodeURIComponent(escape(atob('+JSON.stringify(b64)+')));const logs=[];'+
-      'const clip=v=>{try{if(typeof v==="string")return v;const x=JSON.stringify(v);return x===undefined?String(v):x}catch(e){return String(e)}};'+
-      'const logger={log:(...a)=>logs.push(a.map(clip).join(" ")),info:(...a)=>logs.push(a.map(clip).join(" ")),warn:(...a)=>logs.push("WARN: "+a.map(clip).join(" ")),error:(...a)=>logs.push("ERROR: "+a.map(clip).join(" ")),table:(v)=>logs.push(clip(v))};'+
-      networkBootstrap+
-      'try{Object.defineProperty(window,"fetch",{value:publicFetch,configurable:false});Object.defineProperty(window,"XMLHttpRequest",{value:function(){throw new Error("XMLHttpRequest отключён; используйте fetch")}});Object.defineProperty(window,"WebSocket",{value:function(){throw new Error("WebSocket отключён")}});Object.defineProperty(window,"EventSource",{value:function(){throw new Error("EventSource отключён")}});Object.defineProperty(window,"open",{value:()=>null});Object.defineProperty(window,"localStorage",{get:()=>{throw new Error("Хранилище недоступно")}});Object.defineProperty(window,"sessionStorage",{get:()=>{throw new Error("Хранилище недоступно")}})}catch(e){}'+
-      'let result;try{const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;const fn=new AsyncFunction("console","window","document","fetch","XMLHttpRequest","WebSocket","EventSource","localStorage","sessionStorage",source);result=await fn(logger,window,document,publicFetch,window.XMLHttpRequest,window.WebSocket,window.EventSource,undefined,undefined);'+
-      'let out=(logs.length?"Логи:\\n"+logs.join("\\n"):"");if(result!==undefined)out+=(out?"\\n\\n":"")+"Результат: "+clip(result);if(!out)out="Выполнено без вывода.";'+
-      'parent.postMessage({token:TOKEN,status:"готово",output:out.slice(0,10000)},"*")'+
-      '}catch(e){parent.postMessage({token:TOKEN,status:"ошибка",output:(e&&e.stack?e.stack:String(e)).slice(0,10000)},"*")}})();<\\/script></body></html>';
-    frame.srcdoc=src;document.body.appendChild(frame);
-    var timeoutSeconds=Math.max(1,Math.min(3600,Math.round(Number(S.cfg.sandboxTimeout)||60)));
-    timer=setTimeout(function(){finish({status:'тайм-аут',output:'Выполнение остановлено через '+timeoutSeconds+' сек.'})},timeoutSeconds*1000);
-  });
-}
 var codeRe=/(?:напиши|напишите|создай|создайте|сделай|сделайте|сгенерируй|сгенерируйте|разработай|разработайте|реализуй)\s+(?:(?:мне|нам|пожалуйста|простой|простую|простое|небольшой|небольшую|рабочий|рабочую)\s+){0,3}(?:код|кода|скрипт|скрипта|программу|приложение|сайт|страницу|функцию|бота|игру|плагин|расширение|парсер|калькулятор|html|python|javascript)(?![а-яёa-z])|(?:напиши|напишите|сгенерируй)[\s\S]{0,40}\sкод(?![а-яё])|(?:напиши|напишите|создай|сделай)\s+(?:[а-яё]+\s+){0,2}на\s+(?:python|javascript|js|html|css|java|c\+\+|php)(?![a-z+])/i;
 
 function agentMessageText(m){
