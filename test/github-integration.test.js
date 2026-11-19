@@ -14,6 +14,22 @@ test('provider and GitHub tokens encrypt and decrypt with AES-256-GCM', () => {
   assert.equal(botChat.decrypt(encrypted), secret);
 });
 
+test('readiness encryption-key validation rejects missing or malformed keys', () => {
+  const previous = process.env.DATA_ENCRYPTION_KEY;
+  try {
+    process.env.DATA_ENCRYPTION_KEY = '';
+    assert.throws(
+      () => botChat.validateEncryptionKey(),
+      { code: 'DATA_ENCRYPTION_KEY_INVALID' }
+    );
+    process.env.DATA_ENCRYPTION_KEY = 'ab'.repeat(32);
+    assert.equal(botChat.validateEncryptionKey(), true);
+  } finally {
+    if (previous === undefined) delete process.env.DATA_ENCRYPTION_KEY;
+    else process.env.DATA_ENCRYPTION_KEY = previous;
+  }
+});
+
 test('AES-256-GCM rejects modified ciphertext', () => {
   const encrypted = botChat.encrypt('test-token');
   const parts = encrypted.split('.');
@@ -21,6 +37,14 @@ test('AES-256-GCM rejects modified ciphertext', () => {
   bytes[0] ^= 1;
   parts[2] = bytes.toString('base64');
   assert.throws(() => botChat.decrypt(parts.join('.')));
+});
+
+test('invalid DATABASE_URL syntax has its own safe diagnostic', () => {
+  const manager = require('../storage-manager');
+  const diagnostic = manager.describeStorageError({ code: 'ERR_INVALID_URL' });
+  assert.equal(diagnostic.status, 503);
+  assert.equal(diagnostic.code, 'DATABASE_URL_INVALID');
+  assert.match(diagnostic.message, /DATABASE_URL/);
 });
 
 test('GitHub repository validator accepts normal owner/repository names', () => {
