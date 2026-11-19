@@ -8,41 +8,79 @@ const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const PORT = Number(process.env.PORT || 10000);
-const MAX_TELEGRAM_FILE_BYTES = 50 * 1024 * 1024;
-const MAX_JSON_BYTES = MAX_TELEGRAM_FILE_BYTES + 1024 * 1024;
-const RATE_LIMIT = new Map();
 
-const webAppOrigin = new URL(WEB_APP_URL).origin;
-const allowedOrigins = new Set(
-  (process.env.ALLOWED_ORIGINS || webAppOrigin).split(',').map((x) => x.trim()).filter(Boolean)
-);
+const MAX_TELEGRAM_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_JSON_BYTES = MAX_TELEGRAM_FILE_BYTES + 2 * 1024 * 1024;
+const MAX_INIT_DATA_BYTES = 16 * 1024;
+const MAX_INIT_DATA_AGE_SECONDS = 60 * 60;
+
+const webAppUrl = new URL(WEB_APP_URL);
+if (webAppUrl.protocol !== 'https:') {
+  throw new Error('WEB_APP_URL must use HTTPS.');
+}
+const webAppOrigin = webAppUrl.origin;
+
+function parseAllowedOrigins(value) {
+  return new Set(String(value || webAppOrigin).split(',').map((entry) => {
+    const raw = entry.trim();
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:' || parsed.origin !== raw) {
+      throw new Error('ALLOWED_ORIGINS must contain exact HTTPS origins without paths or wildcards.');
+    }
+    return parsed.origin;
+  }));
+}
+
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+
+if (WEBHOOK_SECRET.length < 32 || WEBHOOK_SECRET.length > 256 ||
+    !/^[A-Za-z0-9_-]+$/.test(WEBHOOK_SECRET)) {
+  throw new Error('WEBHOOK_SECRET must be 32-256 URL-safe characters.');
+}
+
+function applySecurityHeaders(res) {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('cache-control', 'no-store');
+}
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
-  });
+  applySecurityHeaders(res);
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(body);
 }
 
 function applyCors(req, res) {
   const origin = req.headers.origin;
-  if (origin && allowedOrigins.has(origin)) {
-    res.setHeader('access-control-allow-origin', origin);
-    res.setHeader('vary', 'Origin');
-    res.setHeader('access-control-allow-methods', 'POST, OPTIONS');
-    res.setHeader('access-control-allow-headers', 'Content-Type');
-    res.setHeader('access-control-max-age', '600');
-    return true;
-  }
-  return !origin;
+  if (!origin) return true;
+  if (!allowedOrigins.has(origin)) return false;
+
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'Origin');
+  res.setHeader('access-control-allow-methods', 'POST, OPTIONS');
+  res.setHeader('access-control-allow-headers', 'Content-Type');
+  res.setHeader('access-control-max-age', '600');
+  return true;
 }
 
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
+    const declaredLength = req.headers['content-length'];
+    if (declaredLength !== undefined && Number(declaredLength) > maxBytes) {
+      const error = new Error('Запрос слишком большой.');
+      error.status = 413;
+      req.resume();
+      reject(error);
+      return;
+    }
+
     let size = 0;
     let tooLarge = false;
+    let settled = false;
     const chunks = [];
 
     req.on('data', (chunk) => {
@@ -54,7 +92,19 @@ function readBody(req, maxBytes) {
       }
       if (!tooLarge) chunks.push(chunk);
     });
+    req.on('aborted', () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Клиент прервал отправку запроса.'));
+    });
+    req.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       if (tooLarge) {
         const error = new Error('Запрос слишком большой.');
         error.status = 413;
@@ -63,7 +113,6 @@ function readBody(req, maxBytes) {
         resolve(Buffer.concat(chunks).toString('utf8'));
       }
     });
-    req.on('error', reject);
   });
 }
 
@@ -77,27 +126,36 @@ function parseJson(raw) {
   }
 }
 
-function validateTelegramInitData(initData) {
-  if (!BOT_TOKEN || typeof initData !== 'string' || !initData) return null;
+function validateTelegramInitData(initData, botToken = BOT_TOKEN, nowMs = Date.now()) {
+  if (!botToken || typeof initData !== 'string' || !initData ||
+      Buffer.byteLength(initData, 'utf8') > MAX_INIT_DATA_BYTES) return null;
 
   const params = new URLSearchParams(initData);
+  const entries = [...params.entries()];
+  const seen = new Set();
+  for (const [key] of entries) {
+    if (seen.has(key)) return null;
+    seen.add(key);
+  }
+
   const receivedHash = params.get('hash');
   const authDate = Number(params.get('auth_date'));
   if (!receivedHash || !/^[a-f0-9]{64}$/i.test(receivedHash)) return null;
-  if (!Number.isFinite(authDate)) return null;
+  if (!Number.isSafeInteger(authDate)) return null;
 
-  const now = Math.floor(Date.now() / 1000);
-  if (authDate > now + 30 || now - authDate > 24 * 60 * 60) return null;
+  const now = Math.floor(nowMs / 1000);
+  if (authDate > now + 30 || now - authDate > MAX_INIT_DATA_AGE_SECONDS) return null;
 
-  const dataCheckString = [...params.entries()]
+  const dataCheckString = entries
     .filter(([key]) => key !== 'hash')
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([key, value]) => key + '=' + value)
     .join('\n');
 
-  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+  const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
   const expectedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest();
   const actualHash = Buffer.from(receivedHash, 'hex');
+
   if (actualHash.length !== expectedHash.length ||
       !crypto.timingSafeEqual(actualHash, expectedHash)) return null;
 
@@ -107,23 +165,63 @@ function validateTelegramInitData(initData) {
   } catch {
     return null;
   }
-  if (!user || !Number.isSafeInteger(Number(user.id)) || Number(user.id) <= 0 || user.is_bot) return null;
+  if (!user || !Number.isSafeInteger(Number(user.id)) || Number(user.id) <= 0 || user.is_bot) {
+    return null;
+  }
 
   return { id: Number(user.id) };
 }
 
-async function telegramApi(method, payload) {
-  const response = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/' + method, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.ok) {
-    throw new Error(result.description || ('Telegram API error: HTTP ' + response.status));
-  }
-  return result.result;
+function createRateLimiter(options = {}) {
+  const limit = Number.isInteger(options.limit) ? options.limit : 20;
+  const globalLimit = Number.isInteger(options.globalLimit) ? options.globalLimit : 300;
+  const windowMs = Number.isInteger(options.windowMs) ? options.windowMs : 60_000;
+  const maxUsers = Number.isInteger(options.maxUsers) ? options.maxUsers : 10_000;
+  const clock = typeof options.now === 'function' ? options.now : Date.now;
+
+  const users = new Map();
+  let globalStartedAt = clock();
+  let globalCount = 0;
+  let lastSweepAt = globalStartedAt;
+
+  return function checkRateLimit(userId) {
+    const now = clock();
+
+    if (now - globalStartedAt >= windowMs) {
+      globalStartedAt = now;
+      globalCount = 0;
+    }
+    if (globalCount >= globalLimit) return false;
+
+    if (now - lastSweepAt >= windowMs) {
+      for (const [id, bucket] of users) {
+        if (now - bucket.lastSeen > windowMs * 3) users.delete(id);
+      }
+      lastSweepAt = now;
+    }
+
+    const id = String(userId);
+    let bucket = users.get(id);
+
+    if (!bucket) {
+      if (users.size >= maxUsers) return false;
+      bucket = { startedAt: now, count: 0, lastSeen: now };
+    } else if (now - bucket.startedAt >= windowMs) {
+      bucket.startedAt = now;
+      bucket.count = 0;
+    }
+
+    if (bucket.count >= limit) return false;
+
+    bucket.count += 1;
+    bucket.lastSeen = now;
+    users.set(id, bucket);
+    globalCount += 1;
+    return true;
+  };
 }
+
+const checkRateLimit = createRateLimiter();
 
 function safeFileName(value) {
   let name = String(value || 'code.txt').split(/[\\/]/).pop();
@@ -132,13 +230,24 @@ function safeFileName(value) {
   return name;
 }
 
-function checkRateLimit(userId) {
-  const now = Date.now();
-  const previous = (RATE_LIMIT.get(userId) || []).filter((time) => now - time < 60_000);
-  if (previous.length >= 20) return false;
-  previous.push(now);
-  RATE_LIMIT.set(userId, previous);
-  return true;
+function safeEqualText(left, right) {
+  const a = Buffer.from(String(left || ''), 'utf8');
+  const b = Buffer.from(String(right || ''), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+async function telegramApi(method, payload) {
+  const response = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/' + method, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(15_000)
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    throw new Error(result.description || ('Telegram API error: HTTP ' + response.status));
+  }
+  return result.result;
 }
 
 async function sendCodeToBot(userId, fileName, code) {
@@ -165,7 +274,8 @@ async function sendCodeToBot(userId, fileName, code) {
 
   const response = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendDocument', {
     method: 'POST',
-    body: form
+    body: form,
+    signal: AbortSignal.timeout(60_000)
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) {
@@ -175,12 +285,12 @@ async function sendCodeToBot(userId, fileName, code) {
 }
 
 async function handleStart(message) {
-  const chatId = message.chat && message.chat.id;
-  if (!chatId) return;
+  if (!message || !message.chat || message.chat.type !== 'private' ||
+      !message.from || message.chat.id !== message.from.id) return;
 
   const text = 'На данный момент бот находится в разработке. Нажмите на мини-приложение, чтобы начать пользоваться.';
   await telegramApi('sendMessage', {
-    chat_id: chatId,
+    chat_id: message.chat.id,
     text,
     reply_markup: {
       inline_keyboard: [[
@@ -191,8 +301,12 @@ async function handleStart(message) {
 }
 
 async function handleWebhook(req, res) {
-  if (req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
+  if (!safeEqualText(req.headers['x-telegram-bot-api-secret-token'], WEBHOOK_SECRET)) {
     return json(res, 403, { ok: false });
+  }
+
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
+    return json(res, 415, { ok: false });
   }
 
   let update;
@@ -203,19 +317,20 @@ async function handleWebhook(req, res) {
   }
 
   try {
-    const message = update.message;
+    const message = update && update.message;
     const text = message && typeof message.text === 'string' ? message.text.trim() : '';
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
       await handleStart(message);
-    } else if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text)) {
+    } else if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
+               message.chat && message.chat.type === 'private') {
       await telegramApi('sendMessage', {
         chat_id: message.chat.id,
         text: 'Откройте мини-приложение кнопкой внизу чата или кнопкой «Открыть мини-приложение».'
       });
     }
   } catch (error) {
-    // Do not include message contents or user data in logs.
-    console.error('Webhook processing error:', error.message);
+    // Do not log request bodies, Telegram initData, or user file contents.
+    console.error('Webhook processing failed.');
   }
 
   return json(res, 200, { ok: true });
@@ -224,6 +339,10 @@ async function handleWebhook(req, res) {
 async function handleSendCode(req, res) {
   if (!BOT_TOKEN) return json(res, 503, { ok: false, error: 'На сервере не настроен BOT_TOKEN.' });
 
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
+    return json(res, 415, { ok: false, error: 'Ожидается Content-Type: application/json.' });
+  }
+
   let payload;
   try {
     payload = parseJson(await readBody(req, MAX_JSON_BYTES));
@@ -231,29 +350,63 @@ async function handleSendCode(req, res) {
     return json(res, error.status || 400, { ok: false, error: error.message });
   }
 
-  const auth = validateTelegramInitData(payload.initData);
-  if (!auth) return json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram. Закройте и заново откройте мини-приложение из чата с ботом.' });
-  if (!checkRateLimit(auth.id)) {
-    return json(res, 429, { ok: false, error: 'Слишком много отправок подряд. Попробуйте через минуту.' });
+  const auth = validateTelegramInitData(payload && payload.initData);
+  if (!auth) {
+    return json(res, 401, {
+      ok: false,
+      error: 'Не удалось подтвердить сессию Telegram. Закройте и заново откройте мини-приложение из чата с ботом.'
+    });
   }
-  if (typeof payload.code !== 'string') return json(res, 400, { ok: false, error: 'В запросе отсутствует содержимое файла.' });
+  if (!checkRateLimit(auth.id)) {
+    return json(res, 429, { ok: false, error: 'Слишком много отправок. Попробуйте позже.' });
+  }
+  if (!payload || typeof payload.code !== 'string') {
+    return json(res, 400, { ok: false, error: 'В запросе отсутствует содержимое файла.' });
+  }
+  if (Buffer.byteLength(payload.code, 'utf8') > MAX_TELEGRAM_FILE_BYTES) {
+    return json(res, 413, { ok: false, error: 'Файл превышает лимит 50 МБ.' });
+  }
 
   const fileName = safeFileName(payload.fileName);
   try {
     const result = await sendCodeToBot(auth.id, fileName, payload.code);
-    return json(res, 200, { ok: true, fileName, size: result.bytes, messageId: result.messageId });
+    return json(res, 200, {
+      ok: true,
+      fileName,
+      size: result.bytes,
+      messageId: result.messageId
+    });
   } catch (error) {
-    return json(res, error.status || 502, { ok: false, error: error.message || 'Ошибка Telegram Bot API.' });
+    const status = Number.isInteger(error.status) ? error.status : 502;
+    return json(res, status, {
+      ok: false,
+      error: status === 413 || status === 400
+        ? error.message
+        : 'Telegram не смог принять файл. Повторите попытку позже.'
+    });
   }
 }
 
 async function configureWebhook() {
   const baseUrl = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
   if (!BOT_TOKEN || !baseUrl) {
-    console.log('Webhook not configured: set BOT_TOKEN and deploy with PUBLIC_BASE_URL/RENDER_EXTERNAL_URL.');
+    console.log('Webhook not configured: BOT_TOKEN or public service URL is missing.');
     return;
   }
-  const webhookUrl = new URL('/telegram/webhook', baseUrl).toString();
+
+  let parsedBase;
+  try {
+    parsedBase = new URL(baseUrl);
+  } catch {
+    console.error('Webhook not configured: invalid public service URL.');
+    return;
+  }
+  if (parsedBase.protocol !== 'https:') {
+    console.error('Webhook not configured: public service URL must use HTTPS.');
+    return;
+  }
+
+  const webhookUrl = new URL('/telegram/webhook', parsedBase).toString();
   try {
     await telegramApi('setWebhook', {
       url: webhookUrl,
@@ -261,36 +414,61 @@ async function configureWebhook() {
       allowed_updates: ['message']
     });
     console.log('Telegram webhook configured.');
-  } catch (error) {
-    console.error('Could not configure Telegram webhook:', error.message);
+  } catch {
+    console.error('Could not configure Telegram webhook.');
   }
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
+function createServer() {
+  const server = http.createServer((req, res) => {
+    Promise.resolve().then(async () => {
+      const url = new URL(req.url, 'http://localhost');
 
-  if (url.pathname.startsWith('/api/')) {
-    const corsOk = applyCors(req, res);
-    if (!corsOk) return json(res, 403, { ok: false, error: 'Origin is not allowed.' });
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      return res.end();
-    }
-  }
+      if (url.pathname.startsWith('/api/')) {
+        const corsOk = applyCors(req, res);
+        if (!corsOk) return json(res, 403, { ok: false, error: 'Origin is not allowed.' });
+        if (req.method === 'OPTIONS') {
+          applySecurityHeaders(res);
+          res.writeHead(204);
+          return res.end();
+        }
+      }
 
-  if (req.method === 'GET' && url.pathname === '/health') {
-    return json(res, 200, { ok: true, service: 'telegram-bot-api' });
-  }
-  if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
-    return handleWebhook(req, res);
-  }
-  if (req.method === 'POST' && url.pathname === '/api/send-code') {
-    return handleSendCode(req, res);
-  }
-  return json(res, 404, { ok: false, error: 'Not found.' });
-});
+      if (req.method === 'GET' && url.pathname === '/health') {
+        return json(res, 200, { ok: true, service: 'telegram-bot-api' });
+      }
+      if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
+        return handleWebhook(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/send-code') {
+        return handleSendCode(req, res);
+      }
+      return json(res, 404, { ok: false, error: 'Not found.' });
+    }).catch(() => {
+      if (!res.headersSent) json(res, 500, { ok: false, error: 'Internal server error.' });
+      else res.destroy();
+    });
+  });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('Bot API listening on port ' + PORT);
-  configureWebhook().catch((error) => console.error('Webhook setup failed:', error.message));
-});
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 120_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxHeadersCount = 50;
+  return server;
+}
+
+if (require.main === module) {
+  const server = createServer();
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('Bot API listening on port ' + PORT);
+    configureWebhook().catch(() => console.error('Webhook setup failed.'));
+  });
+}
+
+module.exports = {
+  MAX_INIT_DATA_AGE_SECONDS,
+  createRateLimiter,
+  createServer,
+  safeFileName,
+  validateTelegramInitData
+};

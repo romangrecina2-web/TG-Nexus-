@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="dark light">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://[::1]:*; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none';">
 <title>Оболочка ТГ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="./styles.css">
@@ -70,7 +72,7 @@
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
       <div class="r2"><input id="cKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="kEye" type="button" style="display:none">Показать</button></div>
-      <small>Ключ хранится только на этом устройстве, отправляется только на указанный адрес и после сохранения не показывается.</small>
+      <small>Ключ хранится только в памяти текущей вкладки и отправляется на указанный адрес API. Он не сохраняется в браузере или резервных копиях. После перезагрузки страницы или смены адреса API вставьте ключ заново.</small>
       <label for="cModel">Модель</label>
       <input id="cModel" list="mlist" autocomplete="off" autocapitalize="off" spellcheck="false">
       <datalist id="mlist"></datalist>

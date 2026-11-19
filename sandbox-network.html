@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'none'; connect-src https:; img-src data:; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; worker-src 'none'; media-src 'none'; font-src 'none'; navigate-to 'none'">
+  <title>TG Shell isolated sandbox</title>
+</head>
+<body>
+<script>
+(function () {
+  'use strict';
+
+  if (window.parent === window) return;
+
+  const referrerOrigin = (function () {
+    try {
+      return document.referrer ? new URL(document.referrer).origin : '';
+    } catch (_) {
+      return '';
+    }
+  })();
+
+  function replace(target, key, value) {
+    try {
+      Object.defineProperty(target, key, {
+        value: value,
+        writable: false,
+        configurable: false
+      });
+    } catch (_) {}
+  }
+
+  function blocked(name) {
+    return function () {
+      throw new Error(name + ' отключён в песочнице.');
+    };
+  }
+
+  function makePublicFetch(internetEnabled) {
+    if (!internetEnabled) {
+      return function () {
+        return Promise.reject(new Error('Сеть отключена в песочнице.'));
+      };
+    }
+
+    const nativeFetch = window.fetch.bind(window);
+    let networkCalls = 0;
+
+    return async function (input, init) {
+      if (++networkCalls > 10) {
+        throw new Error('Лимит: не более 10 сетевых запросов за один запуск.');
+      }
+
+      const request = (typeof Request !== 'undefined' && input instanceof Request) ? input : null;
+      const raw = request ? request.url : String(input);
+      const target = new URL(raw);
+      const hostName = target.hostname.toLowerCase().replace(/\.$/, '');
+
+      if (target.protocol !== 'https:' || target.username || target.password) {
+        throw new Error('Разрешены только HTTPS-адреса без логина и пароля.');
+      }
+      if (hostName.indexOf('.') < 1 ||
+          hostName === 'localhost' ||
+          hostName.endsWith('.localhost') ||
+          hostName.endsWith('.local') ||
+          hostName.endsWith('.internal') ||
+          /^[0-9.]+$/.test(hostName) ||
+          hostName.startsWith('[') ||
+          /^[0-9]+$/.test(hostName)) {
+        throw new Error('Локальные адреса и IP-адреса заблокированы.');
+      }
+
+      const opts = Object.assign(
+        {},
+        request ? {
+          method: request.method,
+          headers: request.headers,
+          body: request.body ? await request.clone().arrayBuffer() : undefined
+        } : {},
+        init || {}
+      );
+
+      const method = String(opts.method || 'GET').toUpperCase();
+      if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) {
+        throw new Error('HTTP-метод запрещён.');
+      }
+
+      opts.method = method;
+      opts.mode = 'cors';
+      opts.credentials = 'omit';
+      opts.redirect = 'error';
+
+      const response = await nativeFetch(target.href, opts);
+      if (!response.body || !response.body.getReader) return response;
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        size += item.value.byteLength;
+        if (size > 2 * 1024 * 1024) {
+          await reader.cancel();
+          throw new Error('Ответ превышает лимит 2 МБ.');
+        }
+        chunks.push(item.value);
+      }
+
+      return new Response(
+        chunks.length ? new Blob(chunks) : null,
+        { status: response.status, statusText: response.statusText, headers: response.headers }
+      );
+    };
+  }
+
+  function disableEscapeHatches(publicFetch) {
+    replace(window, 'fetch', publicFetch);
+    replace(window, 'XMLHttpRequest', blocked('XMLHttpRequest'));
+    replace(window, 'WebSocket', blocked('WebSocket'));
+    replace(window, 'EventSource', blocked('EventSource'));
+    replace(window, 'WebTransport', blocked('WebTransport'));
+    replace(window, 'RTCPeerConnection', blocked('WebRTC'));
+    replace(window, 'webkitRTCPeerConnection', blocked('WebRTC'));
+    replace(window, 'open', function () { return null; });
+    replace(window, 'Worker', blocked('Worker'));
+    replace(window, 'SharedWorker', blocked('SharedWorker'));
+    replace(window, 'importScripts', blocked('importScripts'));
+
+    try {
+      replace(window.navigator, 'sendBeacon', blocked('sendBeacon'));
+      replace(window.navigator, 'serviceWorker', undefined);
+      replace(window.navigator, 'mediaDevices', undefined);
+      replace(window.navigator, 'bluetooth', undefined);
+      replace(window.navigator, 'usb', undefined);
+      replace(window.navigator, 'serial', undefined);
+      replace(window.navigator, 'hid', undefined);
+    } catch (_) {}
+
+    try {
+      replace(window, 'localStorage', undefined);
+      replace(window, 'sessionStorage', undefined);
+    } catch (_) {}
+  }
+
+  function formatValue(value) {
+    try {
+      if (typeof value === 'string') return value;
+      const result = JSON.stringify(value);
+      return result === undefined ? String(value) : result;
+    } catch (_) {
+      return String(value);
+    }
+  }
+
+  async function execute(data, port) {
+    const logs = [];
+    const logger = {
+      log: function () { logs.push(Array.from(arguments).map(formatValue).join(' ')); },
+      info: function () { logs.push(Array.from(arguments).map(formatValue).join(' ')); },
+      warn: function () { logs.push('WARN: ' + Array.from(arguments).map(formatValue).join(' ')); },
+      error: function () { logs.push('ERROR: ' + Array.from(arguments).map(formatValue).join(' ')); },
+      table: function (value) { logs.push(formatValue(value)); }
+    };
+
+    const publicFetch = makePublicFetch(!!data.internetEnabled);
+    disableEscapeHatches(publicFetch);
+
+    try {
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const fn = new AsyncFunction(
+        'console', 'window', 'document', 'fetch',
+        'XMLHttpRequest', 'WebSocket', 'EventSource',
+        'localStorage', 'sessionStorage',
+        String(data.code || '')
+      );
+
+      const result = await fn(
+        logger,
+        window,
+        document,
+        publicFetch,
+        window.XMLHttpRequest,
+        window.WebSocket,
+        window.EventSource,
+        undefined,
+        undefined
+      );
+
+      let output = logs.length ? 'Логи:\n' + logs.join('\n') : '';
+      if (result !== undefined) {
+        output += (output ? '\n\n' : '') + 'Результат: ' + formatValue(result);
+      }
+      if (!output) output = 'Выполнено без вывода.';
+      port.postMessage({ token: data.token, status: 'готово', output: output.slice(0, 10000) });
+    } catch (error) {
+      const message = error && error.stack ? error.stack : String(error);
+      port.postMessage({ token: data.token, status: 'ошибка', output: message.slice(0, 10000) });
+    } finally {
+      port.close();
+    }
+  }
+
+  function receiveRun(event) {
+    if (event.source !== window.parent) return;
+    if (referrerOrigin && event.origin !== referrerOrigin) return;
+
+    const data = event.data;
+    const port = event.ports && event.ports[0];
+    if (!data || data.type !== 'tg-shell-sandbox-run' ||
+        typeof data.token !== 'string' || !port ||
+        typeof data.code !== 'string') return;
+
+    window.removeEventListener('message', receiveRun);
+    execute(data, port);
+  }
+
+  window.addEventListener('message', receiveRun);
+})();
+
+</script>
+</body>
+</html>
