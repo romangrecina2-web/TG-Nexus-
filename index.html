@@ -100,9 +100,9 @@
         <div class="settings-accordion-body">
           <label class="chk" for="cMultiAgent"><input type="checkbox" id="cMultiAgent"> Использовать несколько ИИ для задач с кодом</label>
           <small>Вспомогательные агенты анализируют задачу параллельно и передают замечания основной модели, которая собирает итоговый ответ. Модели берутся из сохранённого списка и используют текущий адрес API. Одну модель можно использовать в нескольких ролях.</small>
-          <label for="cAgentCount">Количество вспомогательных агентов: <output id="agentCountValue">3</output></label>
+          <label for="cAgentCount">Количество ИИ в команде: <output id="agentCountValue">3</output></label>
           <input type="range" id="cAgentCount" min="1" max="20" step="1" value="3">
-          <small>От 1 до 20. Запросы отправляются группами максимум по 4. Каждый агент расходует отдельные токены и может тарифицироваться провайдером.</small>
+          <small>От 1 до 20, включая основную модель. Остальные ИИ работают как специалисты; запросы отправляются группами максимум по 4. Каждый дополнительный агент расходует токены и может тарифицироваться провайдером.</small>
           <label class="chk" for="cSandbox"><input type="checkbox" id="cSandbox"> Разрешить запуск JavaScript в песочнице</label>
           <small>Код запускается в отдельном изолированном iframe без доступа к файлам, localStorage, sessionStorage и API-ключу. Это не полноценный сервер и не Python-среда.</small>
           <label class="chk" for="cSandboxInternet"><input type="checkbox" id="cSandboxInternet"> Разрешить интернет в песочнице</label>
