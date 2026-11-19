@@ -143,6 +143,12 @@ async function saveUserSettings(userId, values) {
       updated_at = NOW()
   `, [String(userId), apiBase, encrypted, model]);
   if (model) await addModel(userId, model);
+  if (Array.isArray(values.models)) {
+    for (const savedModel of values.models.slice(0, 100)) {
+      const value = String(savedModel || '').trim();
+      if (value && value.length <= 200 && !/\\s/.test(value)) await addModel(userId, value);
+    }
+  }
 }
 
 async function addModel(userId, model) {
