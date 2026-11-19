@@ -115,7 +115,7 @@ var storageOK=true;
 try{localStorage.setItem('_t','1');localStorage.removeItem('_t')}catch(e){storageOK=false}
 
 function host(u){try{return new URL(u).hostname}catch(e){return String(u||'')}}
-function def(){return{v:2,cfg:{url:PRESETS.or.url,model:PRESETS.or.model,models:[PRESETS.or.model],wallpaperEnabled:false,sys:'Ты умный и дружелюбный ассистент. Отвечай по-русски, если не просят иначе. Пиши ясно и по делу.',temp:'',max:'',reasoning:'auto',internet:false,sandbox:false,auto:true,sumAt:10000,keep:4,pinCap:4000,askCode:true,balOn:true,minBal:10,balBase:'',balUsage:0,keys:{}},mem:[],chats:[],cur:null,stats:{day:'',n:0}}}
+function def(){return{v:2,cfg:{url:PRESETS.or.url,model:PRESETS.or.model,models:[PRESETS.or.model],wallpaperEnabled:false,sys:'Ты умный и дружелюбный ассистент. Отвечай по-русски, если не просят иначе. Пиши ясно и по делу.',temp:'',max:'',reasoning:'auto',internet:false,sandbox:false,sandboxInternet:false,multiAgent:false,agentCount:3,auto:true,sumAt:10000,keep:4,pinCap:4000,askCode:true,balOn:true,minBal:10,balBase:'',balUsage:0,keys:{}},mem:[],chats:[],cur:null,stats:{day:'',n:0}}}
 function makeId(){return 'm_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
 function fixChat(c){
   c.msgs=(c.msgs||[]).filter(function(m){return m.role==='user'||(m.content&&m.content.indexOf('\u26A0')!==0)||(m.role==='assistant'&&(m.originalVersion||m.regenVersions))});
@@ -136,7 +136,7 @@ function norm(d){
   d.cfg=d.cfg||{};for(var k in b.cfg)if(!(k in d.cfg))d.cfg[k]=b.cfg[k];
   d.cfg.keys=d.cfg.keys||{};d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
   if(d.cfg.model&&d.cfg.models.indexOf(d.cfg.model)<0)d.cfg.models.unshift(d.cfg.model);
-  d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;
+  d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;d.cfg.sandbox=!!d.cfg.sandbox;d.cfg.sandboxInternet=!!d.cfg.sandboxInternet;d.cfg.multiAgent=!!d.cfg.multiAgent;d.cfg.agentCount=Math.max(1,Math.min(20,Math.round(Number(d.cfg.agentCount)||3)));
   d.mem=d.mem||[];d.chats=(d.chats||[]).map(fixChat);d.chats.forEach(function(c){if(!c.model)c.model=d.cfg.model});d.stats=d.stats||b.stats;
   if(d.cur&&!d.chats.some(function(c){return c.id===d.cur}))d.cur=null;
   return d;
