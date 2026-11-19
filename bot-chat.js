@@ -16,10 +16,25 @@ const pool = process.env.DATABASE_URL
     })
   : null;
 
+function storageConfigurationIssue(env = process.env, poolAvailable = Boolean(pool)) {
+  const databaseUrl = typeof env.DATABASE_URL === 'string' ? env.DATABASE_URL.trim() : '';
+  if (!databaseUrl) {
+    return 'На backend-сервисе Render не задана переменная DATABASE_URL. Подключите PostgreSQL и добавьте его URL в Environment сервиса tg-shell-bot-api.';
+  }
+  if (!poolAvailable) {
+    return 'DATABASE_URL появилась после запуска backend, поэтому PostgreSQL-подключение не создано. Перезапустите или redeploy сервис tg-shell-bot-api в Render.';
+  }
+  const key = typeof env.DATA_ENCRYPTION_KEY === 'string' ? env.DATA_ENCRYPTION_KEY.trim() : '';
+  if (!/^[a-f0-9]{64}$/i.test(key)) {
+    return 'DATA_ENCRYPTION_KEY отсутствует или имеет неверный формат. Нужны ровно 64 шестнадцатеричных символа (32 байта).';
+  }
+  return null;
+}
+
 function encryptionKey() {
-  const raw = process.env.DATA_ENCRYPTION_KEY || '';
+  const raw = String(process.env.DATA_ENCRYPTION_KEY || '').trim();
   if (!/^[a-f0-9]{64}$/i.test(raw)) {
-    throw new Error('DATA_ENCRYPTION_KEY must be a 32-byte hexadecimal key.');
+    throw new Error('DATA_ENCRYPTION_KEY отсутствует или имеет неверный формат: нужен ключ из 64 шестнадцатеричных символов (32 байта).');
   }
   return Buffer.from(raw, 'hex');
 }
@@ -40,7 +55,8 @@ function decrypt(value) {
 }
 
 async function init() {
-  if (!pool) return false;
+  const issue = storageConfigurationIssue();
+  if (issue) throw new Error(issue);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bot_users (
       telegram_id BIGINT PRIMARY KEY,
@@ -66,7 +82,8 @@ async function init() {
 }
 
 function requirePool() {
-  if (!pool) throw new Error('Чат с ИИ пока не настроен: серверу нужна постоянная база PostgreSQL.');
+  const issue = storageConfigurationIssue();
+  if (issue) throw new Error(issue);
 }
 
 async function saveSettings(userId, apiBase, apiKey, model) {
@@ -258,4 +275,13 @@ async function handleUpdate(update) {
   return true;
 }
 
-module.exports = { init, handleUpdate, saveSettings, clearSettings, encrypt, decrypt, pool };
+module.exports = {
+  init,
+  handleUpdate,
+  saveSettings,
+  clearSettings,
+  encrypt,
+  decrypt,
+  storageConfigurationIssue,
+  pool
+};
