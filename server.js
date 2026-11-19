@@ -472,21 +472,38 @@ async function handleGitHubSelectRepo(req, res) {
     return json(res, 200, { ok: true, selectedRepo });
   } catch (error) { return json(res, error.status || 502, { ok: false, error: error.message }); }
 }
-async function handleGitHubCallback(req, res, url) {
+async function handleGitHubSetup(req, res, url) {
   const state = github.verifyInstallState(url.searchParams.get('state'));
   const installationId = url.searchParams.get('installation_id');
-  if (!state || !installationId || url.searchParams.get('setup_action') !== 'install') {
+  if (!state || !installationId || !/^\d{1,20}$/.test(installationId)) {
     return json(res, 400, { ok: false, error: 'Ссылка установки GitHub недействительна или устарела.' });
   }
   try {
-    await github.completeInstallation(state.userId, installationId);
+    const authorizeUrl = github.oauthAuthorizationUrl(state.userId, installationId);
+    applySecurityHeaders(res);
+    res.writeHead(302, { Location: authorizeUrl });
+    return res.end();
+  } catch {
+    return json(res, 502, { ok: false, error: 'Не удалось начать проверку GitHub-пользователя. Проверьте настройки OAuth.' });
+  }
+}
+
+async function handleGitHubCallback(req, res, url) {
+  const state = github.verifyOAuthState(url.searchParams.get('state'));
+  const code = url.searchParams.get('code');
+  if (!state || !code || url.searchParams.get('error')) {
+    return json(res, 400, { ok: false, error: 'Авторизация GitHub отменена или ссылка недействительна.' });
+  }
+  try {
+    await github.completeOAuthInstallation(state.userId, state.installationId, code);
     applySecurityHeaders(res);
     res.writeHead(302, { Location: WEB_APP_URL + '?github=connected' });
     return res.end();
   } catch {
-    return json(res, 502, { ok: false, error: 'Не удалось завершить подключение GitHub App. Проверьте настройки GitHub App на сервере.' });
+    return json(res, 403, { ok: false, error: 'GitHub не подтвердил, что эта установка принадлежит авторизованному аккаунту. Подключение не сохранено.' });
   }
 }
+
 function splitTelegramText(value, max = 3900) {
   let rest = String(value || ''), chunks = [];
   while (rest.length > max) {
@@ -704,6 +721,7 @@ function createServer() {
       if (req.method === 'GET' && url.pathname === '/api/github/install-url') return handleGitHubInstallUrl(req, res);
       if (req.method === 'GET' && url.pathname === '/api/github/repos') return handleGitHubRepos(req, res);
       if (req.method === 'POST' && url.pathname === '/api/github/repo') return handleGitHubSelectRepo(req, res);
+      if (req.method === 'GET' && url.pathname === '/github/setup') return handleGitHubSetup(req, res, url);
       if (req.method === 'GET' && url.pathname === '/github/callback') return handleGitHubCallback(req, res, url);
       if (req.method === 'POST' && url.pathname === '/api/send-code') return handleSendCode(req, res);
       return json(res, 404, { ok: false, error: 'Not found.' });
