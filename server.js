@@ -5,11 +5,15 @@ const http = require('node:http');
 const { URL } = require('node:url');
 const botChat = require('./bot-chat');
 const github = require('./github-integration');
-let storagePromise = null;
-function ensureStorage() {
-  if (!storagePromise) storagePromise = Promise.all([botChat.init(), github.init()]);
-  return storagePromise;
-}
+const {
+  createStorageManager,
+  describeStorageError,
+  logStorageError
+} = require('./storage-manager');
+
+const storageManager = createStorageManager({ botChat, github });
+const ensureBotStorage = storageManager.ensureBotStorage;
+const ensureGithubStorage = storageManager.ensureGithubStorage;
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
@@ -323,10 +327,9 @@ async function handleWebhook(req, res) {
     return json(res, error.status || 400, { ok: false });
   }
 
+  const message = update && update.message;
+  const text = message && typeof message.text === 'string' ? message.text.trim() : '';
   try {
-    await ensureStorage();
-    const message = update && update.message;
-    const text = message && typeof message.text === 'string' ? message.text.trim() : '';
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
       await handleStart(message);
     } else if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
@@ -336,11 +339,11 @@ async function handleWebhook(req, res) {
         text: 'Откройте мини-приложение кнопкой внизу чата или кнопкой «Открыть мини-приложение».'
       });
     } else {
+      await ensureBotStorage();
       await botChat.handleUpdate(update);
     }
   } catch (error) {
-    // Do not log request bodies, Telegram initData, or user file contents.
-    console.error('Webhook processing failed.');
+    logStorageError('telegram-webhook', error);
   }
 
   return json(res, 200, { ok: true });
@@ -415,13 +418,21 @@ async function handleBotSettings(req, res) {
   const auth = await readAuthenticatedPayload(req, res, 12 * 1024);
   if (!auth) return;
   try {
-    await ensureStorage();
-    if (auth.payload.clear === true || auth.payload.apiKey === '') await botChat.clearSettings(auth.userId);
-    else await botChat.saveSettings(auth.userId, auth.payload.apiBase, auth.payload.apiKey, auth.payload.model);
+    await ensureBotStorage();
+    if (auth.payload.clear === true || auth.payload.apiKey === '') {
+      await botChat.clearSettings(auth.userId);
+    } else {
+      await botChat.saveSettings(auth.userId, auth.payload.apiBase, auth.payload.apiKey, auth.payload.model);
+    }
     return json(res, 200, { ok: true });
   } catch (error) {
-    const status = /DATABASE_URL|DATA_ENCRYPTION_KEY|PostgreSQL|storage/i.test(error.message) ? 503 : 400;
-    return json(res, status, { ok: false, error: status === 503 ? 'Хранилище бота не настроено на сервере.' : error.message });
+    logStorageError('bot-settings', error);
+    const diagnostic = describeStorageError(error);
+    return json(res, diagnostic.status, {
+      ok: false,
+      code: diagnostic.code,
+      error: diagnostic.message
+    });
   }
 }
 
@@ -430,7 +441,7 @@ async function handleGithubApi(req, res, pathname) {
   if (!auth) return;
   const p = auth.payload;
   try {
-    await ensureStorage();
+    await ensureGithubStorage();
     if (pathname === '/api/github/connect') {
       const url = await github.beginOAuth(auth.userId);
       return json(res, 200, { ok: true, url: url });
@@ -464,7 +475,7 @@ async function handleGithubApi(req, res, pathname) {
 
 async function handleGithubCallback(req, res, url) {
   try {
-    await ensureStorage();
+    await ensureGithubStorage();
     if (url.searchParams.get('error')) throw new Error('Авторизация GitHub отменена или отклонена.');
     const result = await github.handleCallback(url.searchParams.get('code'), url.searchParams.get('state'));
     const redirect = new URL(WEB_APP_URL);
@@ -532,6 +543,22 @@ function createServer() {
       if (req.method === 'GET' && url.pathname === '/health') {
         return json(res, 200, { ok: true, service: 'telegram-bot-api' });
       }
+      if (req.method === 'GET' && url.pathname === '/ready') {
+        try {
+          await ensureBotStorage();
+          await botChat.pool.query('SELECT 1');
+          return json(res, 200, { ok: true, ready: true, storage: 'postgresql' });
+        } catch (error) {
+          logStorageError('readiness', error);
+          const diagnostic = describeStorageError(error);
+          return json(res, 503, {
+            ok: false,
+            ready: false,
+            code: diagnostic.code,
+            error: diagnostic.message
+          });
+        }
+      }
       if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
         return handleWebhook(req, res);
       }
@@ -565,7 +592,8 @@ if (require.main === module) {
   const server = createServer();
   server.listen(PORT, '0.0.0.0', () => {
     console.log('Bot API listening on port ' + PORT);
-    ensureStorage().catch(() => console.error('Database initialization failed.'));
+    ensureBotStorage().catch((error) => logStorageError('bot-storage-init', error));
+    ensureGithubStorage().catch((error) => logStorageError('github-storage-init', error));
     configureWebhook().catch(() => console.error('Webhook setup failed.'));
   });
 }
