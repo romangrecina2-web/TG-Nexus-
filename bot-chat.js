@@ -19,7 +19,9 @@ const pool = process.env.DATABASE_URL
 function encryptionKey() {
   const raw = process.env.DATA_ENCRYPTION_KEY || '';
   if (!/^[a-f0-9]{64}$/i.test(raw)) {
-    throw new Error('DATA_ENCRYPTION_KEY must be a 32-byte hexadecimal key.');
+    const error = new Error('DATA_ENCRYPTION_KEY must be a 32-byte hexadecimal key.');
+    error.code = 'DATA_ENCRYPTION_KEY_INVALID';
+    throw error;
   }
   return Buffer.from(raw, 'hex');
 }
@@ -73,13 +75,19 @@ async function saveSettings(userId, apiBase, apiKey, model) {
   requirePool();
   const u = new URL(apiBase);
   if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) {
-    throw new Error('API URL должен быть HTTPS без логина, пароля и параметров.');
+    const error = new Error('API URL должен быть HTTPS без логина, пароля и параметров.');
+    error.code = 'INVALID_API_URL';
+    throw error;
   }
   if (typeof apiKey !== 'string' || apiKey.length < 8 || apiKey.length > 4096) {
-    throw new Error('Некорректный API-ключ.');
+    const error = new Error('Некорректный API-ключ.');
+    error.code = 'INVALID_API_KEY';
+    throw error;
   }
   if (typeof model !== 'string' || !/^[^\s]{1,200}$/.test(model)) {
-    throw new Error('Некорректный ID модели.');
+    const error = new Error('Некорректный ID модели.');
+    error.code = 'INVALID_MODEL';
+    throw error;
   }
   await pool.query(
     `INSERT INTO bot_users(telegram_id,api_base,api_key_enc,active_model,models)
