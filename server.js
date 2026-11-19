@@ -435,7 +435,7 @@ async function handleUserSettings(req, res) {
   const model = String(payload.model || '').trim();
   const models = Array.isArray(payload.models) ? payload.models.slice(0, 100).map((value) => String(value || '').trim()) : [];
   if (Array.isArray(payload.models) && payload.models.length > 100) return json(res, 400, { ok: false, error: 'Слишком много сохранённых моделей.' });
-  if (models.some((value) => value.length > 200 || /\\s/.test(value))) return json(res, 400, { ok: false, error: 'Некорректный список моделей.' });
+  if (models.some((value) => value.length > 200 || /\s/.test(value))) return json(res, 400, { ok: false, error: 'Некорректный список моделей.' });
   if (!validateApiBase(apiBase)) return json(res, 400, { ok: false, error: 'Адрес API должен использовать HTTPS.' });
   if (apiKey.length > 4096 || (apiKey && apiKey.length < 8)) return json(res, 400, { ok: false, error: 'Некорректная длина API-ключа.' });
   if (model.length > 200 || /\s/.test(model)) return json(res, 400, { ok: false, error: 'Некорректный ID модели.' });
