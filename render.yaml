@@ -1,3 +1,12 @@
+# Free Postgres is for testing only: it expires 30 days after creation.
+# Export data or move to a paid/other persistent database before expiry.
+databases:
+  - name: tg-nexus-postgres
+    databaseName: tgnexus
+    user: tgnexus
+    plan: free
+    region: frankfurt
+
 services:
   - type: web
     name: tg-shell-bot-api
@@ -15,9 +24,11 @@ services:
       - key: ALLOWED_ORIGINS
         value: https://romangrecina2-web.github.io
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: tg-nexus-postgres
+          property: connectionString
       - key: DATA_ENCRYPTION_KEY
-        sync: false
+        generateValue: true
       - key: GITHUB_APP_ID
         sync: false
       - key: GITHUB_CLIENT_ID
