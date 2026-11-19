@@ -171,7 +171,7 @@ function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
 var settingsSyncTimer=null;
-function assistantApiBase(){return String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\\/+$/,'')}
+function assistantApiBase(){return String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'')}
 async function syncAssistantSettings(showError){
   if(!TG||!TG.initData||!assistantApiBase())return false;
   try{
@@ -1255,6 +1255,7 @@ $('#cBalMan').addEventListener('change',async function(){
 });
 
 var TG=(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData)?Telegram.WebApp:null;
+if(ACTIVE_KEY)setTimeout(function(){syncAssistantSettings(false)},800);
 async function githubRequest(path,options){
   if(!TG||!TG.initData)throw new Error('Откройте приложение из Telegram.');
   var baseUrl=assistantApiBase();if(!baseUrl)throw new Error('Не настроен адрес backend в config.js.');
