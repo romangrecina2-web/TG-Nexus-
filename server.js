@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { URL } = require('node:url');
-const botChat = require('./bot-chat');
+const botChat = require('./bot-chat');\nlet botStorageReady = Promise.resolve(false);
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
