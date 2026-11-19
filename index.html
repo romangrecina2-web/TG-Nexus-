@@ -94,8 +94,21 @@
       <h3>Разрешения ИИ</h3>
       <label class="chk" for="cInternet"><input type="checkbox" id="cInternet"> Разрешить поиск в интернете</label>
       <small>Работает через OpenRouter Web Search. Модель сама решает, когда искать. Поиск может оплачиваться отдельно по тарифам OpenRouter/поискового провайдера. Запросы и контекст передаются провайдеру поиска.</small>
-      <label class="chk" for="cSandbox"><input type="checkbox" id="cSandbox"> Разрешить запуск JavaScript в песочнице</label>
-      <small>После согласия ИИ сможет запускать JavaScript для вычислений и проверки небольших фрагментов кода. Код запускается в отдельном изолированном iframe без доступа к API-ключу, файлам, хранилищу и сетевым запросам. Это не полноценный сервер или Python-среда. Не запускайте неизвестный код: бесконечный цикл может подвесить вкладку. Разрешение можно отозвать здесь же.</small>
+
+      <details class="settings-accordion" id="devSettings">
+        <summary><span><b>Разработка и песочница</b><small>Мультиагентный режим, JavaScript и интернет</small></span></summary>
+        <div class="settings-accordion-body">
+          <label class="chk" for="cMultiAgent"><input type="checkbox" id="cMultiAgent"> Использовать несколько ИИ для задач с кодом</label>
+          <small>Вспомогательные агенты анализируют задачу параллельно и передают замечания основной модели, которая собирает итоговый ответ. Модели берутся из сохранённого списка и используют текущий адрес API. Одну модель можно использовать в нескольких ролях.</small>
+          <label for="cAgentCount">Количество вспомогательных агентов: <output id="agentCountValue">3</output></label>
+          <input type="range" id="cAgentCount" min="1" max="20" step="1" value="3">
+          <small>От 1 до 20. Запросы отправляются группами максимум по 4. Каждый агент расходует отдельные токены и может тарифицироваться провайдером.</small>
+          <label class="chk" for="cSandbox"><input type="checkbox" id="cSandbox"> Разрешить запуск JavaScript в песочнице</label>
+          <small>Код запускается в отдельном изолированном iframe без доступа к файлам, localStorage, sessionStorage и API-ключу. Это не полноценный сервер и не Python-среда.</small>
+          <label class="chk" for="cSandboxInternet"><input type="checkbox" id="cSandboxInternet"> Разрешить интернет в песочнице</label>
+          <small>Только HTTPS через fetch к публичным доменам с поддержкой CORS. Cookies, localhost, IP-адреса, XMLHttpRequest и WebSocket заблокированы. До 10 запросов и 2 МБ данных на один запуск. CORS-ограничения сайтов всё равно действуют.</small>
+        </div>
+      </details>
 
       <h3>Память</h3>
       <small>Эти факты отправляются модели в каждом чате. Добавить факт можно здесь или фразой «запомни: …» в чате.</small>
