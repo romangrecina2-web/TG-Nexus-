@@ -100,6 +100,17 @@ async function getUser(userId) {
   return { ...r.rows[0], api_key: decrypt(r.rows[0].api_key_enc) };
 }
 
+async function getSettings(userId) {
+  const user = await getUser(userId);
+  if (!user) return null;
+  return {
+    api_base: user.api_base,
+    api_key: user.api_key,
+    active_model: user.active_model,
+    models: Array.isArray(user.models) ? user.models : []
+  };
+}
+
 async function clearSettings(userId) {
   requirePool();
   await pool.query(
@@ -258,4 +269,4 @@ async function handleUpdate(update) {
   return true;
 }
 
-module.exports = { init, handleUpdate, saveSettings, clearSettings, encrypt, decrypt, pool };
+module.exports = { init, handleUpdate, saveSettings, getSettings, clearSettings, encrypt, decrypt, pool };
