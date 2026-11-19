@@ -156,8 +156,8 @@ function load(){
   }catch(e){}
   return norm(s);
 }
-var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
-try{var savedCredential=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null');if(savedCredential&&savedCredential.url===S.cfg.url&&typeof savedCredential.key==='string')ACTIVE_KEY=savedCredential.key}catch(e){}
+var S=load(),ACTIVE_KEY='',apiKeyStoredOnServer=false,LEGACY_CREDENTIAL=null,busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+try{LEGACY_CREDENTIAL=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null')}catch(e){}
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
@@ -172,10 +172,8 @@ function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
 function persistApiKey(){
-  try{
-    if(ACTIVE_KEY)localStorage.setItem('tg_bot_api_credential',JSON.stringify({url:S.cfg.url,key:ACTIVE_KEY}));
-    else localStorage.removeItem('tg_bot_api_credential');
-  }catch(e){toast('Не удалось сохранить API-ключ в памяти браузера')}
+  // Provider credentials are persisted only by the encrypted backend store.
+  try{localStorage.removeItem('tg_bot_api_credential')}catch(e){}
 }
 var botSettingsSyncQueue=Promise.resolve();
 function syncBotSettings(clear){
@@ -188,6 +186,9 @@ function syncBotSettings(clear){
       var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       var result=await response.json().catch(function(){return{}});
       if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
+      apiKeyStoredOnServer=!clear;
+      try{localStorage.removeItem('tg_bot_api_credential')}catch(e){}
+      LEGACY_CREDENTIAL=null;
       return true;
     }catch(error){
       toast('Не удалось синхронизировать настройки бота: '+String(error.message||error).slice(0,180));
@@ -197,6 +198,53 @@ function syncBotSettings(clear){
   var task=botSettingsSyncQueue.then(execute,execute);
   botSettingsSyncQueue=task.then(function(){return true},function(){return false});
   return task;
+}
+async function loadBotSettings(){
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\\/+$/,'');
+  if(!TG||!TG.initData)return false;
+  if(!apiBase){
+    if(LEGACY_CREDENTIAL&&typeof LEGACY_CREDENTIAL.key==='string'&&LEGACY_CREDENTIAL.key){
+      ACTIVE_KEY=LEGACY_CREDENTIAL.key;apiKeyStoredOnServer=false;
+    }
+    return false;
+  }
+  try{
+    var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:TG.initData,action:'get'})});
+    var result=await response.json().catch(function(){return{}});
+    if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
+    if(result.settings){
+      var settings=result.settings;
+      if(settings.apiBase&&validApiBase(settings.apiBase))S.cfg.url=settings.apiBase;
+      if(typeof settings.apiKey==='string'&&settings.apiKey){ACTIVE_KEY=settings.apiKey;apiKeyStoredOnServer=true;}
+      if(settings.model){S.cfg.model=settings.model;addSavedModel(settings.model);}
+      if(Array.isArray(settings.models))settings.models.forEach(addSavedModel);
+      try{localStorage.removeItem('tg_bot_api_credential')}catch(e){}
+      LEGACY_CREDENTIAL=null;
+      saveNow();fillChatModel();render(true);
+      if($('#sheet').className==='on')fillSet();
+      return true;
+    }
+    if(LEGACY_CREDENTIAL&&typeof LEGACY_CREDENTIAL.key==='string'&&LEGACY_CREDENTIAL.key){
+      if(LEGACY_CREDENTIAL.url&&validApiBase(LEGACY_CREDENTIAL.url))S.cfg.url=LEGACY_CREDENTIAL.url;
+      ACTIVE_KEY=LEGACY_CREDENTIAL.key;apiKeyStoredOnServer=false;
+      var migrated=await syncBotSettings(false);
+      if(migrated)toast('Старый ключ перенесён в серверное хранилище.');
+      else toast('Старый ключ пока не удалось перенести. Проверьте настройку базы данных backend.');
+      saveNow();fillChatModel();render(true);
+      if($('#sheet').className==='on')fillSet();
+      return migrated;
+    }
+    try{localStorage.removeItem('tg_bot_api_credential')}catch(e){}
+    return true;
+  }catch(error){
+    if(LEGACY_CREDENTIAL&&typeof LEGACY_CREDENTIAL.key==='string'&&LEGACY_CREDENTIAL.key){
+      ACTIVE_KEY=LEGACY_CREDENTIAL.key;apiKeyStoredOnServer=false;
+      toast('Серверное хранилище пока недоступно. Старый ключ временно загружен с этого устройства.');
+      fillChatModel();render(true);
+      if($('#sheet').className==='on')fillSet();
+    }
+    return false;
+  }
 }
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
@@ -876,7 +924,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';apiKeyStoredOnServer=false;persistApiKey();syncBotSettings(true);$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -884,7 +932,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён на этом устройстве':'Вставьте API-ключ';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?(apiKeyStoredOnServer?'Ключ хранится на сервере':'Ключ пока только в памяти'):'Вставьте API-ключ';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -988,9 +1036,9 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();persistApiKey()});
-$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;persistApiKey();el.value='';el.placeholder='Ключ сохранён на этом устройстве';await $('#bTest').onclick();await syncBotSettings()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';apiKeyStoredOnServer=false;persistApiKey();syncBotSettings(true);$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
+$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();apiKeyStoredOnServer=false});
+$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();el.value='';persistApiKey();if(!ACTIVE_KEY){apiKeyStoredOnServer=false;await syncBotSettings(true);el.placeholder='Вставьте API-ключ';return}el.placeholder='Ключ проверяется и сохраняется…';await $('#bTest').onclick();var stored=await syncBotSettings();el.placeholder=stored?'Ключ хранится на сервере':'Ключ не сохранён на сервере';});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
 $('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel();syncBotSettings()}});
 $('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
@@ -1383,6 +1431,7 @@ if(TG){
   new MutationObserver(syncBack).observe($('#drawer'),{attributes:true});
   new MutationObserver(syncBack).observe($('#sheet'),{attributes:true});
 }
+if(TG)loadBotSettings();
 if(!storageOK)$('#nostore').style.display='block';
 window.addEventListener('beforeunload',saveNow);
 window.addEventListener('pagehide',saveNow);
