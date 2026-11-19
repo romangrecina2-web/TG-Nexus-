@@ -416,10 +416,12 @@ async function handleUserSettings(req, res) {
   if (req.method === 'GET') {
     try {
       const value = await storage.getUserSettings(auth.id);
+      const models = await storage.listModels(auth.id);
       return json(res, 200, {
         ok: true, apiBase: value ? value.apiBase : '', model: value ? value.model : '',
         hasApiKey: !!(value && value.apiKey), githubConnected: !!(value && value.githubInstallationId),
-        selectedRepo: value ? value.selectedRepo : ''
+        selectedRepo: value ? value.selectedRepo : '',
+        models
       });
     } catch (error) {
       return json(res, error.status || 503, { ok: false, error: error.status === 503 ? error.message : 'Не удалось загрузить настройки.' });
@@ -431,11 +433,14 @@ async function handleUserSettings(req, res) {
   const apiBase = String(payload.apiBase || '').trim().replace(/\/+$/, '');
   const apiKey = String(payload.apiKey || '').trim();
   const model = String(payload.model || '').trim();
+  const models = Array.isArray(payload.models) ? payload.models.slice(0, 100).map((value) => String(value || '').trim()) : [];
+  if (Array.isArray(payload.models) && payload.models.length > 100) return json(res, 400, { ok: false, error: 'Слишком много сохранённых моделей.' });
+  if (models.some((value) => value.length > 200 || /\\s/.test(value))) return json(res, 400, { ok: false, error: 'Некорректный список моделей.' });
   if (!validateApiBase(apiBase)) return json(res, 400, { ok: false, error: 'Адрес API должен использовать HTTPS.' });
   if (apiKey.length > 4096 || (apiKey && apiKey.length < 8)) return json(res, 400, { ok: false, error: 'Некорректная длина API-ключа.' });
   if (model.length > 200 || /\s/.test(model)) return json(res, 400, { ok: false, error: 'Некорректный ID модели.' });
   try {
-    await storage.saveUserSettings(auth.id, { apiBase, apiKey, model });
+    await storage.saveUserSettings(auth.id, { apiBase, apiKey, model, models });
     return json(res, 200, { ok: true, saved: true, hasApiKey: !!apiKey });
   } catch (error) {
     return json(res, error.status || 503, { ok: false, error: error.status === 503 ? error.message : 'Не удалось сохранить настройки.' });
