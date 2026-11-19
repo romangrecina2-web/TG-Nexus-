@@ -12,12 +12,15 @@ function appConfig() {
   const appId = String(process.env.GITHUB_APP_ID || '').trim();
   const slug = String(process.env.GITHUB_APP_SLUG || '').trim();
   const privateKey = String(process.env.GITHUB_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
-  if (!appId || !slug || !privateKey) {
+  const clientId = String(process.env.GITHUB_CLIENT_ID || '').trim();
+  const clientSecret = String(process.env.GITHUB_CLIENT_SECRET || '').trim();
+  const callbackUrl = String(process.env.GITHUB_CALLBACK_URL || '').trim();
+  if (!appId || !slug || !privateKey || !clientId || !clientSecret || !callbackUrl) {
     const error = new Error('GitHub App ещё не настроен на сервере.');
     error.status = 503;
     throw error;
   }
-  return { appId, slug, privateKey };
+  return { appId, slug, privateKey, clientId, clientSecret, callbackUrl };
 }
 
 function b64url(value) {
@@ -74,6 +77,74 @@ function installationUrl(userId) {
   const { slug } = appConfig();
   return 'https://github.com/apps/' + encodeURIComponent(slug) +
     '/installations/new?state=' + encodeURIComponent(createInstallState(userId));
+}
+
+function createOAuthState(userId, installationId) {
+  const secret = stateSecret();
+  const expires = Math.floor(Date.now() / 1000) + 10 * 60;
+  const nonce = crypto.randomBytes(16).toString('base64url');
+  const payload = [String(userId), String(installationId), String(expires), nonce].join('.');
+  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return payload + '.' + signature;
+}
+
+function verifyOAuthState(state) {
+  if (typeof state !== 'string' || state.length > 512) return null;
+  const parts = state.split('.');
+  if (parts.length !== 5) return null;
+  const [userId, installationId, expiresRaw, nonce, signature] = parts;
+  if (!/^\d{1,20}$/.test(userId) || !/^\d{1,20}$/.test(installationId) ||
+      !/^\d{10}$/.test(expiresRaw) || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce)) return null;
+  let secret;
+  try { secret = stateSecret(); } catch { return null; }
+  const payload = [userId, installationId, expiresRaw, nonce].join('.');
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest();
+  let actual;
+  try { actual = Buffer.from(signature, 'base64url'); } catch { return null; }
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
+  const expires = Number(expiresRaw), now = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(expires) || expires < now || expires > now + 11 * 60) return null;
+  return { userId, installationId };
+}
+
+function oauthAuthorizationUrl(userId, installationId) {
+  const config = appConfig();
+  const url = new URL('https://github.com/login/oauth/authorize');
+  url.searchParams.set('client_id', config.clientId);
+  url.searchParams.set('redirect_uri', config.callbackUrl);
+  url.searchParams.set('state', createOAuthState(userId, installationId));
+  url.searchParams.set('allow_signup', 'false');
+  return url.toString();
+}
+
+async function completeOAuthInstallation(userId, installationId, code) {
+  if (!/^\d{1,20}$/.test(String(installationId)) || typeof code !== 'string' || !code || code.length > 512) {
+    throw new Error('Некорректные параметры OAuth callback.');
+  }
+  const config = appConfig();
+  const response = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      code,
+      redirect_uri: config.callbackUrl
+    }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  const tokenData = await response.json().catch(() => ({}));
+  if (!response.ok || !tokenData.access_token) throw new Error('GitHub OAuth не выдал токен пользователя.');
+  const userToken = tokenData.access_token;
+  const user = await githubRequest('https://api.github.com/user', userToken);
+  if (!user || !Number.isSafeInteger(Number(user.id))) throw new Error('GitHub не подтвердил пользователя.');
+  const accessible = await githubRequest('https://api.github.com/user/installations?per_page=100', userToken);
+  const installation = (accessible.installations || []).find((item) =>
+    String(item.id) === String(installationId) && String(item.app_id) === String(config.appId)
+  );
+  if (!installation) throw new Error('Эта установка GitHub App не принадлежит авторизованному пользователю или ему не выдан к ней доступ.');
+  await storage.setGitHubInstallation(userId, installationId);
+  return { login: String(user.login || ''), installationId: String(installationId) };
 }
 
 async function githubRequest(url, token, method = 'GET', body) {
@@ -239,9 +310,12 @@ async function repositoryContext(userId) {
 
 module.exports = {
   completeInstallation,
+  completeOAuthInstallation,
   installationUrl,
+  oauthAuthorizationUrl,
   listRepositories,
   repositoryContext,
   selectRepository,
-  verifyInstallState
+  verifyInstallState,
+  verifyOAuthState
 };
