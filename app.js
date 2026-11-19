@@ -156,7 +156,8 @@ function load(){
   }catch(e){}
   return norm(s);
 }
-var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;\ntry{var savedCredential=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null');if(savedCredential&&savedCredential.url===S.cfg.url&&typeof savedCredential.key==='string')ACTIVE_KEY=savedCredential.key}catch(e){}
+var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+try{var savedCredential=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null');if(savedCredential&&savedCredential.url===S.cfg.url&&typeof savedCredential.key==='string')ACTIVE_KEY=savedCredential.key}catch(e){}
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
