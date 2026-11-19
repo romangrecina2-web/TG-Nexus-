@@ -592,8 +592,8 @@ function buildCodingAgentContext(c,userMessage){
 }
 async function runCodingAgents(c,userMessage,signal,onProgress){
   var teamSize=Math.max(1,Math.min(20,Math.round(Number(S.cfg.agentCount)||3))),count=teamSize-1;if(!count)return {summary:'В команде один ИИ: основная модель самостоятельно выполняет задачу.',prompt:''};
-  var selected=activeModel(c),models=[selected];
-  (S.cfg.models||[]).forEach(function(model){if(model&&models.indexOf(model)<0)models.push(model)});
+  var selected=activeModel(c),models=[selected],freeOnly=selected==='openrouter/free'||/:free$/.test(selected);
+  (S.cfg.models||[]).forEach(function(model){if(model&&models.indexOf(model)<0&&(!freeOnly||/:free$/.test(model)))models.push(model)});
   var context=buildCodingAgentContext(c,userMessage),reports=[],completed=0;
   async function runOne(index){
     var role=CODING_AGENT_ROLES[index%CODING_AGENT_ROLES.length];
