@@ -407,6 +407,7 @@ async function readAuthenticatedPayload(req, res, limit) {
   catch (error) { json(res, error.status || 400, { ok: false, error: error.message }); return null; }
   const auth = validateTelegramInitData(payload && payload.initData);
   if (!auth) { json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram.' }); return null; }
+  if (!checkRateLimit(auth.id)) { json(res, 429, { ok: false, error: 'Слишком много запросов. Попробуйте позже.' }); return null; }
   return { payload: payload, userId: auth.id };
 }
 
