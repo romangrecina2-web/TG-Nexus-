@@ -2,11 +2,11 @@
 
 ## Security boundary
 
-TG Shell is a browser application. It does not have a trusted server-side session for AI-provider API keys. The Telegram bot backend is a separate service and accepts file-send requests only after validating signed Telegram Mini App initData.
+TG Shell uses a Telegram Mini App backend to authenticate settings requests with signed Telegram `initData`. Provider API keys are persisted only in PostgreSQL after AES-256-GCM encryption and are associated with the authenticated Telegram user ID.
 
 ## Protections implemented
 
-- The active AI-provider key is stored in this browser's localStorage for convenience and synced to the backend only through verified Telegram initData. The backend stores an AES-256-GCM encrypted copy. This means same-origin scripts and browser extensions with page access may read the local key. Do not use untrusted extensions or shared browser profiles; rotate the key if compromise is suspected.
+- Provider API keys are stored in PostgreSQL only as AES-256-GCM ciphertext. After Telegram `initData` validation, the backend can return the decrypted key to that same user's Mini App; the frontend keeps it in JavaScript memory and does not write it to `localStorage`. The key is still exposed to scripts running with same-origin access while the Mini App is open because direct provider requests are currently made by the browser. A future server-side provider proxy would be needed to keep the plaintext key entirely off the client.
 - The backend validates Telegram's HMAC signature, rejects duplicate fields, caps initData at 16 KiB, and accepts signatures no older than one hour.
 - Per-user requests are limited to 20 per minute, with a process-wide limit and a bounded, periodically cleaned limiter map.
 - Request bodies, file sizes, HTTP headers, webhook secrets, and outbound Telegram requests have explicit limits and timeouts.
@@ -19,7 +19,7 @@ TG Shell is a browser application. It does not have a trusted server-side sessio
 - Telegram bot conversation messages are persisted in PostgreSQL JSONB and are not application-encrypted at rest by this code. Treat the database and its backups as sensitive; restrict database access and configure provider-level encryption and retention.
 - GitHub App access and refresh tokens are encrypted at rest. Installation access tokens are short-lived and created on demand; they are not stored in the database.
 
-- A browser-only app cannot protect a key from malware, browser extensions with broad permissions, or code execution that already has same-origin access. Do not use a high-value API key in a compromised browser profile. Rotate a key immediately if it may have leaked.
+- A browser-only app cannot protect a key from malware, browser extensions with broad permissions, or code execution that already has same-origin access. Server-side persistence protects the key at rest from casual browser-profile sync/export, but does not protect it from malicious same-origin JavaScript while the app is open. Rotate a key immediately if compromise is suspected.
 - The sandbox network-on mode is an opt-in convenience boundary, not a server-grade network firewall. Browser code can only fetch HTTPS resources that pass browser CORS, and it has request/response limits. The client cannot reliably resolve and validate every DNS answer before connecting, so do not run untrusted code with network access when private-network isolation is a hard requirement.
 - CORS is not authentication. The backend authorization check is Telegram's signed initData; the CORS allowlist is an additional browser-origin restriction.
 - The one-hour initData window is a replay window. Rate limits reduce abuse but do not turn Telegram initData into a per-request nonce.

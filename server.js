@@ -416,6 +416,18 @@ async function handleBotSettings(req, res) {
   if (!auth) return;
   try {
     await ensureStorage();
+    if (auth.payload.action === 'get') {
+      const settings = await botChat.getSettings(auth.userId);
+      return json(res, 200, {
+        ok: true,
+        settings: settings ? {
+          apiBase: settings.api_base,
+          apiKey: settings.api_key,
+          model: settings.active_model,
+          models: settings.models
+        } : null
+      });
+    }
     if (auth.payload.clear === true || auth.payload.apiKey === '') await botChat.clearSettings(auth.userId);
     else await botChat.saveSettings(auth.userId, auth.payload.apiBase, auth.payload.apiKey, auth.payload.model);
     return json(res, 200, { ok: true });

@@ -66,7 +66,8 @@ Unknown /api/github/* routes return 404.
 ## Storage and privacy
 
 - Provider API keys and GitHub OAuth access/refresh tokens are encrypted using AES-256-GCM with DATA_ENCRYPTION_KEY.
-- The active provider key is also stored in the browser's localStorage, as requested for persistence across Mini App restarts. Same-origin scripts and browser extensions with page access may read it.
+- Provider API keys are stored persistently only in PostgreSQL and are loaded into Mini App memory after Telegram `initData` verification. The application does not write the provider key to `localStorage`; a one-time migration moves legacy local credentials to the server after the database is available.
+- The key is still visible to same-origin JavaScript while the Mini App is open because model requests are currently made directly by the browser. Keeping plaintext keys completely off the client requires a later backend proxy for provider requests.
 - Telegram chat messages are stored in PostgreSQL JSONB and are **not encrypted at rest by this implementation**. Database-level encryption, access controls, backups, and retention policies remain the hosting/database operator's responsibility.
 - OAuth state hashes and account tokens are not returned to the browser.
 - Disconnecting GitHub deletes the linked account and pending OAuth states from the application database. It does not uninstall the GitHub App from GitHub; the user must manage installation/revocation in GitHub as well.
