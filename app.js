@@ -115,6 +115,7 @@ var storageOK=true;
 try{localStorage.setItem('_t','1');localStorage.removeItem('_t')}catch(e){storageOK=false}
 
 function host(u){try{return new URL(u).hostname}catch(e){return String(u||'')}}
+function validApiBase(value){try{var u=new URL(String(value||'')),local=['localhost','127.0.0.1','[::1]'].indexOf(u.hostname)>=0;return !u.username&&!u.password&&!u.search&&!u.hash&&(u.protocol==='https:'||(local&&u.protocol==='http:'))}catch(e){return false}}
 function def(){return{v:2,cfg:{url:PRESETS.or.url,model:PRESETS.or.model,models:[PRESETS.or.model],wallpaperEnabled:false,sys:'Ты умный и дружелюбный ассистент. Отвечай по-русски, если не просят иначе. Пиши ясно и по делу.',temp:'',max:'',reasoning:'auto',internet:false,sandbox:false,sandboxInternet:false,multiAgent:false,agentCount:3,sandboxTimeout:60,auto:true,sumAt:10000,keep:4,pinCap:4000,askCode:true,balOn:true,minBal:10,balBase:'',balUsage:0,keys:{}},mem:[],chats:[],cur:null,stats:{day:'',n:0}}}
 function makeId(){return 'm_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
 function fixChat(c){
@@ -134,7 +135,7 @@ function fixChat(c){
 function norm(d){
   var b=def();
   d.cfg=d.cfg||{};for(var k in b.cfg)if(!(k in d.cfg))d.cfg[k]=b.cfg[k];
-  d.cfg.keys=d.cfg.keys||{};d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
+  d.cfg.keys={};d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
   if(d.cfg.model&&d.cfg.models.indexOf(d.cfg.model)<0)d.cfg.models.unshift(d.cfg.model);
   d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;d.cfg.sandbox=!!d.cfg.sandbox;d.cfg.sandboxInternet=!!d.cfg.sandboxInternet;if(!d.cfg.sandbox)d.cfg.sandboxInternet=false;d.cfg.multiAgent=!!d.cfg.multiAgent;d.cfg.agentCount=Math.max(1,Math.min(20,Math.round(Number(d.cfg.agentCount)||3)));d.cfg.sandboxTimeout=Math.max(1,Math.min(3600,Math.round(Number(d.cfg.sandboxTimeout)||60)));
   d.mem=d.mem||[];d.chats=(d.chats||[]).map(fixChat);d.chats.forEach(function(c){if(!c.model)c.model=d.cfg.model});d.stats=d.stats||b.stats;
@@ -147,7 +148,6 @@ function load(){
   try{
     var o=JSON.parse(localStorage.getItem(OLD));
     if(o&&o.cfg){
-      if(o.cfg.key)s.cfg.keys[host(o.cfg.url)]=o.cfg.key;
       if(o.cfg.url&&o.cfg.url.indexOf('nvidia')<0){s.cfg.url=o.cfg.url;s.cfg.model=o.cfg.model||s.cfg.model}
       if(o.cfg.sys)s.cfg.sys=o.cfg.sys;
       s.mem=String(o.cfg.mem||'').split('\n').map(function(x){return x.trim()}).filter(Boolean);
@@ -156,11 +156,12 @@ function load(){
   }catch(e){}
   return norm(s);
 }
-var S=load(),busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
   if(saveTimer){clearTimeout(saveTimer);saveTimer=null}
-  try{localStorage.setItem(KEY,JSON.stringify(S,function(k,v){if(k==='err')return undefined;if(k==='reasoning'&&this&&this.role==='assistant')return undefined;return v}))}
+  try{localStorage.setItem(KEY,JSON.stringify(S,function(k,v){if(k==='keys'||k==='err')return undefined;if(k==='reasoning'&&this&&this.role==='assistant')return undefined;return v}))}
   catch(e){if(!warned){warned=true;toast('Не хватает места в памяти браузера. Скачайте копию и удалите старые чаты.')}}
 }
 function save(){if(!storageOK)return;if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,420)}
@@ -168,8 +169,8 @@ function cur(){return S.chats.filter(function(c){return c.id===S.cur})[0]||null}
 function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
-function curKey(){return S.cfg.keys[host(S.cfg.url)]||''}
-function base(){return S.cfg.url.replace(/\/+$/,'')}
+function curKey(){return ACTIVE_KEY}
+function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
 function memText(){return S.mem.length?'\n\nЧто ты знаешь о пользователе (учитывай это, но не пересказывай без нужды):\n- '+S.mem.join('\n- '):''}
 function short(t){return t.length>60?t.slice(0,57)+'…':t}
@@ -518,6 +519,50 @@ $('#fAttach').onchange=function(e){attachSelected(e.target.files);e.target.value
 function sandboxRun(code){
   return new Promise(function(resolve){
     if(typeof code!=='string'||!code.trim())return resolve({status:'ошибка',output:'Пустой код.'});
+    if(typeof MessageChannel!=='function')return resolve({status:'ошибка',output:'Браузер не поддерживает изолированный канал песочницы.'});
+    var internetEnabled=!!S.cfg.sandboxInternet;
+    var frame=document.createElement('iframe'),token='sb_'+Date.now()+'_'+Math.random().toString(36).slice(2),done=false,started=false,timer,channel=new MessageChannel();
+    frame.setAttribute('sandbox','allow-scripts');
+    frame.setAttribute('aria-hidden','true');
+    frame.setAttribute('title','Изолированная песочница JavaScript');
+    frame.setAttribute('allow','');
+    frame.style.cssText='position:fixed;width:1px;height:1px;left:-10px;top:-10px;border:0;opacity:0;pointer-events:none';
+    function finish(result){
+      if(done)return;
+      done=true;
+      clearTimeout(timer);
+      try{channel.port1.close()}catch(e){}
+      try{channel.port2.close()}catch(e){}
+      frame.remove();
+      resolve(result);
+    }
+    channel.port1.onmessage=function(ev){
+      var data=ev.data;
+      if(!data||data.token!==token)return;
+      finish({status:data.status||'готово',output:String(data.output||'').slice(0,10000)});
+    };
+    channel.port1.start();
+    frame.addEventListener('load',function(){
+      if(done||started)return;
+      started=true;
+      try{
+        frame.contentWindow.postMessage({
+          type:'tg-shell-sandbox-run',
+          token:token,
+          code:code,
+          internetEnabled:internetEnabled
+        },'*',[channel.port2]);
+      }catch(e){
+        finish({status:'ошибка',output:'Не удалось создать защищённый канал песочницы.'});
+      }
+    },{once:true});
+    frame.src=new URL(internetEnabled?'./sandbox-network.html':'./sandbox.html',window.location.href).href;
+    document.body.appendChild(frame);
+    var timeoutSeconds=Math.max(1,Math.min(3600,Math.round(Number(S.cfg.sandboxTimeout)||60)));
+    timer=setTimeout(function(){finish({status:'тайм-аут',output:'Выполнение остановлено через '+timeoutSeconds+' сек.'})},timeoutSeconds*1000);
+  });
+}
+var codeRe=
     var internetEnabled=!!S.cfg.sandboxInternet;
     var frame=document.createElement('iframe'),token='sb_'+Date.now()+'_'+Math.random().toString(36).slice(2),done=false,timer;
     frame.setAttribute('sandbox','allow-scripts');frame.setAttribute('aria-hidden','true');
@@ -847,7 +892,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -855,7 +900,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён. Вставьте новый, чтобы заменить':'Вставьте ключ OpenRouter';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ действует до закрытия вкладки':'Ключ не сохраняется. Вставьте его для этой вкладки';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -877,9 +922,9 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){S.cfg.url=this.value.trim();if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){var v=this.value.trim();if(v){S.cfg.keys[host(S.cfg.url)]=v;save()}});
-$('#cKey').addEventListener('change',async function(){var el=this;if(!el.value.trim())return;S.cfg.keys[host(S.cfg.url)]=el.value.trim();saveNow();el.value='';el.placeholder='Ключ сохранён. Вставьте новый, чтобы заменить';await $('#bTest').onclick()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
+$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim()});
+$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';el.placeholder='Ключ действует до закрытия вкладки';await $('#bTest').onclick()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
 $('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
 $('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
@@ -970,7 +1015,7 @@ $('#bModels').onclick=async function(){
 $('#sExp').onclick=function(){
   saveText('chat-backup.json',JSON.stringify(S,function(k,v){return k==='keys'?undefined:v}),'application/json');
 };
-function importText(t){try{var d=JSON.parse(t);if(!d.cfg||!d.chats)throw 0;var keys=S.cfg.keys;S=norm(d);S.cfg.keys=keys;saveNow();fillSet();fillChatModel();restoreChatComposer(cur());render(true);toast('Копия загружена')}catch(x){toast('В буфере нет копии чатов')}}
+function importText(t){try{var d=JSON.parse(t);if(!d.cfg||!d.chats)throw 0;var oldUrl=S.cfg.url;S=norm(d);if(S.cfg.url!==oldUrl){ACTIVE_KEY='';$('#cKey').value=''}saveNow();fillSet();fillChatModel();restoreChatComposer(cur());render(true);toast('Копия загружена')}catch(x){toast('В буфере нет копии чатов')}}
 $('#sImp').onclick=function(){if(TG&&TG.readTextFromClipboard)TG.readTextFromClipboard(function(t){if(t)importText(t);else $('#fImp').click()});else $('#fImp').click()};
 $('#fImp').onchange=function(e){
   var f=e.target.files[0];if(!f)return;
@@ -978,7 +1023,7 @@ $('#fImp').onchange=function(e){
   r.onload=function(){
     try{
       var d=JSON.parse(r.result);if(!d.cfg||!d.chats)throw 0;
-      var keys=S.cfg.keys;S=norm(d);S.cfg.keys=keys;saveNow();fillSet();fillChatModel();restoreChatComposer(cur());render(true);toast('Копия загружена');
+      var oldUrl=S.cfg.url;S=norm(d);if(S.cfg.url!==oldUrl){ACTIVE_KEY='';$('#cKey').value=''}saveNow();fillSet();fillChatModel();restoreChatComposer(cur());render(true);toast('Копия загружена');
     }catch(x){toast('Не удалось прочитать файл копии')}
   };
   r.readAsText(f);e.target.value='';
