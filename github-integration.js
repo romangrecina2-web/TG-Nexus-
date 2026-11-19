@@ -166,8 +166,8 @@ async function getUserToken(telegramId) {
   const expires = account.access_expires_at ? new Date(account.access_expires_at).getTime() : 0;
   if (!expires || expires > Date.now() + 90000) return { account: account, token: botChat.decrypt(account.access_token_enc) };
   if (!account.refresh_token_enc) throw new Error('Срок действия GitHub-токена истёк. Подключите GitHub заново.');
-  const refreshExpires = account.refresh_expires_at ? new Date(account.refresh_expires_at).getTime() : 0;
-  if (refreshExpires && refreshExpires <= Date.now()) throw new Error('Срок действия GitHub refresh-токена истёк. Подключите GitHub заново.');
+  const refreshTokenExpires = account.refresh_expires_at ? new Date(account.refresh_expires_at).getTime() : 0;
+  if (refreshTokenExpires && refreshTokenExpires <= Date.now()) throw new Error('Срок действия GitHub refresh-токена истёк. Подключите GitHub заново.');
   const c = config();
   const response = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
