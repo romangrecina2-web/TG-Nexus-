@@ -16,6 +16,9 @@ TG Shell is a browser application. It does not have a trusted server-side sessio
 
 ## Important limitations
 
+- Telegram bot conversation messages are persisted in PostgreSQL JSONB and are not application-encrypted at rest by this code. Treat the database and its backups as sensitive; restrict database access and configure provider-level encryption and retention.
+- GitHub App access and refresh tokens are encrypted at rest. Installation access tokens are short-lived and created on demand; they are not stored in the database.
+
 - A browser-only app cannot protect a key from malware, browser extensions with broad permissions, or code execution that already has same-origin access. Do not use a high-value API key in a compromised browser profile. Rotate a key immediately if it may have leaked.
 - The sandbox network-on mode is an opt-in convenience boundary, not a server-grade network firewall. Browser code can only fetch HTTPS resources that pass browser CORS, and it has request/response limits. The client cannot reliably resolve and validate every DNS answer before connecting, so do not run untrusted code with network access when private-network isolation is a hard requirement.
 - CORS is not authentication. The backend authorization check is Telegram's signed initData; the CORS allowlist is an additional browser-origin restriction.
