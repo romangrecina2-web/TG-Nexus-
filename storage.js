@@ -146,7 +146,7 @@ async function saveUserSettings(userId, values) {
   if (Array.isArray(values.models)) {
     for (const savedModel of values.models.slice(0, 100)) {
       const value = String(savedModel || '').trim();
-      if (value && value.length <= 200 && !/\\s/.test(value)) await addModel(userId, value);
+      if (value && value.length <= 200 && !/\s/.test(value)) await addModel(userId, value);
     }
   }
 }
