@@ -170,6 +170,10 @@ async function handleUpdate(update) {
   const chatId = message.chat.id;
   const text = message.text.trim();
   if (!text) return false;
+  if (!pool && !/^\/start(?:@\\w+)?$/i.test(text)) {
+    await reply(chatId, 'Чат с ИИ пока не настроен: на сервере нужно подключить PostgreSQL и задать DATABASE_URL.');
+    return true;
+  }
 
   if (/^\/start(?:@\w+)?$/i.test(text)) {
     await reply(chatId, 'Привет! Откройте Mini App, добавьте API URL, ключ и модель в настройках, затем используйте /chat.\n\nКоманды: /chat, /new, /stop, /model_info, /model <ID>.');
