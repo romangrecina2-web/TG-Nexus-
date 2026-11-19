@@ -135,7 +135,7 @@ function fixChat(c){
 function norm(d){
   var b=def();
   d.cfg=d.cfg||{};for(var k in b.cfg)if(!(k in d.cfg))d.cfg[k]=b.cfg[k];
-  d.cfg.keys={};d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
+  d.cfg.keys={};d.cfg.apiKey=typeof d.cfg.apiKey==='string'?d.cfg.apiKey:'';d.cfg.models=Array.isArray(d.cfg.models)?d.cfg.models.filter(function(x){return typeof x==='string'&&x.trim()}):[];
   if(d.cfg.model&&d.cfg.models.indexOf(d.cfg.model)<0)d.cfg.models.unshift(d.cfg.model);
   d.cfg.wallpaperEnabled=!!d.cfg.wallpaperEnabled;d.cfg.sandbox=!!d.cfg.sandbox;d.cfg.sandboxInternet=!!d.cfg.sandboxInternet;if(!d.cfg.sandbox)d.cfg.sandboxInternet=false;d.cfg.multiAgent=!!d.cfg.multiAgent;d.cfg.agentCount=Math.max(1,Math.min(20,Math.round(Number(d.cfg.agentCount)||3)));d.cfg.sandboxTimeout=Math.max(1,Math.min(3600,Math.round(Number(d.cfg.sandboxTimeout)||60)));
   d.mem=d.mem||[];d.chats=(d.chats||[]).map(fixChat);d.chats.forEach(function(c){if(!c.model)c.model=d.cfg.model});d.stats=d.stats||b.stats;
@@ -156,7 +156,7 @@ function load(){
   }catch(e){}
   return norm(s);
 }
-var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+var S=load(),ACTIVE_KEY=S.cfg.apiKey||'',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
@@ -170,6 +170,18 @@ function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
+var settingsSyncTimer=null;
+function assistantApiBase(){return String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\\/+$/,'')}
+async function syncAssistantSettings(showError){
+  if(!TG||!TG.initData||!assistantApiBase())return false;
+  try{
+    var r=await fetch(assistantApiBase()+'/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Telegram-Init-Data':TG.initData},body:JSON.stringify({apiBase:S.cfg.url,apiKey:S.cfg.apiKey||'',model:S.cfg.model})});
+    var j=await r.json().catch(function(){return{}});
+    if(!r.ok||!j.ok)throw new Error(j.error||'Не удалось сохранить настройки для Telegram-бота.');
+    return true;
+  }catch(e){if(showError)toast('Не удалось синхронизировать настройки бота: '+(e.message||'ошибка сервера'));return false}
+}
+function queueAssistantSettingsSync(){if(settingsSyncTimer)clearTimeout(settingsSyncTimer);settingsSyncTimer=setTimeout(function(){syncAssistantSettings(false)},700)}
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
 function memText(){return S.mem.length?'\n\nЧто ты знаешь о пользователе (учитывай это, но не пересказывай без нужды):\n- '+S.mem.join('\n- '):''}
@@ -848,7 +860,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';S.cfg.apiKey='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();queueAssistantSettingsSync();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -856,7 +868,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ действует до закрытия вкладки':'Ключ не сохраняется. Вставьте его для этой вкладки';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Сохранённый ключ доступен':'Вставьте ключ API';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -878,12 +890,12 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim()});
-$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';el.placeholder='Ключ действует до закрытия вкладки';await $('#bTest').onclick()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';S.cfg.apiKey='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();queueAssistantSettingsSync();fillSet()});
+$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();S.cfg.apiKey=ACTIVE_KEY;save();queueAssistantSettingsSync()});
+$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();S.cfg.apiKey=ACTIVE_KEY;saveNow();if(!ACTIVE_KEY)return;var synced=await syncAssistantSettings(true);el.value='';el.placeholder=synced?'Ключ сохранён и доступен боту':'Ключ сохранён на этом устройстве';await $('#bTest').onclick()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
-$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
-$('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
+$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();queueAssistantSettingsSync();renderSavedModels();fillChatModel()}});
+$('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();queueAssistantSettingsSync();updSub()}});
 function renderSavedModels(){
   var box=$('#savedModels');if(!box)return;box.innerHTML='';
   if(!S.cfg.models.length){box.innerHTML='<div class="none">Список моделей пуст</div>';return}
@@ -969,7 +981,7 @@ $('#bModels').onclick=async function(){
   }catch(e){note(niceErr(e),'bad')}
 };
 $('#sExp').onclick=function(){
-  saveText('chat-backup.json',JSON.stringify(S,function(k,v){return k==='keys'?undefined:v}),'application/json');
+  saveText('chat-backup.json',JSON.stringify(S,function(k,v){return k==='keys'||k==='apiKey'?undefined:v}),'application/json');
 };
 function importText(t){try{var d=JSON.parse(t);if(!d.cfg||!d.chats)throw 0;var oldUrl=S.cfg.url;S=norm(d);if(S.cfg.url!==oldUrl){ACTIVE_KEY='';$('#cKey').value=''}saveNow();fillSet();fillChatModel();restoreChatComposer(cur());render(true);toast('Копия загружена')}catch(x){toast('В буфере нет копии чатов')}}
 $('#sImp').onclick=function(){if(TG&&TG.readTextFromClipboard)TG.readTextFromClipboard(function(t){if(t)importText(t);else $('#fImp').click()});else $('#fImp').click()};
@@ -1243,6 +1255,37 @@ $('#cBalMan').addEventListener('change',async function(){
 });
 
 var TG=(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData)?Telegram.WebApp:null;
+async function githubRequest(path,options){
+  if(!TG||!TG.initData)throw new Error('Откройте приложение из Telegram.');
+  var baseUrl=assistantApiBase();if(!baseUrl)throw new Error('Не настроен адрес backend в config.js.');
+  var opts=options||{};opts.headers=Object.assign({'X-Telegram-Init-Data':TG.initData},opts.headers||{});
+  var r=await fetch(baseUrl+path,opts),j=await r.json().catch(function(){return{}});
+  if(!r.ok||!j.ok)throw new Error(j.error||'Ошибка GitHub-интеграции.');return j;
+}
+async function connectGitHub(){
+  try{var j=await githubRequest('/api/github/install-url');if(TG&&TG.openLink)TG.openLink(j.url);else window.open(j.url,'_blank','noopener');}
+  catch(e){toast(e.message||'Не удалось открыть подключение GitHub')}
+}
+async function loadGitHubRepos(){
+  var select=$('#githubRepo'),status=$('#githubStatus');if(!select)return;
+  try{
+    var j=await githubRequest('/api/github/repos');select.innerHTML='';
+    (j.repositories||[]).forEach(function(repo){var opt=document.createElement('option');opt.value=repo.fullName;opt.textContent=repo.fullName+(repo.private?' · private':'');select.appendChild(opt)});
+    if(j.selectedRepo)select.value=j.selectedRepo;
+    status.textContent=j.repositories&&j.repositories.length?'Подключено. Выберите репозиторий для контекста ИИ.':'GitHub подключён, доступных репозиториев нет.';
+  }catch(e){status.textContent=e.message||'GitHub пока не подключён.'}
+}
+$('#githubConnect').onclick=connectGitHub;
+$('#githubRefresh').onclick=loadGitHubRepos;
+$('#githubRepo').addEventListener('change',async function(){
+  if(!this.value)return;
+  try{await githubRequest('/api/github/repo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repository:this.value})});$('#githubStatus').textContent='Выбран репозиторий: '+this.value;toast('Репозиторий подключён к контексту ИИ')}
+  catch(e){toast(e.message||'Не удалось выбрать репозиторий')}
+});
+if(new URLSearchParams(window.location.search).get('github')==='connected'){
+  setTimeout(loadGitHubRepos,300);
+  try{history.replaceState(null,'',window.location.pathname)}catch(e){}
+}
 function saveText(name,text,mime){
   if(TG){copyText(text).then(function(ok){toast(ok?'Скопировано в буфер. В Телеграме скачивание недоступно':'Не удалось скопировать')});return}
   var b=new Blob([text],{type:mime||'text/plain;charset=utf-8'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1500);
