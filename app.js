@@ -856,7 +856,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ действует до закрытия вкладки':'Ключ не сохраняется. Вставьте его для этой вкладки';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён на этом устройстве':'Вставьте API-ключ';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -874,7 +874,7 @@ function memList(){
     li.appendChild(s);li.appendChild(b);u.appendChild(li);
   });
 }
-function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on'}
+function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on';syncBotSettings()}
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
