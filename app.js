@@ -156,7 +156,7 @@ function load(){
   }catch(e){}
   return norm(s);
 }
-var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;\ntry{var savedCredential=JSON.parse(localStorage.getItem('tg_bot_api_credential')||'null');if(savedCredential&&savedCredential.url===S.cfg.url&&typeof savedCredential.key==='string')ACTIVE_KEY=savedCredential.key}catch(e){}
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
@@ -848,7 +848,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';persistApiKey();$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -878,11 +878,11 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim()});
-$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';el.placeholder='Ключ действует до закрытия вкладки';await $('#bTest').onclick()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';persistApiKey();$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
+$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();persistApiKey()});
+$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;persistApiKey();el.value='';el.placeholder='Ключ сохранён на этом устройстве';await $('#bTest').onclick();await syncBotSettings()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
-$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
+$('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel();syncBotSettings()}});
 $('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
 function renderSavedModels(){
   var box=$('#savedModels');if(!box)return;box.innerHTML='';
