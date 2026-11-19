@@ -850,7 +850,7 @@ function hint(){
 }
 function fillSet(){
   $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ сохранён. Вставьте новый, чтобы заменить':'Вставьте ключ OpenRouter';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
-  $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;
+  $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
   $('#cSumAt').value=S.cfg.sumAt;$('#cKeep').value=S.cfg.keep;$('#cPinCap').value=S.cfg.pinCap;$('#cMinBal').value=S.cfg.minBal;
@@ -896,8 +896,24 @@ $('#cInternet').addEventListener('change',function(){
   S.cfg.internet=this.checked;save();toast(this.checked?'Интернет-поиск разрешён':'Интернет-поиск отключён');
 });
 $('#cSandbox').addEventListener('change',function(){
-  if(this.checked&&!confirm('Разрешить ИИ запускать JavaScript в изолированной песочнице браузера? Код сможет расходовать ресурсы устройства; бесконечный цикл может подвесить вкладку. Сеть, файлы, localStorage и API-ключ недоступны.')){this.checked=false;return}
-  S.cfg.sandbox=this.checked;save();toast(this.checked?'Доступ к песочнице разрешён':'Доступ к песочнице отключён');
+  if(this.checked&&!confirm('Разрешить ИИ запускать JavaScript в изолированной песочнице браузера? Код может расходовать ресурсы устройства. Сетевой доступ включается отдельно. Файлы, хранилище и API-ключ недоступны.')){this.checked=false;return}
+  S.cfg.sandbox=this.checked;
+  if(!this.checked){S.cfg.sandboxInternet=false;$('#cSandboxInternet').checked=false}
+  $('#cSandboxInternet').disabled=!this.checked;
+  save();toast(this.checked?'Доступ к песочнице разрешён':'Песочница отключена');
+});
+$('#cSandboxInternet').addEventListener('change',function(){
+  if(this.checked&&!S.cfg.sandbox){this.checked=false;toast('Сначала включите запуск JavaScript в песочнице');return}
+  if(this.checked&&!confirm('Разрешить выполняемому коду отправлять HTTPS-запросы к публичным доменам? Сайты увидят сетевые запросы с вашего устройства. Cookies, локальные адреса и API-ключ TG Shell не передаются. Действуют CORS и лимиты песочницы.')){this.checked=false;return}
+  S.cfg.sandboxInternet=this.checked;save();toast(this.checked?'HTTPS-доступ в песочнице разрешён':'Интернет в песочнице отключён');
+});
+$('#cMultiAgent').addEventListener('change',function(){
+  if(this.checked&&!confirm('Включить мультиагентный режим для задач с кодом? Будут отправляться дополнительные запросы к выбранной модели и сохранённым моделям. Это может увеличить расход токенов и стоимость.')){this.checked=false;return}
+  S.cfg.multiAgent=this.checked;$('#cAgentCount').disabled=!this.checked;save();toast(this.checked?'Мультиагентная разработка включена':'Мультиагентная разработка отключена');
+});
+$('#cAgentCount').addEventListener('input',function(){
+  var value=Math.max(1,Math.min(20,Math.round(Number(this.value)||1)));
+  this.value=value;$('#agentCountValue').textContent=value;S.cfg.agentCount=value;save();
 });
 $('#cAuto').addEventListener('change',function(){S.cfg.auto=this.checked;save()});
 $('#kEye').onclick=function(){var k=$('#cKey');k.type=k.type==='password'?'text':'password';this.textContent=k.type==='password'?'Показать':'Скрыть'};
