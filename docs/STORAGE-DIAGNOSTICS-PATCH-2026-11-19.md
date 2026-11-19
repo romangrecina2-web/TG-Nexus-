@@ -22,7 +22,7 @@ It changes storage initialization and error reporting. It does not change the pr
 | --- | --- |
 | `DATABASE_URL_MISSING` | PostgreSQL connection string is not configured |
 | `DATABASE_URL_INVALID` | PostgreSQL connection string is present but malformed |
-| `DATA_ENCRYPTION_KEY_INVALID` | AES-256 key is missing or not 64 hex characters |
+| `DATA_ENCRYPTION_KEY_INVALID` | AES-256 key is missing or is not a valid 32-byte hex/base64 secret |
 | `POSTGRES_AUTH_FAILED` | PostgreSQL rejected the credentials |
 | `POSTGRES_DATABASE_MISSING` | Database named in the connection string was not found |
 | `POSTGRES_PERMISSION_DENIED` | Database user cannot create/update storage tables |
