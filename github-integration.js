@@ -250,7 +250,6 @@ async function installationToken(telegramId, installationId) {
   if (installation.permissions.contents !== 'read' || installation.permissions.metadata !== 'read') {
     throw new Error('В GitHub App нужны только Metadata: Read-only и Contents: Read-only.');
   }
-  const c = config();
   const jwt = appJwt();
   const data = await appApi('/app/installations/' + installation.id + '/access_tokens', jwt, 'POST', {
     permissions: { contents: 'read', metadata: 'read' }
