@@ -200,7 +200,7 @@ function syncBotSettings(clear){
   return task;
 }
 async function loadBotSettings(){
-  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\\/+$/,'');
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
   if(!TG||!TG.initData)return false;
   if(!apiBase){
     if(LEGACY_CREDENTIAL&&typeof LEGACY_CREDENTIAL.key==='string'&&LEGACY_CREDENTIAL.key){
@@ -238,6 +238,7 @@ async function loadBotSettings(){
     return true;
   }catch(error){
     if(LEGACY_CREDENTIAL&&typeof LEGACY_CREDENTIAL.key==='string'&&LEGACY_CREDENTIAL.key){
+      if(LEGACY_CREDENTIAL.url&&validApiBase(LEGACY_CREDENTIAL.url))S.cfg.url=LEGACY_CREDENTIAL.url;
       ACTIVE_KEY=LEGACY_CREDENTIAL.key;apiKeyStoredOnServer=false;
       toast('Серверное хранилище пока недоступно. Старый ключ временно загружен с этого устройства.');
       fillChatModel();render(true);
