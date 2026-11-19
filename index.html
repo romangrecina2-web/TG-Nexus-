@@ -72,7 +72,7 @@
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
       <div class="r2"><input id="cKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="kEye" type="button" style="display:none">Показать</button></div>
-      <small>Ключ сохраняется в localStorage этого браузера, поэтому остаётся после закрытия Mini App. Он также передаётся backend бота и хранится там в зашифрованном виде. Не используйте недоверенные расширения и общие устройства.</small>
+      <small>Ключ хранится только в памяти текущей вкладки и отправляется на указанный адрес API. Он не сохраняется в браузере или резервных копиях. После перезагрузки страницы или смены адреса API вставьте ключ заново.</small>
       <label for="cModel">Модель</label>
       <input id="cModel" list="mlist" autocomplete="off" autocapitalize="off" spellcheck="false">
       <datalist id="mlist"></datalist>
@@ -83,21 +83,6 @@
       <div class="r2"><input id="modelNew" placeholder="ID модели, например provider/model" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="modelAdd" type="button">Добавить</button></div>
       <div id="savedModels"></div>
       <small>Список общий для приложения. В верхней панели каждого чата выбирается своя модель; изменения в другом чате не затрагивают этот выбор.</small>
-
-      <h3>GitHub: анализ репозиториев</h3>
-      <small>Подключение через GitHub App с разрешениями только Metadata: Read-only и Contents: Read-only. Оболочка может просматривать репозитории и прикреплять выбранные файлы к запросу ИИ. Изменение файлов и push в GitHub здесь не включены.</small>
-      <div class="btns"><button class="sec" id="ghConnect" type="button">Подключить GitHub</button><button class="sec" id="ghRefresh" type="button">Обновить статус</button><button class="sec danger" id="ghDisconnect" type="button">Отключить GitHub</button></div>
-      <div class="note" id="ghStatus"></div>
-      <button class="sec" id="ghInstallApp" type="button" hidden>Установить GitHub App</button>
-      <label for="ghInstall">Установка GitHub App</label>
-      <select id="ghInstall"><option value="">Сначала подключите GitHub</option></select>
-      <label for="ghRepo">Репозиторий</label>
-      <select id="ghRepo"><option value="">Выберите установку</option></select>
-      <button class="sec" id="ghLoadFiles" type="button">Загрузить дерево файлов</button>
-      <label for="ghFiles">Файлы для анализа (можно выбрать несколько)</label>
-      <select id="ghFiles" multiple size="6"><option value="">Сначала загрузите дерево репозитория</option></select>
-      <button class="sec" id="ghAttachFiles" type="button">Добавить выбранные файлы в запрос</button>
-      <small>Лимит одного файла из GitHub — 512 КБ. Выберите до пяти текстовых файлов. Бинарные и слишком большие файлы не загружаются.</small>
 
       <h3>Ассистент</h3>
       <label for="cSys">Инструкция</label>
