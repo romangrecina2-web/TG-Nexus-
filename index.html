@@ -84,6 +84,15 @@
       <div id="savedModels"></div>
       <small>Список общий для приложения. В верхней панели каждого чата выбирается своя модель; изменения в другом чате не затрагивают этот выбор.</small>
 
+      <h3>GitHub</h3>
+      <div class="btns">
+        <button class="sec" id="githubConnect" type="button">Подключить GitHub</button>
+        <button class="sec" id="githubRefresh" type="button">Обновить репозитории</button>
+      </div>
+      <label for="githubRepo">Репозиторий для контекста ИИ</label>
+      <select id="githubRepo" aria-label="Репозиторий GitHub"><option value="">Сначала подключите GitHub</option></select>
+      <small id="githubStatus">GitHub пока не подключён. ИИ будет получать доступ только на чтение.</small>
+
       <h3>Ассистент</h3>
       <label for="cSys">Инструкция</label>
       <textarea id="cSys" rows="4"></textarea>
