@@ -177,20 +177,26 @@ function persistApiKey(){
     else localStorage.removeItem('tg_bot_api_credential');
   }catch(e){toast('Не удалось сохранить API-ключ в памяти браузера')}
 }
-async function syncBotSettings(clear){
+var botSettingsSyncQueue=Promise.resolve();
+function syncBotSettings(clear){
   var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
-  if(!TG||!TG.initData||!apiBase)return false;
-  if(!clear&&!ACTIVE_KEY)return false;
+  if(!TG||!TG.initData||!apiBase)return Promise.resolve(false);
+  if(!clear&&!ACTIVE_KEY)return Promise.resolve(false);
   var payload={initData:TG.initData,apiBase:S.cfg.url,apiKey:clear?'':ACTIVE_KEY,model:S.cfg.model,clear:!!clear};
-  try{
-    var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    var result=await response.json().catch(function(){return{}});
-    if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
-    return true;
-  }catch(error){
-    toast('Не удалось синхронизировать настройки бота: '+String(error.message||error).slice(0,180));
-    return false;
-  }
+  var execute=async function(){
+    try{
+      var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      var result=await response.json().catch(function(){return{}});
+      if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
+      return true;
+    }catch(error){
+      toast('Не удалось синхронизировать настройки бота: '+String(error.message||error).slice(0,180));
+      return false;
+    }
+  };
+  var task=botSettingsSyncQueue.then(execute,execute);
+  botSettingsSyncQueue=task.then(function(){return true},function(){return false});
+  return task;
 }
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
