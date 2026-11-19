@@ -26,6 +26,11 @@ function encryptionKey() {
   return Buffer.from(raw, 'hex');
 }
 
+function validateEncryptionKey() {
+  encryptionKey();
+  return true;
+}
+
 function encrypt(value) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
@@ -273,4 +278,4 @@ async function handleUpdate(update) {
   return true;
 }
 
-module.exports = { init, handleUpdate, saveSettings, clearSettings, encrypt, decrypt, pool };
+module.exports = { init, handleUpdate, saveSettings, clearSettings, encrypt, decrypt, validateEncryptionKey, pool };
