@@ -360,7 +360,7 @@ module.exports = {
 };
 
 async function init() {
-  requirePool();
+  if (!pool) return false;
   await pool.query(
     'CREATE TABLE IF NOT EXISTS github_oauth_states (' +
     'state_hash TEXT PRIMARY KEY, telegram_id BIGINT NOT NULL, code_verifier TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL);' +
