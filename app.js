@@ -170,6 +170,27 @@ function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
+function persistApiKey(){
+  try{
+    if(ACTIVE_KEY)localStorage.setItem('tg_bot_api_credential',JSON.stringify({url:S.cfg.url,key:ACTIVE_KEY}));
+    else localStorage.removeItem('tg_bot_api_credential');
+  }catch(e){toast('Не удалось сохранить API-ключ в памяти браузера')}
+}
+async function syncBotSettings(clear){
+  var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
+  if(!TG||!TG.initData||!apiBase)return false;
+  if(!clear&&!ACTIVE_KEY)return false;
+  var payload={initData:TG.initData,apiBase:S.cfg.url,apiKey:clear?'':ACTIVE_KEY,model:S.cfg.model,clear:!!clear};
+  try{
+    var response=await fetch(apiBase+'/api/bot-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    var result=await response.json().catch(function(){return{}});
+    if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));
+    return true;
+  }catch(error){
+    toast('Не удалось синхронизировать настройки бота: '+String(error.message||error).slice(0,180));
+    return false;
+  }
+}
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
 function memText(){return S.mem.length?'\n\nЧто ты знаешь о пользователе (учитывай это, но не пересказывай без нужды):\n- '+S.mem.join('\n- '):''}
@@ -848,7 +869,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';persistApiKey();$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -878,7 +899,7 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';persistApiKey();$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';persistApiKey();syncBotSettings(true);$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
 $('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim();persistApiKey()});
 $('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;persistApiKey();el.value='';el.placeholder='Ключ сохранён на этом устройстве';await $('#bTest').onclick();await syncBotSettings()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
