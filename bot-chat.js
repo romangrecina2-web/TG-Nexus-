@@ -73,7 +73,14 @@ function requirePool() {
 
 async function saveSettings(userId, apiBase, apiKey, model) {
   requirePool();
-  const u = new URL(apiBase);
+  let u;
+  try {
+    u = new URL(apiBase);
+  } catch {
+    const error = new Error('Некорректный API URL.');
+    error.code = 'INVALID_API_URL';
+    throw error;
+  }
   if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) {
     const error = new Error('API URL должен быть HTTPS без логина, пароля и параметров.');
     error.code = 'INVALID_API_URL';
