@@ -17,13 +17,27 @@ const pool = process.env.DATABASE_URL
   : null;
 
 function encryptionKey() {
-  const raw = process.env.DATA_ENCRYPTION_KEY || '';
-  if (!/^[a-f0-9]{64}$/i.test(raw)) {
-    const error = new Error('DATA_ENCRYPTION_KEY must be a 32-byte hexadecimal key.');
+  const raw = String(process.env.DATA_ENCRYPTION_KEY || '').trim();
+  let key = null;
+
+  if (/^[a-f0-9]{64}$/i.test(raw)) {
+    key = Buffer.from(raw, 'hex');
+  } else {
+    // Render generateValue creates a base64-encoded 256-bit secret.
+    const decoded = Buffer.from(raw, 'base64');
+    if (decoded.length === 32 && decoded.toString('base64') === raw) {
+      key = decoded;
+    }
+  }
+
+  if (!key || key.length !== 32) {
+    const error = new Error(
+      'DATA_ENCRYPTION_KEY must be a 32-byte key in 64-character hex or canonical base64 format.'
+    );
     error.code = 'DATA_ENCRYPTION_KEY_INVALID';
     throw error;
   }
-  return Buffer.from(raw, 'hex');
+  return key;
 }
 
 function validateEncryptionKey() {
