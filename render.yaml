@@ -14,3 +14,13 @@ services:
         value: https://romangrecina2-web.github.io/TG-test-/
       - key: ALLOWED_ORIGINS
         value: https://romangrecina2-web.github.io
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_ENCRYPTION_KEY
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      - key: GITHUB_PRIVATE_KEY
+        sync: false
