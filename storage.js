@@ -205,10 +205,11 @@ async function getOrCreateSession(userId) {
 
 async function touchSession(sessionId, userId) {
   const db = requirePool();
-  await db.query(
-    "UPDATE tg_chat_sessions SET status = 'active', last_activity = NOW(), updated_at = NOW() WHERE session_id = $1 AND user_id = $2",
+  const result = await db.query(
+    "UPDATE tg_chat_sessions SET status = 'active', last_activity = date_trunc('milliseconds', NOW()), updated_at = NOW() WHERE session_id = $1 AND user_id = $2 RETURNING last_activity",
     [sessionId, String(userId)]
   );
+  return result.rows[0] ? result.rows[0].last_activity : null;
 }
 
 async function sleepSession(sessionId, userId, expectedLastActivity) {
