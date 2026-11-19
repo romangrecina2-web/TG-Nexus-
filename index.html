@@ -107,6 +107,9 @@
           <small>Код запускается в отдельном изолированном iframe без доступа к файлам, localStorage, sessionStorage и API-ключу. Это не полноценный сервер и не Python-среда.</small>
           <label class="chk" for="cSandboxInternet"><input type="checkbox" id="cSandboxInternet"> Разрешить интернет в песочнице</label>
           <small>Только HTTPS через fetch к публичным доменам с поддержкой CORS. Cookies, localhost, IP-адреса, XMLHttpRequest и WebSocket заблокированы. До 10 запросов и 2 МБ данных на один запуск. CORS-ограничения сайтов всё равно действуют.</small>
+          <label for="cSandboxTimeout">Тайм-аут выполнения, секунд</label>
+          <input type="number" id="cSandboxTimeout" min="1" max="3600" step="1" value="60" inputmode="numeric">
+          <small>От 1 секунды до 3600 секунд (1 час). По умолчанию 60 секунд. По истечении времени выполнение принудительно останавливается.</small>
         </div>
       </details>
 
