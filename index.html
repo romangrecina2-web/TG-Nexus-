@@ -72,7 +72,7 @@
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
       <div class="r2"><input id="cKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="kEye" type="button" style="display:none">Показать</button></div>
-      <small>Ключ хранится только в памяти текущей вкладки и отправляется на указанный адрес API. Он не сохраняется в браузере или резервных копиях. После перезагрузки страницы или смены адреса API вставьте ключ заново.</small>
+      <small>Ключ сохраняется в localStorage этого браузера и остаётся доступен после перезапуска Mini App. В Telegram он также передаётся на backend и хранится там в зашифрованном виде для работы бота. В резервные копии чатов ключ не включается. Скрипт, получивший доступ к странице, потенциально может прочитать ключ из localStorage.</small>
       <label for="cModel">Модель</label>
       <input id="cModel" list="mlist" autocomplete="off" autocapitalize="off" spellcheck="false">
       <datalist id="mlist"></datalist>
