@@ -83,6 +83,13 @@ function describeStorageError(error) {
       message: 'Сервер не может шифровать API-ключи: DATA_ENCRYPTION_KEY отсутствует или имеет неверный формат. Требуется 64 шестнадцатеричных символа.'
     };
   }
+  if (code === 'ERR_INVALID_URL') {
+    return {
+      status: 503,
+      code: 'DATABASE_URL_INVALID',
+      message: 'Переменная DATABASE_URL задана, но содержит некорректный адрес подключения PostgreSQL. Проверьте формат строки подключения.'
+    };
+  }
   if (code === '28P01') {
     return {
       status: 503,
