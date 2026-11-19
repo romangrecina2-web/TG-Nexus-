@@ -44,9 +44,9 @@ async function init() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bot_users (
       telegram_id BIGINT PRIMARY KEY,
-      api_base TEXT NOT NULL,
-      api_key_enc TEXT NOT NULL,
-      active_model TEXT NOT NULL,
+      api_base TEXT,
+      api_key_enc TEXT,
+      active_model TEXT,
       models JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
@@ -58,6 +58,9 @@ async function init() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS bot_chats_user_updated ON bot_chats(telegram_id, updated_at DESC);
+    ALTER TABLE bot_users ALTER COLUMN api_base DROP NOT NULL;
+    ALTER TABLE bot_users ALTER COLUMN api_key_enc DROP NOT NULL;
+    ALTER TABLE bot_users ALTER COLUMN active_model DROP NOT NULL;
   `);
   return true;
 }
@@ -93,8 +96,16 @@ async function saveSettings(userId, apiBase, apiKey, model) {
 async function getUser(userId) {
   requirePool();
   const r = await pool.query('SELECT * FROM bot_users WHERE telegram_id=$1', [String(userId)]);
-  if (!r.rowCount) return null;
+  if (!r.rowCount || !r.rows[0].api_key_enc || !r.rows[0].api_base || !r.rows[0].active_model) return null;
   return { ...r.rows[0], api_key: decrypt(r.rows[0].api_key_enc) };
+}
+
+async function clearSettings(userId) {
+  requirePool();
+  await pool.query(
+    'UPDATE bot_users SET api_base=NULL, api_key_enc=NULL, active_model=NULL, updated_at=NOW() WHERE telegram_id=$1',
+    [String(userId)]
+  );
 }
 
 async function getActiveChat(userId) {
@@ -243,4 +254,4 @@ async function handleUpdate(update) {
   return true;
 }
 
-module.exports = { init, handleUpdate, saveSettings, pool };
+module.exports = { init, handleUpdate, saveSettings, clearSettings, encrypt, decrypt, pool };
