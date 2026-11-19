@@ -3,7 +3,7 @@
 Проект разделён на frontend и backend:
 
 - `index.html`, `styles.css`, `config.js`, `app.js` — интерфейс GitHub Pages.
-- `server.js` — backend Telegram-бота: команда `/start`, проверка подписи Telegram Mini App и отправка файлов с кодом в личный чат пользователя с ботом.
+- `server.js` — Telegram webhook, проверка подписи Mini App, API настроек и GitHub OAuth callback. `bot-chat.js` отвечает за PostgreSQL-диалоги и зашифрованные ключи; `github-integration.js` — GitHub App OAuth и read-only доступ к репозиториям.
 
 ## Как работает отправка кода
 
@@ -52,7 +52,7 @@ GitHub Pages продолжает публиковать сайт из ветк�
    });
    ```
 6. Сохраните и отправьте `config.js` в GitHub. Дождитесь обновления GitHub Pages.
-7. Откройте чат с ботом и отправьте `/start`. Backend автоматически установит webhook и бот ответит сообщением о разработке с кнопкой открытия мини-приложения.
+7. Откройте чат с ботом и отправьте `/start`. Backend установит webhook и покажет доступные команды с кнопкой открытия Mini App.
 
 Если у сервиса Render меняется публичный адрес, обновите `apiBaseUrl` в `config.js`.
 
