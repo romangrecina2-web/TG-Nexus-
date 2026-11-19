@@ -546,8 +546,14 @@ function createServer() {
       if (req.method === 'GET' && url.pathname === '/ready') {
         try {
           await ensureBotStorage();
+          botChat.validateEncryptionKey();
           await botChat.pool.query('SELECT 1');
-          return json(res, 200, { ok: true, ready: true, storage: 'postgresql' });
+          return json(res, 200, {
+            ok: true,
+            ready: true,
+            storage: 'postgresql',
+            encryption: 'aes-256-gcm'
+          });
         } catch (error) {
           logStorageError('readiness', error);
           const diagnostic = describeStorageError(error);
