@@ -197,6 +197,36 @@ function apiContent(m){
   return imgs.length?[{type:'text',text:txt}].concat(imgs):txt;
 }
 function fmtN(n){return n>=1000?(n/1000).toFixed(n>=10000?0:1).replace('.0','')+'k':String(n)}
+var visionCatalogCache=null,visionCatalogBase='',visionCatalogAt=0;
+function isOpenRouterEndpoint(){return host(S.cfg.url).indexOf('openrouter.ai')>=0}
+function messagesHaveImages(messages){
+  return (messages||[]).some(function(m){
+    return Array.isArray(m&&m.content)&&m.content.some(function(part){return part&&part.type==='image_url'});
+  });
+}
+async function openRouterVisionModels(){
+  var apiBase=base();
+  if(visionCatalogCache&&visionCatalogBase===apiBase&&Date.now()-visionCatalogAt<300000)return visionCatalogCache;
+  var r=await fetch(apiBase+'/models?input_modalities=image',{headers:hdrs()});
+  if(!r.ok)throw await httpErr(r);
+  var j=await r.json();
+  visionCatalogCache=Array.isArray(j.data)?j.data:[];
+  visionCatalogBase=apiBase;
+  visionCatalogAt=Date.now();
+  if(!visionCatalogCache.length)throw new Error('OpenRouter не вернул список моделей с поддержкой изображений');
+  return visionCatalogCache;
+}
+async function resolveOpenRouterVisionModel(model){
+  if(model==='openrouter/free')return {model:model,notice:''};
+  try{
+    var models=await openRouterVisionModels();
+    if(models.some(function(item){return item&&item.id===model}))return {model:model,notice:''};
+  }catch(e){}
+  return {
+    model:'openrouter/free',
+    notice:'Модель «'+model+'» не принимает изображения. Для этого запроса используется бесплатный роутер OpenRouter (openrouter/free), который подбирает модель с поддержкой фото. Выбор модели чата не изменён.'
+  };
+}
 
 /* ---------- интерфейс ---------- */
 var msgsEl=$('#msgs'),wrap=$('#wrap'),inp=$('#inp'),toastT=null;
@@ -250,6 +280,7 @@ function bubbleHTML(m,live,open){
   }
   var p=parts(m),h='',files=[];
   if(p.think)h+='<details class="th"'+(open?' open':'')+'><summary>'+(live&&!p.text?'Думает…':'Рассуждения')+'</summary><div>'+esc(p.think)+'</div></details>';
+  if(m.modelNotice)h+='<div class="model-note">'+esc(m.modelNotice)+'</div>';
   if(m.execLog&&m.execLog.length){var logText=m.execLog.map(function(x,i){return 'Запуск '+(i+1)+': '+x.status+'\n'+x.output}).join('\n\n');h+='<details class="th"><summary>Песочница · '+m.execLog.length+' запуск(ов)</summary><div>'+esc(logText)+'</div></details>'}
   if(p.text){h+=md(p.text,files);if(files.length)h+='<div class="fileoutputs">'+fileCards(files)+'</div>';}else if(live&&!p.think&&!m.execLog)h+='<span class="dots">…</span>';
   if(m.err)h+='<div class="err">'+esc(m.err)+'</div>';
@@ -265,8 +296,8 @@ function versionBarHTML(m){
   var label=idx===0?'Исходный ответ':('Повтор '+idx);
   return '<div class="versionbar"><button type="button" data-v="prev" '+(idx===0?'disabled':'')+' aria-label="Предыдущий вариант">‹</button><span class="vlabel">'+label+' · '+(idx+1)+' из '+total+'</span><button type="button" data-v="next" '+(idx===total-1?'disabled':'')+' aria-label="Следующий вариант">›</button></div>';
 }
-function responseSnapshot(m){return{content:m.content||'',reasoning:m.reasoning||'',execLog:(m.execLog||[]).map(function(x){return Object.assign({},x)}),apiTrail:(m.apiTrail||[]).map(function(x){return JSON.parse(JSON.stringify(x))}),apiFinalContent:m.apiFinalContent===undefined?undefined:m.apiFinalContent,err:m.err||''}}
-function applyResponseSnapshot(m,v){m.content=v.content||'';m.reasoning=v.reasoning||'';m.execLog=(v.execLog||[]).map(function(x){return Object.assign({},x)});m.apiTrail=(v.apiTrail||[]).map(function(x){return JSON.parse(JSON.stringify(x))});m.apiFinalContent=v.apiFinalContent;m.err=v.err||''}
+function responseSnapshot(m){return{content:m.content||'',reasoning:m.reasoning||'',execLog:(m.execLog||[]).map(function(x){return Object.assign({},x)}),apiTrail:(m.apiTrail||[]).map(function(x){return JSON.parse(JSON.stringify(x))}),apiFinalContent:m.apiFinalContent===undefined?undefined:m.apiFinalContent,modelNotice:m.modelNotice||'',err:m.err||''}}
+function applyResponseSnapshot(m,v){m.content=v.content||'';m.reasoning=v.reasoning||'';m.execLog=(v.execLog||[]).map(function(x){return Object.assign({},x)});m.apiTrail=(v.apiTrail||[]).map(function(x){return JSON.parse(JSON.stringify(x))});m.apiFinalContent=v.apiFinalContent;m.modelNotice=v.modelNotice||'';m.err=v.err||''}
 function syncCurrentVersion(m){
   if(!m||!m.originalVersion)return;
   var v=responseSnapshot(m),idx=Math.max(0,+m.activeVersion||0);
@@ -413,6 +444,7 @@ function niceErr(e){
     return 'OpenRouter отклонил запрос (402). Источник ограничения: '+src+'. Ответ сервера: '+m+(hint?' Подсказка: '+hint:'')+'. Это само по себе НЕ доказывает, что баланс аккаунта равен нулю.';
   }
   if(s===404){
+    if(/no endpoints found that support (?:base64 )?image input/i.test(m))return 'Выбранная модель не поддерживает входные изображения. Для фото нужна vision-модель, у которой входные модальности включают image. В OpenRouter можно использовать бесплатный роутер openrouter/free. Ответ: '+m;
     if(/data policy|guardrail/i.test(m))return 'OpenRouter не нашёл доступный бесплатный сервер из-за настроек приватности. Проверьте настройки бесплатных моделей. Ответ: '+m;
     return 'Не найдено (404). Проверьте endpoint и ID модели. Ответ: '+m;
   }
@@ -545,6 +577,7 @@ function regen(){
 async function run(c,skipTags,runMax,target){
   var regenBackup=target?responseSnapshot(target):null;
   var a=target||{id:makeId(),role:'assistant',content:'',reasoning:'',execLog:[],apiTrail:[],apiFinalContent:''},errText='',askSum=false,before=0,K=4,up=0;
+  a.modelNotice='';
   if(target){a.content='';a.reasoning='';a.execLog=[];a.apiTrail=[];a.apiFinalContent='';delete a.err;}
   else c.msgs.push(a);
   errBox='';busy=true;ctrl=new AbortController();setBusy();render(true);saveNow();bump();
@@ -568,7 +601,17 @@ async function run(c,skipTags,runMax,target){
         hist.push({role:'assistant',content:m.apiFinalContent!==undefined?m.apiFinalContent:parts(m).text});
       }
     });
-    var gm=await balanceGuard(Math.round(estTokens(c)*1.32)+300,runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0));
+    var requestModel=activeModel(c),requestModelNotice='';
+    var currentUserMsg=c.msgs[c.msgs.length-1];
+    var hasImages=messagesHaveImages(hist)||!!(currentUserMsg&&(currentUserMsg.attachments||[]).some(function(f){return !!f.dataUrl}));
+    if(hasImages&&isOpenRouterEndpoint()){
+      var visionChoice=await resolveOpenRouterVisionModel(requestModel);
+      requestModel=visionChoice.model;
+      requestModelNotice=visionChoice.notice;
+      a.modelNotice=requestModelNotice;
+      if(requestModelNotice)toast(requestModelNotice);
+    }
+    var gm=requestModel==='openrouter/free'?null:await balanceGuard(Math.round(estTokens(c)*1.32)+300,runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0));
     if(gm){errText=gm;throw new Error('__guard')}
     var rounds=0,finished=false,sandboxCalls=0;
     while(!finished&&rounds<4){
@@ -576,7 +619,7 @@ async function run(c,skipTags,runMax,target){
       var tools=[];
       if(S.cfg.internet&&host(S.cfg.url).indexOf('openrouter.ai')>=0)tools.push({type:'openrouter:web_search'});
       if(S.cfg.sandbox)tools.push({type:'function',function:{name:'sandbox_run_javascript',description:'Execute a small JavaScript snippet in an isolated browser iframe. No network, file access, localStorage, or API-key access. Use only for JavaScript calculations or testing; return console output and the final value.',parameters:{type:'object',properties:{code:{type:'string',description:'JavaScript code to execute. May use console.log and top-level await.'}},required:['code']}}});
-      var body={model:activeModel(c),stream:true,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail)};
+      var body={model:requestModel,stream:true,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail)};
       if(S.cfg.temp!==''&&!isNaN(+S.cfg.temp))body.temperature=+S.cfg.temp;
       var mo=runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0);if(mo)body.max_tokens=mo;
       if(S.cfg.reasoning&&S.cfg.reasoning!=='auto')body.reasoning_effort=S.cfg.reasoning;
