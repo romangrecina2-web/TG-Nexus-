@@ -81,23 +81,69 @@ GitHub Pages продолжает публиковать сайт из ветк�
 Подробности, ограничения и рекомендации по настройке GitHub/Render см. в [SECURITY.md](./SECURITY.md) и [отчёте обновления](./docs/SECURITY-UPDATE-2026-11-19.md). Перед публикацией запускайте npm test.
 
 
-## Telegram AI chat (feature branch)
+## Telegram AI chat и GitHub-интеграция
 
-The Telegram chat backend uses PostgreSQL for durable user settings and conversation history.
+### Telegram AI chat
 
-Required Render environment variables for this feature:
-- `DATABASE_URL`: connection string for a persistent PostgreSQL database.
-- `DATA_ENCRYPTION_KEY`: exactly 64 hexadecimal characters (32 random bytes), used for AES-256-GCM encryption of provider API keys at rest. Generate with `openssl rand -hex 32`.
-- Existing `BOT_TOKEN`, `WEB_APP_URL`, `ALLOWED_ORIGINS` remain required as applicable.
+Backend использует PostgreSQL для настроек пользователей и долговременной истории Telegram-диалогов.
 
-The Mini App stores the active provider key in that browser's `localStorage` for convenience and syncs it to the backend using verified Telegram Mini App initData. The backend stores only an encrypted copy. A different API URL clears the locally saved key. This increases convenience but means browser scripts/extensions with access to the page may be able to read the key; protect the account and avoid untrusted browser extensions.
+Обязательные переменные Render:
+- `DATABASE_URL` — строка подключения к постоянной PostgreSQL-базе.
+- `DATA_ENCRYPTION_KEY` — 64 шестнадцатеричных символа (32 случайных байта), ключ AES-256-GCM для шифрования API-ключей провайдеров и GitHub OAuth-токенов. Создайте командой `openssl rand -hex 32`. Сохраните отдельно: потеря этого ключа сделает ранее сохранённые зашифрованные токены нечитаемыми.
+- `BOT_TOKEN`, `WEB_APP_URL`, `ALLOWED_ORIGINS` — базовые параметры Telegram backend.
 
-Telegram commands implemented in this branch:
-- `/chat` and `/new`: create a conversation.
-- `/stop`: stop the active conversation while retaining its transcript.
-- `/model_info`: list saved model IDs and the active model.
-- `/model <provider/model>` or `/model-<provider/model>`: select and save a model ID.
+Mini App хранит один текущий API-ключ провайдера в `localStorage` текущего браузера и синхронизирует его с backend по проверенному Telegram `initData`. Backend сохраняет зашифрованную копию. При смене адреса API предыдущие credentials удаляются на сервере, новый ключ нужно вставить заново. Удобство имеет цену: скрипты same-origin и расширения браузера с доступом к странице могут прочитать localStorage.
 
-The active conversation is marked sleeping after 60 seconds without a new message; its transcript remains in PostgreSQL. Render's own free-service sleep behavior remains separate and is controlled by Render (typically 15 minutes without inbound traffic).
+Команды Telegram:
+- `/chat` и `/new` — создать новый диалог.
+- `/stop` — остановить активный диалог, сохранив историю.
+- `/model_info` — показать сохранённые ID моделей.
+- `/model <provider/model>` или `/model-<provider/model>` — выбрать модель из сохранённого списка.
 
-This branch does not yet include GitHub OAuth/repository permissions or GitHub-backed code analysis. Those require a GitHub OAuth App (client ID/secret and callback URL) or GitHub App credentials, plus a separate permission and repository-selection flow. Do not paste GitHub credentials into chat or commit them to the repository.
+После 60 секунд бездействия диалог получает состояние `sleeping`, но история остаётся в PostgreSQL. Сон бесплатного Render-сервиса отдельный и регулируется самим Render.
+
+### GitHub App: подключение и анализ кода
+
+Интеграция использует **GitHub App**, а не классическое OAuth App: так можно выдать точные read-only права. Реализован доступ к списку установок, репозиториев, дереву файлов и содержимому выбранных текстовых файлов. Пользователь выбирает до пяти файлов размером до 512 КБ каждый, затем они добавляются во вложения текущего запроса ИИ.
+
+**Возможности этой версии:**
+- OAuth-привязка GitHub-пользователя к Telegram ID через одноразовый state и PKCE.
+- Зашифрованное хранение access/refresh token в PostgreSQL через `DATA_ENCRYPTION_KEY`.
+- Обновление истекающего user access token, если GitHub выдал refresh token.
+- Выбор установки GitHub App и репозиториев, к которым эта установка получила доступ.
+- Чтение дерева default branch и содержимого выбранных файлов.
+- Сервер выдаёт installation token только с `Contents: read` и `Metadata: read`.
+
+**Запись в репозитории не реализована.** Нет операций создания/изменения файлов, коммитов, push, PR или запуска Actions. Любые будущие write-действия должны иметь отдельное подтверждение пользователя. Устанавливайте App только на необходимые репозитории.
+
+#### Настройка GitHub App
+
+1. В GitHub Developer settings создайте **GitHub App**.
+2. Включите user authorization (OAuth) и задайте callback URL: `https://<render-service>.onrender.com/github/callback`. Этот адрес должен точно совпадать с `GITHUB_CALLBACK_URL` в Render.
+3. В Repository permissions задайте только `Contents: Read-only` и `Metadata: Read-only`. Не запрашивайте Contents write.
+4. Сохраните App ID, Client ID, Client Secret, App slug и сгенерируйте private key.
+5. В Render добавьте переменные:
+   - `GITHUB_APP_ID` — App ID, не Client ID.
+   - `GITHUB_CLIENT_ID` — Client ID.
+   - `GITHUB_CLIENT_SECRET` — Client Secret.
+   - `GITHUB_APP_PRIVATE_KEY` — полный PEM private key; в Render можно вставить PEM как многострочное значение. Если платформа требует одну строку, замените переводы строк на буквальные `\\n`.
+   - `GITHUB_APP_SLUG` — slug приложения из его URL.
+   - `GITHUB_CALLBACK_URL` — точный HTTPS callback выше.
+6. После deploy откройте Mini App → Настройки → «Подключить GitHub», завершите авторизацию и нажмите «Установить GitHub App». При установке выберите только нужный аккаунт и нужные репозитории.
+7. Нажмите «Обновить статус», выберите установку и репозиторий, загрузите дерево файлов, отметьте нужные файлы и добавьте их в запрос.
+
+OAuth state хранится в PostgreSQL в виде SHA-256-хеша, привязан к Telegram ID, действует 10 минут и удаляется при использовании. Backend никогда не принимает Telegram ID напрямую от браузера без проверки подписи `initData`.
+
+#### Лимиты чтения
+
+- В интерфейсе отображаются максимум первые 500 файлов дерева за один запрос.
+- Один файл — максимум 512 КБ.
+- В один запрос можно добавить до пяти файлов.
+- Binary-файлы отклоняются, если в декодированном содержимом найден NUL; выбирайте исходники и текстовые конфиги.
+- Интеграция читает default branch. Для анализа другой ветки отдельный выбор ref пока не выведен в интерфейс.
+
+### Проверки и статус
+
+В этой ветке выполнена проверка синтаксиса JavaScript для `server.js`, `bot-chat.js`, `github-integration.js` и `app.js`. Это не заменяет установку зависимостей, `npm test`, проверку PostgreSQL, реальную OAuth-авторизацию и проверку GitHub App на тестовом репозитории. До прохождения этих проверок PR остаётся Draft и изменения не считаются развёрнутыми.
+
+Не публикуйте токены или private key в GitHub, Issue, Pull Request, чатах или клиентском коде. Секреты вводятся только в настройки Render.
