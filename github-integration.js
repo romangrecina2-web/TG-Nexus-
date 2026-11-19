@@ -355,6 +355,7 @@ module.exports = {
   readFile: readFile,
   disconnect: disconnect,
   config: config,
+  validateRepo: validateRepo,
   MAX_FILE_BYTES: MAX_FILE_BYTES
 };
 
