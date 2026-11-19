@@ -107,6 +107,9 @@ test('PostgreSQL errors are translated into actionable but safe diagnostics', ()
 
 test('invalid provider settings are client errors, not storage failures', () => {
   assert.equal(describeStorageError({ code: 'INVALID_API_KEY' }).status, 400);
-  assert.equal(describeStorageError({ code: 'INVALID_API_MODEL' }).status, 503);
+  assert.equal(describeStorageError({ code: 'INVALID_API_URL' }).status, 400);
   assert.equal(describeStorageError({ code: 'INVALID_MODEL' }).status, 400);
+  const unknown = describeStorageError({ code: 'XX999' });
+  assert.equal(unknown.status, 503);
+  assert.match(unknown.message, /XX999/);
 });
