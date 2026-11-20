@@ -435,11 +435,12 @@ async function handleSync(req, res, bot = botChat) {
       activeChatId: state.activeChatId
     };
     bot.applySyncState(auth.id, allowed);
+    const afterApply = bot.getSyncState(auth.id);
 
     if (state.clearApiKey === true) {
       bot.clearApiKey(auth.id);
     } else if (typeof state.apiKey === 'string' && state.apiKey.trim() &&
-               state.apiKey !== before.apiKey) {
+               state.apiKey !== afterApply.apiKey) {
       const providerBase = typeof state.apiBaseUrl === 'string' ? state.apiBaseUrl : before.apiBaseUrl;
       const saved = await bot.setApiKey(auth.id, state.apiKey, providerBase);
       if (!saved) return json(res, 400, { ok: false, error: 'API-ключ не прошёл проверку провайдера.' });
