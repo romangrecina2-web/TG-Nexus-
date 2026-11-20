@@ -195,6 +195,10 @@ function syncSettingsPayload(){
     systemPrompt:String(S.cfg.sys||'').slice(0,20000),
     temperature:S.cfg.temp===''?null:Math.max(0,Math.min(2,Number(S.cfg.temp)||0)),
     maxTokens:S.cfg.max===''?1200:Math.max(1,Math.min(32000,Math.round(Number(S.cfg.max)||1200))),
+    reasoning:String(S.cfg.reasoning||'auto'),
+    balBase:S.cfg.balBase===''?null:Number(S.cfg.balBase),
+    balUsage:Math.max(0,Number(S.cfg.balUsage)||0),
+    minBal:Math.max(0,Math.min(10000,Number(S.cfg.minBal)||0)),
     internetSearch:!!S.cfg.internet,
     sandbox:!!S.cfg.sandbox,
     sandboxInternet:!!S.cfg.sandboxInternet,
@@ -285,6 +289,10 @@ async function applyRemoteSyncState(state){
     else if(Number.isFinite(Number(settings.temperature)))S.cfg.temp=String(settings.temperature);
   }
   if(Object.prototype.hasOwnProperty.call(settings,'maxTokens')&&Number.isFinite(Number(settings.maxTokens)))S.cfg.max=String(settings.maxTokens);
+  if(typeof settings.reasoning==='string'&&['auto','minimal','low','medium','high','xhigh'].includes(settings.reasoning))S.cfg.reasoning=settings.reasoning;
+  if(Object.prototype.hasOwnProperty.call(settings,'balBase'))S.cfg.balBase=settings.balBase===null?'':String(settings.balBase);
+  if(Number.isFinite(Number(settings.balUsage)))S.cfg.balUsage=Math.max(0,Number(settings.balUsage));
+  if(Number.isFinite(Number(settings.minBal)))S.cfg.minBal=Math.max(0,Math.min(10000,Number(settings.minBal)));
   if(typeof settings.internetSearch==='boolean')S.cfg.internet=settings.internetSearch;
   if(typeof settings.sandbox==='boolean')S.cfg.sandbox=settings.sandbox;
   if(typeof settings.sandboxInternet==='boolean')S.cfg.sandboxInternet=settings.sandboxInternet;
