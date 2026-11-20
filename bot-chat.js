@@ -13,6 +13,8 @@ const MAX_MESSAGE_LENGTH = 50_000;
 const TELEGRAM_CHUNK_LENGTH = 3_900;
 
 const BOT_COMMANDS = [
+  { command: 'start', description: 'Открыть мини-приложение' },
+  { command: 'help', description: 'Краткая справка' },
   { command: 'chat', description: 'Показать список чатов' },
   { command: 'add_chat', description: 'Создать чат: /add_chat [название]' },
   { command: 'chat_equip', description: 'Выбрать чат: /chat_equip [название]' },

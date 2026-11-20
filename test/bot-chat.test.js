@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
+  BOT_COMMANDS,
   createBotChat,
   createEncryptedStore,
   normalizeApiBase,
@@ -178,4 +179,11 @@ test('long Telegram responses are split below the message-size limit', () => {
   const emojiChunks = splitTelegramText('😀'.repeat(4_500));
   assert.ok(emojiChunks.every((chunk) => chunk.length <= 3_900));
   assert.equal(emojiChunks.join(''), '😀'.repeat(4_500));
+});
+
+
+test('registered Telegram command names are lowercase and retain /start and /help', () => {
+  assert.ok(BOT_COMMANDS.some((item) => item.command === 'start'));
+  assert.ok(BOT_COMMANDS.some((item) => item.command === 'help'));
+  assert.ok(BOT_COMMANDS.every((item) => item.command === item.command.toLowerCase()));
 });
