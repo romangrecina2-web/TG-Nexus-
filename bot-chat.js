@@ -751,7 +751,8 @@ function createBotChat(options = {}) {
       await handleUserMessage(message, user, text);
       return true;
     } catch {
-      try { await sendText(chatId, 'Не удалось выполнить команду. Повторите попытку позже.'); } catch {}
+      // Let Telegram delivery errors propagate so the webhook can request a retry.
+      await sendText(chatId, 'Не удалось выполнить команду. Повторите попытку позже.');
       return true;
     }
   }
@@ -764,7 +765,8 @@ function createBotChat(options = {}) {
     try {
       return await processMessage(message, parsed, text);
     } catch {
-      try { await sendText(message.chat.id, 'Не удалось обработать сообщение. Повторите попытку позже.'); } catch {}
+      // Do not acknowledge an update if even the fallback reply cannot be delivered.
+      await sendText(message.chat.id, 'Не удалось обработать сообщение. Повторите попытку позже.');
       return true;
     }
   }

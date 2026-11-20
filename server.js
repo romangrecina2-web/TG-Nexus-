@@ -23,6 +23,20 @@ const MAX_JSON_BYTES = MAX_TELEGRAM_FILE_BYTES + 2 * 1024 * 1024;
 const MAX_INIT_DATA_BYTES = 16 * 1024;
 const MAX_INIT_DATA_AGE_SECONDS = 60 * 60;
 
+const webhookDiagnostics = {
+  configured: false,
+  pendingUpdates: null,
+  lastTelegramErrorAt: null,
+  updatesReceived: 0,
+  updatesProcessed: 0,
+  processingFailures: 0,
+  rejectedRequests: 0,
+  lastReceivedAt: null,
+  lastProcessedAt: null,
+  lastFailureAt: null,
+  lastFailureCode: null
+};
+
 const webAppUrl = new URL(WEB_APP_URL);
 if (webAppUrl.protocol !== 'https:') {
   throw new Error('WEB_APP_URL must use HTTPS.');
@@ -245,6 +259,12 @@ function safeEqualText(left, right) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function isRetryableWebhookError(error) {
+  const code = Number(error && error.telegramErrorCode);
+  if (!Number.isInteger(code) || code <= 0) return true;
+  return code === 429 || code >= 500;
+}
+
 async function telegramApi(method, payload) {
   const response = await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/' + method, {
     method: 'POST',
@@ -254,7 +274,9 @@ async function telegramApi(method, payload) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) {
-    throw new Error(result.description || ('Telegram API error: HTTP ' + response.status));
+    const error = new Error(result.description || ('Telegram API error: HTTP ' + response.status));
+    error.telegramErrorCode = Number(result.error_code) || response.status;
+    throw error;
   }
   return result.result;
 }
@@ -309,8 +331,14 @@ async function handleStart(message) {
   });
 }
 
-async function handleWebhook(req, res) {
-  if (!safeEqualText(req.headers['x-telegram-bot-api-secret-token'], WEBHOOK_SECRET)) {
+async function handleWebhook(req, res, dependencies = {}) {
+  const webhookSecret = dependencies.webhookSecret || WEBHOOK_SECRET;
+  const sendTelegram = dependencies.telegramApi || telegramApi;
+  const startHandler = dependencies.handleStart || handleStart;
+  const textBot = dependencies.botChat || botChat;
+
+  if (!safeEqualText(req.headers['x-telegram-bot-api-secret-token'], webhookSecret)) {
+    webhookDiagnostics.rejectedRequests += 1;
     return json(res, 403, { ok: false });
   }
 
@@ -325,29 +353,42 @@ async function handleWebhook(req, res) {
     return json(res, error.status || 400, { ok: false });
   }
 
+  webhookDiagnostics.updatesReceived += 1;
+  webhookDiagnostics.lastReceivedAt = new Date().toISOString();
+
   try {
     const message = update && update.message;
     const text = message && typeof message.text === 'string' ? message.text.trim() : '';
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-      await handleStart(message);
+      await startHandler(message);
     } else if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
                message.chat && message.chat.type === 'private') {
-      await telegramApi('sendMessage', {
+      await sendTelegram('sendMessage', {
         chat_id: message.chat.id,
         text: 'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.'
       });
+    } else {
+      await textBot.handleMessage(message);
     }
-    else {
-      await botChat.handleMessage(message);
-    }
+
+    webhookDiagnostics.updatesProcessed += 1;
+    webhookDiagnostics.lastProcessedAt = new Date().toISOString();
+    return json(res, 200, { ok: true });
   } catch (error) {
-    // Do not log request bodies, Telegram initData, or user file contents.
-    console.error('Webhook processing failed.');
+    // Never log message text, chat/user IDs, API keys, webhook secrets, or request bodies.
+    const telegramErrorCode = Number(error && error.telegramErrorCode) || null;
+    webhookDiagnostics.processingFailures += 1;
+    webhookDiagnostics.lastFailureAt = new Date().toISOString();
+    webhookDiagnostics.lastFailureCode = telegramErrorCode;
+    const updateId = update && Number.isSafeInteger(update.update_id) ? update.update_id : null;
+    const errorName = error && typeof error.name === 'string' ? error.name : 'Error';
+    console.error('Webhook processing failed.', { updateId, errorName, telegramErrorCode });
+
+    // Telegram retries 5xx responses. Do not endlessly retry permanent 4xx delivery errors.
+    const retryable = isRetryableWebhookError(error);
+    return json(res, retryable ? 500 : 200, { ok: false, retryable });
   }
-
-  return json(res, 200, { ok: true });
 }
-
 async function handleSendCode(req, res) {
   if (!BOT_TOKEN) return json(res, 503, { ok: false, error: 'На сервере не настроен BOT_TOKEN.' });
 
@@ -402,6 +443,7 @@ async function handleSendCode(req, res) {
 async function configureWebhook() {
   const baseUrl = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
   if (!BOT_TOKEN || !baseUrl) {
+    webhookDiagnostics.configured = false;
     console.log('Webhook not configured: BOT_TOKEN or public service URL is missing.');
     return;
   }
@@ -425,18 +467,43 @@ async function configureWebhook() {
       secret_token: WEBHOOK_SECRET,
       allowed_updates: ['message']
     });
+    webhookDiagnostics.configured = true;
+
+    try {
+      const info = await telegramApi('getWebhookInfo', {});
+      webhookDiagnostics.configured = info.url === webhookUrl;
+      webhookDiagnostics.pendingUpdates = Number.isSafeInteger(info.pending_update_count)
+        ? info.pending_update_count
+        : null;
+      webhookDiagnostics.lastTelegramErrorAt = Number.isSafeInteger(info.last_error_date)
+        ? new Date(info.last_error_date * 1000).toISOString()
+        : null;
+      if (info.last_error_date) {
+        console.warn('Telegram reports a previous webhook delivery error.', {
+          lastTelegramErrorAt: webhookDiagnostics.lastTelegramErrorAt
+        });
+      }
+    } catch {
+      // setWebhook succeeded; diagnostics must not turn a successful setup into a false failure.
+    }
+
     try {
       await telegramApi('setMyCommands', { commands: BOT_COMMANDS });
     } catch {
       console.error('Could not register Telegram bot commands.');
     }
     console.log('Telegram webhook configured.');
-  } catch {
-    console.error('Could not configure Telegram webhook.');
+  } catch (error) {
+    webhookDiagnostics.configured = false;
+    console.error('Could not configure Telegram webhook.', {
+      errorName: error && error.name ? error.name : 'Error',
+      telegramErrorCode: Number(error && error.telegramErrorCode) || null
+    });
   }
 }
 
-function createServer() {
+function createServer(options = {}) {
+  const webhookDependencies = options.webhookDependencies || {};
   const server = http.createServer((req, res) => {
     Promise.resolve().then(async () => {
       const url = new URL(req.url, 'http://localhost');
@@ -452,10 +519,19 @@ function createServer() {
       }
 
       if (req.method === 'GET' && url.pathname === '/health') {
-        return json(res, 200, { ok: true, service: 'telegram-bot-api' });
+        return json(res, 200, {
+          ok: true,
+          service: 'telegram-bot-api',
+          configuration: {
+            botTokenConfigured: Boolean(BOT_TOKEN),
+            encryptedStorageConfigured: Boolean(botChat.store && botChat.store.enabled),
+            providerEndpointConfigured: Boolean(botChat.apiBaseUrl)
+          },
+          telegramWebhook: { ...webhookDiagnostics }
+        });
       }
       if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
-        return handleWebhook(req, res);
+        return handleWebhook(req, res, webhookDependencies);
       }
       if (req.method === 'POST' && url.pathname === '/api/send-code') {
         return handleSendCode(req, res);
@@ -486,6 +562,7 @@ module.exports = {
   MAX_INIT_DATA_AGE_SECONDS,
   createRateLimiter,
   createServer,
+  isRetryableWebhookError,
   safeFileName,
   validateTelegramInitData
 };
