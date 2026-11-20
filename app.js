@@ -216,7 +216,7 @@ function makeRemoteSyncState(includeApiKey,clearApiKey){
         if(!m.id)m.id=makeId();
         var content=String(m.content||'');
         if(m.role==='user'&&Array.isArray(m.attachments)){
-          m.attachments.forEach(function(file){if(file&&typeof file.text==='string'&&file.text)content+='\\n\\n[Файл '+String(file.name||'attachment').slice(0,100)+']\\n'+file.text.slice(0,2500)});
+          m.attachments.forEach(function(file){if(file&&typeof file.text==='string'&&file.text)content+='\n\n[Файл '+String(file.name||'attachment').slice(0,100)+']\n'+file.text.slice(0,2500)});
         }
         return {id:String(m.id).slice(0,160),role:m.role,content:content.slice(0,2500),createdAt:Number(m.ts)||Number(chat.ts)||Date.now()};
       });
@@ -1037,6 +1037,7 @@ async function run(c,skipTags,runMax,target){
   }catch(e){
     if(e.message==='__guard'){}else if(e.name!=='AbortError')errText=niceErr(e);
   }
+  a.ts=Date.now();c.ts=Math.max(Number(c.ts)||0,a.ts);
   a.agentStatus='';busy=false;ctrl=null;setBusy();
   if(a.content&&a.content.indexOf('<summary>')>=0){if(takeSummary(c,a,askSum,before,K,up))toast('Чат сжат: пересказ обновлён')}
   if(!a.content&&!a.execLog.length){
