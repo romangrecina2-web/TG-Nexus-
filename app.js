@@ -404,7 +404,8 @@ async function restoreSavedApiKey(){
 }
 async function removeSavedApiKey(){
   if(!secureKeyStorage||!secureKeyStorage.isAvailable()){
-    toast('Защищённое хранилище Telegram недоступно в этом клиенте');return;
+    ACTIVE_KEY='';keyInputTouched=true;keyStorageStatus='unsupported';$('#cKey').value='';
+    queueRemoteSync(false,true);updateKeyStorageUi();render();toast('API-ключ удалён с сервера; локальное хранилище Telegram недоступно');return;
   }
   try{
     await secureKeyStorage.remove();
@@ -1123,6 +1124,15 @@ function memList(){
 }
 function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='note';$('#sheet').className='on'}
 $('#bSet').onclick=openSet;
+$('#syncNow').onclick=async function(){
+  if(!TG){toast('Откройте Mini App из Telegram');return}
+  syncStatus('обновляю данные…');
+  try{
+    await pullRemoteSync();
+    syncReady=true;
+    await flushRemoteSync();
+  }catch(error){syncStatus('не удалось обновить: '+String(error&&error.message||error).slice(0,100),'bad')}
+};
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
 $('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';keyInputTouched=false;keyStorageStatus='loading';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet();keyRestorePromise=restoreSavedApiKey()});
