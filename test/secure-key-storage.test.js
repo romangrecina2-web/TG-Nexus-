@@ -36,7 +36,9 @@ test('SecureStorage adapter stores and restores a key for the matching API endpo
   assert.equal(storage.isAvailable(), true);
 
   await storage.save('https://api.example/v1/', 'provider-secret');
-  const result = await storage.load('https://api.example/v1');
+  // A fresh adapter represents a Mini App page reload on the same Telegram device.
+  const afterReload = create(webApp);
+  const result = await afterReload.load('https://api.example/v1');
 
   assert.deepEqual(
     { supported: result.supported, found: result.found, matches: result.matches, key: result.key },
