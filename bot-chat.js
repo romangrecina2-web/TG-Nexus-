@@ -253,7 +253,7 @@ function createEncryptedStore(options = {}) {
     return {
       exists: item.outbox.length > 0,
       pending: item.outbox.map((entry, index) => ({ ...entry, index }))
-        .filter((entry) => entry.status !== 'delivered')
+        .filter((entry) => entry.status === 'pending')
     };
   }
 
@@ -263,6 +263,17 @@ function createEncryptedStore(options = {}) {
     if (item.outbox[index].status !== 'delivered') {
       item.outbox[index].status = 'delivered';
       item.outbox[index].deliveredAt = Date.now();
+      save();
+    }
+    return true;
+  }
+
+  function discardOutbox(updateId, index) {
+    const item = queueItem(updateId);
+    if (!item || !item.outbox[index]) return false;
+    if (item.outbox[index].status === 'pending') {
+      item.outbox[index].status = 'discarded';
+      item.outbox[index].discardedAt = Date.now();
       save();
     }
     return true;
@@ -367,6 +378,7 @@ function createEncryptedStore(options = {}) {
     appendOutbox,
     getOutboxState,
     markOutboxDelivered,
+    discardOutbox,
     completeUpdate,
     retryUpdate,
     getQueueStats
@@ -627,6 +639,11 @@ function createBotChat(options = {}) {
     try {
       await rawSendTelegramMessage(chatId, text, sendOptions);
     } catch (error) {
+      // Telegram may reject malformed HTML. The formatter immediately retries as plain text;
+      // discard the rejected variant so the worker does not retry invalid markup forever.
+      if (isTelegramHtmlParseError(error)) {
+        store.discardOutbox(context.updateId, queued.index);
+      }
       error.telegramDeliveryFailure = true;
       throw error;
     }

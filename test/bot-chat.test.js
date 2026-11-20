@@ -394,3 +394,24 @@ test('worker preserves the order of messages from the same user with concurrent 
   assert.deepEqual(ctx.bot.store.getUser(123456).chats.map((chat) => chat.title), ['Чат 2', 'Чат 1']);
   await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 });
 });
+
+
+test('queued assistant output falls back from rejected HTML without retrying invalid markup', async () => {
+  const ctx = makeBot({ answer: '**Привет**\n# Заголовок', rejectHtml: true });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  ctx.bot.startUpdateWorker(async (update) => ctx.bot.handleMessage(update.message), {
+    concurrency: 1,
+    maxAttempts: 3
+  });
+  ctx.bot.enqueueUpdate({
+    update_id: 7201,
+    message: message('Скажи привет', 123456, 7201)
+  });
+
+  await waitFor(() => ctx.bot.getWorkerStats().total === 0);
+  const htmlAttempt = ctx.attempts.find((attempt) => attempt.options.parse_mode === 'HTML');
+  assert.ok(htmlAttempt);
+  assert.equal(ctx.sent.at(-1).text, 'Привет\nЗаголовок');
+  assert.equal(ctx.bot.getWorkerStats().deadLettered, 0);
+  await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 });
+});
