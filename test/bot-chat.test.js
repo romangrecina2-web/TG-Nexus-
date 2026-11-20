@@ -66,6 +66,7 @@ function makeBot(options = {}) {
     botToken: 'test-bot-token',
     apiBaseUrl: 'https://provider.example/v1',
     defaultModel: 'test/model-a',
+    webAppUrl: options.webAppUrl || 'https://example.com/app',
     encryptionKey: 'ab'.repeat(32),
     dataDir: dir,
     fetchImpl,
@@ -414,4 +415,73 @@ test('queued assistant output falls back from rejected HTML without retrying inv
   assert.equal(ctx.sent.at(-1).text, 'Привет\nЗаголовок');
   assert.equal(ctx.bot.getWorkerStats().deadLettered, 0);
   await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 });
+});
+
+
+test('synced state merges text history into the encrypted Telegram chat store', async () => {
+  const ctx = makeBot();
+  const userId = 7654321;
+  const now = Date.now();
+  const state = ctx.bot.applySyncState(userId, {
+    apiBaseUrl: 'https://provider.example/v1',
+    model: 'test/model-b',
+    settings: { systemPrompt: 'Custom instructions', maxTokens: 777, temperature: 0.3 },
+    activeChatId: 'mini-app-chat',
+    chats: [{
+      id: 'mini-app-chat',
+      title: 'Чат из Mini App',
+      model: 'test/model-b',
+      createdAt: now,
+      updatedAt: now,
+      messages: [{ id: 'mini-user-message', role: 'user', content: 'Сообщение из Mini App', createdAt: now }]
+    }]
+  });
+
+  assert.equal(state.initialized, true);
+  assert.equal(state.activeChatId, 'mini-app-chat');
+  assert.equal(state.apiBaseUrl, 'https://provider.example/v1');
+  assert.equal(state.settings.maxTokens, 777);
+  assert.equal(state.chats[0].messages[0].id, 'mini-user-message');
+
+  await ctx.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
+  await ctx.bot.handleMessage(message('Продолжение из Telegram', userId));
+  const stored = ctx.bot.getSyncState(userId);
+  const chat = stored.chats.find((item) => item.id === 'mini-app-chat');
+  assert.ok(chat);
+  assert.ok(chat.messages.some((item) => item.id === 'mini-user-message'));
+  assert.ok(chat.messages.some((item) => item.content === 'Продолжение из Telegram'));
+  assert.ok(chat.messages.some((item) => item.role === 'assistant' && item.content === 'Ответ ИИ'));
+});
+
+test('Telegram settings command returns current settings and a Mini App deep link', async () => {
+  const ctx = makeBot({ webAppUrl: 'https://example.com/app' });
+  await ctx.bot.handleMessage(message('/settings'));
+  const sent = ctx.sent.at(-1);
+  assert.match(sent.text, /Настройки TG Nexus/);
+  assert.match(sent.text, /Лимит ответа: 1200 токенов/);
+  assert.equal(sent.options.reply_markup.inline_keyboard[0][0].text, 'Открыть настройки');
+  assert.equal(sent.options.reply_markup.inline_keyboard[0][0].web_app.url, 'https://example.com/app?open=settings');
+});
+
+test('per-user system prompt, token limit, temperature, and OpenRouter web search reach the model request', async () => {
+  const ctx = makeBot();
+  const userId = 123456;
+  await ctx.bot.setApiKey(userId, 'valid-key', 'https://openrouter.ai/api/v1');
+  ctx.bot.applySyncState(userId, {
+    apiBaseUrl: 'https://openrouter.ai/api/v1',
+    settings: {
+      systemPrompt: 'Use the custom test instruction.',
+      maxTokens: 333,
+      temperature: 0.4,
+      internetSearch: true
+    }
+  });
+
+  await ctx.bot.handleMessage(message('Find current information', userId));
+  const request = JSON.parse(ctx.providerCalls.at(-1).request.body);
+  assert.equal(request.max_tokens, 333);
+  assert.equal(request.temperature, 0.4);
+  assert.match(request.messages[0].content, /Use the custom test instruction/);
+  assert.deepEqual(request.tools, [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }]);
+  assert.equal(request.max_tool_calls, 5);
 });
