@@ -10,6 +10,8 @@ TG Shell is a browser application. It does not have a trusted server-side sessio
 - The backend validates Telegram's HMAC signature, rejects duplicate fields, caps initData at 16 KiB, and accepts signatures no older than one hour.
 - Per-user requests are limited to 20 per minute, with a process-wide limit and a bounded, periodically cleaned limiter map.
 - Request bodies, file sizes, HTTP headers, webhook secrets, and outbound Telegram requests have explicit limits and timeouts.
+- Telegram updates are written to an encrypted queue, deduplicated by update ID, processed in order per user, and retried with bounded backoff. Replies use an encrypted outbox so a delivery retry does not intentionally repeat the command or paid model call.
+- The encrypted file store writes through a temporary file and atomic rename, preserves one previous encrypted snapshot, and can recover from that snapshot if the primary file is corrupt.
 - Backend responses include no-sniff, no-referrer, frame denial, restrictive CSP, and permissions-policy headers.
 - The frontend sends a restrictive CSP. JavaScript execution runs in a separate sandboxed document with an opaque origin, no same-origin permission, a dedicated MessageChannel, and a separate CSP profile for network-off and network-on modes.
 - The sandbox blocks common alternate network APIs, browser storage, workers, popups, WebRTC, and credentialed/redirected fetches.
@@ -21,6 +23,7 @@ TG Shell is a browser application. It does not have a trusted server-side sessio
 - CORS is not authentication. The backend authorization check is Telegram's signed initData; the CORS allowlist is an additional browser-origin restriction.
 - The one-hour initData window is a replay window. Rate limits reduce abuse but do not turn Telegram initData into a per-request nonce.
 - The backend rate limiter is in-memory and applies per running instance. A multi-instance production deployment should use a shared store such as Redis and platform-level request limiting.
+- The update queue and encrypted snapshot are stored in the service filesystem. They survive process restarts only when the host preserves that filesystem; Render Free filesystems are ephemeral, so use a persistent disk or external database before relying on this queue for deploy-to-deploy durability. The current Free service configuration does not provision either.
 - GitHub Pages cannot set all response headers. The frontend uses a CSP meta policy, but a custom hosting layer with configurable HTTP headers is stronger.
 - GitHub repository permissions, branch protection, secret scanning, and deployment secrets must also be configured in GitHub/Render. Never commit BOT_TOKEN, WEBHOOK_SECRET, provider API keys, or .env files.
 

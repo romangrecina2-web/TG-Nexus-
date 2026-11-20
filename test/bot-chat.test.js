@@ -20,6 +20,15 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tg-test-bot-'));
 }
 
+async function waitFor(predicate, timeoutMs = 6_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail('Timed out waiting for asynchronous bot work.');
+}
+
 function message(text, userId = 123456, messageId = 1) {
   return {
     message_id: messageId,
@@ -64,7 +73,9 @@ function makeBot(options = {}) {
       const record = { chatId, text, options: sendOptions || {} };
       attempts.push(record);
       events.push({ type: 'send', options: sendOptions || {} });
-      if (options.failSends) throw new Error('Telegram delivery failed');
+      if (options.failSends || (options.failSendsOnce && attempts.length === 1)) {
+        throw new Error('Telegram delivery failed');
+      }
       if (options.rejectHtml && sendOptions && sendOptions.parse_mode === 'HTML') {
         throw new Error("Bad Request: can't parse entities: Unsupported start tag");
       }
@@ -287,4 +298,99 @@ test('registered Telegram command names are lowercase and retain /start and /hel
   assert.ok(BOT_COMMANDS.some((item) => item.command === 'start'));
   assert.ok(BOT_COMMANDS.some((item) => item.command === 'help'));
   assert.ok(BOT_COMMANDS.every((item) => item.command === item.command.toLowerCase()));
+});
+
+
+test('encrypted storage keeps a recoverable previous snapshot', () => {
+  const dir = tempDir();
+  const key = 'ef'.repeat(32);
+  const first = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  first.getUser(123).apiKey = 'first-value';
+  first.save();
+  first.getUser(123).apiKey = 'second-value';
+  first.save();
+
+  fs.writeFileSync(first.filePath, 'corrupted-primary-file', 'utf8');
+  const recovered = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  assert.equal(recovered.getUser(123).apiKey, 'first-value');
+  assert.equal(recovered.getQueueStats().recoveredFromBackup, true);
+});
+
+test('Telegram update queue persists, deduplicates, and recovers processing jobs', () => {
+  const dir = tempDir();
+  const key = 'bc'.repeat(32);
+  const update = {
+    update_id: 5001,
+    message: { text: '/add_chat', chat: { id: 123 }, from: { id: 123 } }
+  };
+  const first = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  assert.equal(first.enqueueUpdate(update).accepted, true);
+  assert.equal(first.enqueueUpdate(update).duplicate, true);
+
+  const claimed = first.claimNextUpdate();
+  assert.equal(claimed.updateId, 5001);
+  first.appendOutbox(5001, { chatId: 123, text: 'confirmation' });
+
+  const afterRestart = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  assert.equal(afterRestart.getQueueStats().processing, 1);
+  afterRestart.recoverProcessingUpdates();
+  const recoveredJob = afterRestart.claimNextUpdate();
+  assert.equal(recoveredJob.updateId, 5001);
+  assert.equal(afterRestart.getOutboxState(5001).pending.length, 1);
+
+  afterRestart.markOutboxDelivered(5001, 0);
+  afterRestart.completeUpdate(5001);
+  assert.equal(afterRestart.getQueueStats().total, 0);
+  assert.equal(afterRestart.enqueueUpdate(update).duplicate, true);
+});
+
+test('queue preserves per-user order while allowing a different user to proceed', () => {
+  const store = createEncryptedStore({ dataDir: tempDir(), encryptionKey: 'ab'.repeat(32) });
+  const makeUpdate = (updateId, userId) => ({
+    update_id: updateId,
+    message: { text: '/add_chat', chat: { id: userId }, from: { id: userId } }
+  });
+  store.enqueueUpdate(makeUpdate(1, 111));
+  store.enqueueUpdate(makeUpdate(2, 111));
+  store.enqueueUpdate(makeUpdate(3, 222));
+
+  const first = store.claimNextUpdate();
+  const second = store.claimNextUpdate([first.userKey]);
+  assert.equal(first.updateId, 1);
+  assert.equal(second.updateId, 3);
+});
+
+test('worker retries only failed Telegram delivery and does not repeat command side effects', async () => {
+  const ctx = makeBot({ failSendsOnce: true });
+  assert.equal(ctx.bot.startUpdateWorker(async (update) => ctx.bot.handleMessage(update.message), {
+    concurrency: 2,
+    maxAttempts: 3
+  }), true);
+
+  const update = {
+    update_id: 7001,
+    message: message('/add_chat', 123456, 7001)
+  };
+  ctx.bot.enqueueUpdate(update);
+  await waitFor(() => ctx.bot.getWorkerStats().total === 0);
+
+  assert.equal(ctx.bot.store.getUser(123456).chats.length, 1);
+  assert.equal(ctx.sent.length, 1);
+  assert.match(ctx.sent[0].text, /Создан и выбран чат/);
+  assert.equal(ctx.bot.getWorkerStats().deadLettered, 0);
+  assert.equal(await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 }), true);
+});
+
+test('worker preserves the order of messages from the same user with concurrent workers', async () => {
+  const ctx = makeBot();
+  ctx.bot.startUpdateWorker(async (update) => ctx.bot.handleMessage(update.message), {
+    concurrency: 3,
+    maxAttempts: 3
+  });
+  ctx.bot.enqueueUpdate({ update_id: 7101, message: message('/add_chat', 123456, 7101) });
+  ctx.bot.enqueueUpdate({ update_id: 7102, message: message('/add_chat', 123456, 7102) });
+
+  await waitFor(() => ctx.bot.getWorkerStats().total === 0);
+  assert.deepEqual(ctx.bot.store.getUser(123456).chats.map((chat) => chat.title), ['Чат 2', 'Чат 1']);
+  await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 });
 });
