@@ -23,5 +23,6 @@ jobs:
           node --check bot-chat.js
           node --check app.js
           node --check sandbox.js
+          node --check secure-key-storage.js
       - name: Unit tests
         run: npm test

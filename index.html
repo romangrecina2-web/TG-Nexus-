@@ -72,7 +72,9 @@
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
       <div class="r2"><input id="cKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="kEye" type="button" style="display:none">Показать</button></div>
-      <small>Ключ хранится только в памяти текущей вкладки и отправляется на указанный адрес API. Он не сохраняется в браузере или резервных копиях. После перезагрузки страницы или смены адреса API вставьте ключ заново.</small>
+      <div class="btns"><button class="sec danger" id="keyRemove" type="button" disabled>Удалить сохранённый ключ</button></div>
+      <small id="keyStatus" aria-live="polite">Проверяю защищённое хранилище Telegram…</small>
+      <small>После успешной проверки ключ сохраняется в SecureStorage Telegram на этом устройстве (Android Keystore / iOS Keychain). Он не попадает в localStorage, историю чатов, экспорт или GitHub. Сохранение переживает перезапуск Mini App и сон Render. Если ваш клиент Telegram не поддерживает SecureStorage, ключ останется только в памяти вкладки.</small>
       <label for="cModel">Модель</label>
       <input id="cModel" list="mlist" autocomplete="off" autocapitalize="off" spellcheck="false">
       <datalist id="mlist"></datalist>
@@ -161,6 +163,7 @@
 <div id="toast"></div>
 
 <script src="./config.js"></script>
+<script src="./secure-key-storage.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>
