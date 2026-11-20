@@ -26,7 +26,8 @@ const BOT_COMMANDS = [
   { command: 'chat_equip', description: 'Выбрать чат: /chat_equip [название]' },
   { command: 'info', description: 'Показать список команд' },
   { command: 'key', description: 'Добавить или заменить API-ключ' },
-  { command: 'model', description: 'Выбрать модель или показать список' }
+  { command: 'model', description: 'Выбрать модель или показать список' },
+  { command: 'settings', description: 'Показать настройки ИИ' }
 ];
 
 function parseEncryptionKey(value) {
@@ -354,15 +355,29 @@ function createEncryptedStore(options = {}) {
     if (!current.users[id]) {
       current.users[id] = {
         apiKey: '',
+        apiBaseUrl: apiBaseUrl || DEFAULT_API_BASE_URL,
         model: options.defaultModel || DEFAULT_MODEL,
+        settings: {},
         activeChatId: null,
         chats: []
       };
     }
     const user = current.users[id];
     if (typeof user.apiKey !== 'string') user.apiKey = '';
+    if (!normalizeApiBase(user.apiBaseUrl)) user.apiBaseUrl = apiBaseUrl || DEFAULT_API_BASE_URL;
+    if (!user.settings || typeof user.settings !== 'object' || Array.isArray(user.settings)) user.settings = {};
     if (!Array.isArray(user.chats)) user.chats = [];
     if (!user.model) user.model = options.defaultModel || DEFAULT_MODEL;
+    for (const chat of user.chats) {
+      if (!chat || typeof chat !== 'object') continue;
+      if (typeof chat.id !== 'string' || !chat.id) chat.id = crypto.randomUUID();
+      if (!Array.isArray(chat.messages)) chat.messages = [];
+      chat.messages.forEach((item, index) => {
+        if (!item || typeof item !== 'object') return;
+        if (typeof item.id !== 'string' || !item.id) item.id = 'legacy_' + chat.id + '_' + index;
+        if (!Number.isFinite(Number(item.createdAt))) item.createdAt = Number(chat.createdAt) || Date.now();
+      });
+    }
     return user;
   }
 
@@ -720,11 +735,13 @@ function createBotChat(options = {}) {
   }
 
   function createChat(user, title) {
+    const now = Date.now();
     const chat = {
       id: crypto.randomUUID(),
       title: String(title || nextChatTitle(user)).replace(/\s+/g, ' ').trim().slice(0, 100) || nextChatTitle(user),
       model: user.model || defaultModel,
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       messages: []
     };
     user.chats.unshift(chat);
@@ -757,9 +774,10 @@ function createBotChat(options = {}) {
     await sendText(chatId, header + unique.map((model) => '• ' + model).join('\n'));
   }
 
-  async function getModels(apiKey) {
-    if (!apiBaseUrl) throw new Error('Provider endpoint is not configured.');
-    const response = await fetchImpl(apiBaseUrl + '/models', {
+  async function getModels(apiKey, endpoint = apiBaseUrl) {
+    const providerBase = normalizeApiBase(endpoint);
+    if (!providerBase) throw new Error('Provider endpoint is not configured.');
+    const response = await fetchImpl(providerBase + '/models', {
       method: 'GET',
       headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' },
       signal: AbortSignal.timeout(20_000)
@@ -775,10 +793,11 @@ function createBotChat(options = {}) {
     return [...new Set(models.length ? models : configured)];
   }
 
-  async function validateKey(apiKey) {
-    if (!apiBaseUrl || typeof fetchImpl !== 'function') return false;
+  async function validateKey(apiKey, endpoint = apiBaseUrl) {
+    const providerBase = normalizeApiBase(endpoint);
+    if (!providerBase || typeof fetchImpl !== 'function') return false;
     try {
-      const response = await fetchImpl(apiBaseUrl + '/models', {
+      const response = await fetchImpl(providerBase + '/models', {
         method: 'GET',
         headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' },
         signal: AbortSignal.timeout(15_000)
@@ -834,7 +853,7 @@ function createBotChat(options = {}) {
       return;
     }
 
-    const valid = await validateKey(args);
+    const valid = await validateKey(args, (store.getUser(message.from.id).apiBaseUrl || apiBaseUrl));
     if (!valid) {
       await sendText(message.chat.id, 'Неудачно, проверьте ключ и повторите попытку');
       return;
@@ -863,7 +882,7 @@ function createBotChat(options = {}) {
     }
     let models;
     try {
-      models = await getModels(user.apiKey);
+      models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl);
     } catch {
       await sendText(message.chat.id, 'Не удалось получить список моделей. Проверьте API-ключ и настройки провайдера.');
       return;
@@ -903,17 +922,36 @@ function createBotChat(options = {}) {
       role: message.role,
       content: message.content
     }));
-    const response = await fetchImpl(apiBaseUrl + '/chat/completions', {
+    const providerBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
+    if (!providerBase) throw new Error('Provider endpoint is not configured.');
+    const userSettings = user.settings || {};
+    const userPrompt = typeof userSettings.systemPrompt === 'string' && userSettings.systemPrompt.trim()
+      ? userSettings.systemPrompt.trim()
+      : systemPrompt;
+    const formatting = 'Отвечай без таблиц и заголовков #. Используй короткие абзацы, простые списки и жирный шрифт только для важного.';
+    const effectivePrompt = userPrompt.includes(formatting) ? userPrompt : userPrompt + '\\n\\n' + formatting;
+    const tokenLimit = Math.max(1, Math.min(32_000, Math.round(Number(userSettings.maxTokens) || 1_200)));
+    const requestBody = {
+      model: chat.model || user.model || defaultModel,
+      messages: [{ role: 'system', content: effectivePrompt }, ...history],
+      max_tokens: tokenLimit
+    };
+    const temperature = userSettings.temperature;
+    if (temperature !== null && temperature !== undefined && temperature !== '') {
+      const numericTemperature = Number(temperature);
+      if (Number.isFinite(numericTemperature)) requestBody.temperature = Math.max(0, Math.min(2, numericTemperature));
+    }
+    if (userSettings.internetSearch === true && new URL(providerBase).hostname === 'openrouter.ai') {
+      requestBody.tools = [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }];
+      requestBody.max_tool_calls = 5;
+    }
+    const response = await fetchImpl(providerBase + '/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: 'Bearer ' + user.apiKey
       },
-      body: JSON.stringify({
-        model: chat.model || user.model || defaultModel,
-        messages: [{ role: 'system', content: systemPrompt }, ...history],
-        max_tokens: 1_200
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(120_000)
     });
     if (!response.ok) throw new Error('Provider completion request failed.');
@@ -936,7 +974,7 @@ function createBotChat(options = {}) {
       return;
     }
 
-    chat.messages.push({ role: 'user', content: text.slice(0, MAX_MESSAGE_LENGTH) });
+    chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'user', content: text.slice(0, MAX_MESSAGE_LENGTH) });
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
@@ -950,7 +988,7 @@ function createBotChat(options = {}) {
       return;
     }
 
-    chat.messages.push({ role: 'assistant', content: answer });
+    chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'assistant', content: answer });
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
@@ -972,7 +1010,8 @@ function createBotChat(options = {}) {
         '/chat_equip [название чата] — выбрать существующий чат\n' +
         '/info — список команд\n' +
         '/key [ключ провайдера] — добавить или заменить API-ключ\n' +
-        '/model [название модели] — выбрать модель или показать доступные\n\n' +
+        '/model [название модели] — выбрать модель или показать доступные\n' +
+        '/settings — показать настройки ИИ и открыть Mini App\n\n' +
         'Created tet0r');
       return true;
     }
@@ -980,7 +1019,7 @@ function createBotChat(options = {}) {
       await handleKeyCommand(message, parsed.args);
       return true;
     }
-    if (command && !['chat', 'add_chat', 'chat_equip', 'model'].includes(command)) {
+    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -1023,6 +1062,30 @@ function createBotChat(options = {}) {
       }
       if (command === 'model') {
         await handleModelCommand(message, user, parsed.args);
+        return true;
+      }
+      if (command === 'settings') {
+        const settings = user.settings || {};
+        const apiBase = user.apiBaseUrl || apiBaseUrl || 'не задан';
+        const currentChat = activeChat(user);
+        const maxTokens = Math.max(1, Math.min(32_000, Math.round(Number(settings.maxTokens) || 1_200)));
+        const status = [
+          'Настройки TG Nexus',
+          'API: ' + apiBase,
+          'Модель: ' + ((currentChat && currentChat.model) || user.model || defaultModel),
+          'Лимит ответа: ' + maxTokens + ' токенов',
+          'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
+          'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
+          'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
+          'История синхронизируется с Mini App при открытии и сохранении.'
+        ].join('\\n');
+        let settingsUrl = options.webAppUrl || process.env.WEB_APP_URL || '';
+        try { const target = new URL(settingsUrl); target.searchParams.set('open', 'settings'); settingsUrl = target.toString(); }
+        catch { settingsUrl = ''; }
+        const sendOptions = settingsUrl ? { reply_markup: { inline_keyboard: [[
+          { text: 'Открыть настройки', web_app: { url: settingsUrl } }
+        ]] } } : {};
+        await sendTelegramMessage(chatId, status, sendOptions);
         return true;
       }
       if (parsed) {
@@ -1192,8 +1255,110 @@ function createBotChat(options = {}) {
     return sendTelegramMessage(chatId, text, sendOptions);
   }
 
+  function getSyncState(userId) {
+    const user = store.getUser(userId);
+    return {
+      apiBaseUrl: user.apiBaseUrl || apiBaseUrl,
+      model: user.model || defaultModel,
+      apiKey: user.apiKey || '',
+      settings: user.settings || {},
+      activeChatId: user.activeChatId || null,
+      chats: user.chats || []
+    };
+  }
+
+  function applySyncState(userId, input = {}) {
+    const user = store.getUser(userId);
+    if (Object.prototype.hasOwnProperty.call(input, 'apiBaseUrl')) {
+      const nextBase = normalizeApiBase(input.apiBaseUrl);
+      if (!nextBase) throw new Error('Invalid API endpoint.');
+      user.apiBaseUrl = nextBase;
+    }
+    if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\\s/.test(input.model)) {
+      user.model = input.model.trim();
+    }
+    if (input.settings && typeof input.settings === 'object' && !Array.isArray(input.settings)) {
+      const source = input.settings;
+      const next = Object.assign({}, user.settings || {});
+      if (typeof source.systemPrompt === 'string') next.systemPrompt = source.systemPrompt.slice(0, 20_000);
+      if (source.temperature === '' || source.temperature === null) next.temperature = null;
+      else if (source.temperature !== undefined && Number.isFinite(Number(source.temperature))) next.temperature = Math.max(0, Math.min(2, Number(source.temperature)));
+      if (source.maxTokens !== undefined && Number.isFinite(Number(source.maxTokens))) next.maxTokens = Math.max(1, Math.min(32_000, Math.round(Number(source.maxTokens))));
+      ['internetSearch', 'sandbox', 'sandboxInternet', 'multiAgent', 'autoMemory', 'askCode', 'balanceCheck'].forEach((key) => {
+        if (typeof source[key] === 'boolean') next[key] = source[key];
+      });
+      if (source.agentCount !== undefined && Number.isFinite(Number(source.agentCount))) next.agentCount = Math.max(1, Math.min(20, Math.round(Number(source.agentCount))));
+      if (source.sandboxTimeout !== undefined && Number.isFinite(Number(source.sandboxTimeout))) next.sandboxTimeout = Math.max(1, Math.min(3600, Math.round(Number(source.sandboxTimeout))));
+      if (source.sumAt !== undefined && Number.isFinite(Number(source.sumAt))) next.sumAt = Math.max(2_000, Math.min(2_000_000, Math.round(Number(source.sumAt))));
+      if (source.keep !== undefined && Number.isFinite(Number(source.keep))) next.keep = Math.max(2, Math.min(100, Math.round(Number(source.keep))));
+      if (source.pinCap !== undefined && Number.isFinite(Number(source.pinCap))) next.pinCap = Math.max(300, Math.min(100_000, Math.round(Number(source.pinCap))));
+      user.settings = next;
+    }
+    if (Array.isArray(input.chats)) {
+      const byId = new Map(user.chats.map((chat) => [String(chat.id), chat]));
+      for (const raw of input.chats.slice(0, MAX_CHATS_PER_USER)) {
+        if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id || raw.id.length > 128) continue;
+        const id = raw.id;
+        const title = typeof raw.title === 'string' ? raw.title.replace(/\\s+/g, ' ').trim().slice(0, 100) : 'Чат';
+        const model = typeof raw.model === 'string' && raw.model.length <= 256 && !/\\s/.test(raw.model) ? raw.model : user.model;
+        const createdAt = Math.max(0, Math.min(Date.now(), Number(raw.createdAt) || Date.now()));
+        const updatedAt = Math.max(createdAt, Math.min(Date.now() + 60_000, Number(raw.updatedAt) || createdAt));
+        const incomingMessages = Array.isArray(raw.messages) ? raw.messages.slice(-200) : [];
+        const existing = byId.get(id) || { id, title, model, createdAt, updatedAt, messages: [] };
+        const messages = new Map();
+        for (const item of (existing.messages || [])) {
+          if (!item || !['user', 'assistant'].includes(item.role) || typeof item.content !== 'string') continue;
+          const key = typeof item.id === 'string' && item.id ? item.id : 'legacy_' + id + '_' + messages.size;
+          messages.set(key, { id: key, role: item.role, content: item.content.slice(0, MAX_MESSAGE_LENGTH), createdAt: Number(item.createdAt) || createdAt });
+        }
+        for (const item of incomingMessages) {
+          if (!item || !['user', 'assistant'].includes(item.role) || typeof item.content !== 'string') continue;
+          const messageId = typeof item.id === 'string' && item.id.length <= 160 ? item.id : '';
+          if (!messageId) continue;
+          messages.set(messageId, { id: messageId, role: item.role, content: item.content.slice(0, MAX_MESSAGE_LENGTH), createdAt: Math.max(0, Math.min(Date.now() + 60_000, Number(item.createdAt) || updatedAt)) });
+        }
+        existing.title = title || existing.title;
+        existing.model = model || existing.model;
+        existing.createdAt = Math.min(existing.createdAt || createdAt, createdAt);
+        existing.updatedAt = Math.max(Number(existing.updatedAt) || 0, updatedAt);
+        existing.messages = [...messages.values()].sort((a, b) => a.createdAt - b.createdAt).slice(-200);
+        byId.set(id, existing);
+      }
+      user.chats = [...byId.values()].sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0)).slice(0, MAX_CHATS_PER_USER);
+    }
+    if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
+      user.activeChatId = input.activeChatId;
+    }
+    store.save();
+    return getSyncState(userId);
+  }
+
+  async function setApiKey(userId, apiKey, endpoint) {
+    const user = store.getUser(userId);
+    const providerBase = normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl);
+    if (!providerBase || typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 2_048 || /\\s/.test(apiKey)) {
+      throw new Error('Invalid API key or endpoint.');
+    }
+    if (!(await validateKey(apiKey, providerBase))) throw new Error('API key validation failed.');
+    user.apiBaseUrl = providerBase;
+    user.apiKey = apiKey;
+    store.save();
+    return true;
+  }
+
+  function clearApiKey(userId) {
+    const user = store.getUser(userId);
+    user.apiKey = '';
+    store.save();
+    return true;
+  }
+
   return {
     handleMessage,
+    getSyncState,
+    applySyncState,
+    setApiKey,
+    clearApiKey,
     enqueueUpdate,
     startUpdateWorker,
     stopUpdateWorker,
