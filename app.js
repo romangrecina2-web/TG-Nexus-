@@ -173,7 +173,7 @@ function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
-function keyApiBase(){return String(S.cfg.url||'').trim().replace(/\\/+$/,'')}
+function keyApiBase(){return String(S.cfg.url||'').trim().replace(/\/+$/,'')}
 function updateKeyStorageUi(){
   var input=$('#cKey'),status=$('#keyStatus'),remove=$('#keyRemove');
   var messages={
