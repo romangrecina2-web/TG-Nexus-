@@ -157,7 +157,7 @@ function load(){
   return norm(s);
 }
 var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
-var BACKEND_API_BASE=String(window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl||'').replace(/\\/+$/,'');
+var BACKEND_API_BASE=String(window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl||'').replace(/\/+$/,'');
 var syncReady=false,syncApplying=false,syncBusy=false,syncAgain=false,syncTimer=null,syncPendingKey=false,syncPendingClear=false,syncRetryCount=0;
 var TG=(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initData)?window.Telegram.WebApp:null;
 var secureKeyStorage=(window.TGShellSecureKeyStorage&&TG)?window.TGShellSecureKeyStorage.create(TG):null;
