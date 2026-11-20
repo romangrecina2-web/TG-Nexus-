@@ -78,7 +78,7 @@
         <button class="sec" id="providerSave" type="button">Сохранить профиль</button>
       </div>
       <div class="btns"><button class="sec danger" id="providerRemove" type="button" disabled>Удалить профиль</button></div>
-      <small>Можно сохранить до 12 адресов OpenAI-совместимых API. Поддерживаются GET /models и POST /chat/completions. У каждого адреса свой ключ; ключи сохраняются отдельно в Telegram SecureStorage. Для API с другим форматом нужен отдельный адаптер.</small>
+      <small>Можно сохранить до 12 адресов OpenAI-совместимых API. Поддерживаются GET /models и POST /chat/completions. Для прямой работы из браузера сервер также должен разрешать CORS. У каждого адреса свой ключ; ключи сохраняются отдельно в Telegram SecureStorage. Для API с другим форматом нужен отдельный адаптер.</small>
       <label for="cUrl">Адрес API</label>
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
