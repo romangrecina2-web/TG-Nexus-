@@ -8,6 +8,8 @@ process.env.BOT_TOKEN = 'unit-test-bot-token-never-used-in-production';
 const {
   MAX_INIT_DATA_AGE_SECONDS,
   createRateLimiter,
+  createServer,
+  isRetryableWebhookError,
   safeFileName,
   validateTelegramInitData
 } = require('../server');
@@ -86,4 +88,103 @@ test('rate limiter enforces per-user and global limits and resets its window', (
 test('sanitizes file names and prevents path components', () => {
   assert.equal(safeFileName('../../hello?.js'), 'hello_.js');
   assert.equal(safeFileName('..'), 'code.txt');
+});
+
+
+async function withListeningServer(server, callback) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  try {
+    const address = server.address();
+    return await callback('http://127.0.0.1:' + address.port);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+}
+
+async function postWebhook(baseUrl, update, secret) {
+  const response = await fetch(baseUrl + '/telegram/webhook', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-telegram-bot-api-secret-token': secret
+    },
+    body: JSON.stringify(update)
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+test('webhook forwards private text messages to the Telegram text bot', async () => {
+  const secret = 'webhook-test-secret-32-characters';
+  const message = {
+    message_id: 55,
+    text: '/add_chat',
+    chat: { id: 123456, type: 'private' },
+    from: { id: 123456, is_bot: false }
+  };
+  const update = { update_id: 9001, message };
+  let received = null;
+  const server = createServer({
+    webhookDependencies: {
+      webhookSecret: secret,
+      botChat: {
+        handleMessage: async (incoming) => {
+          received = incoming;
+          return true;
+        }
+      }
+    }
+  });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const result = await postWebhook(baseUrl, update, secret);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, { ok: true });
+    assert.deepEqual(received, message);
+  });
+});
+
+test('webhook returns a retryable failure when text-message handling cannot deliver a reply', async () => {
+  const secret = 'webhook-test-secret-32-characters';
+  const server = createServer({
+    webhookDependencies: {
+      webhookSecret: secret,
+      botChat: {
+        handleMessage: async () => {
+          throw new Error('Temporary Telegram delivery failure');
+        }
+      }
+    }
+  });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const result = await postWebhook(baseUrl, {
+      update_id: 9002,
+      message: {
+        message_id: 56,
+        text: '/add_chat',
+        chat: { id: 123456, type: 'private' },
+        from: { id: 123456, is_bot: false }
+      }
+    }, secret);
+    assert.equal(result.status, 500);
+    assert.deepEqual(result.body, { ok: false, retryable: true });
+  });
+});
+
+test('permanent Telegram 4xx errors are not classified for repeated delivery', () => {
+  const permanent = new Error('Forbidden');
+  permanent.telegramErrorCode = 403;
+  const rateLimited = new Error('Too many requests');
+  rateLimited.telegramErrorCode = 429;
+  const unavailable = new Error('Gateway timeout');
+  unavailable.telegramErrorCode = 504;
+
+  assert.equal(isRetryableWebhookError(permanent), false);
+  assert.equal(isRetryableWebhookError(rateLimited), true);
+  assert.equal(isRetryableWebhookError(unavailable), true);
 });

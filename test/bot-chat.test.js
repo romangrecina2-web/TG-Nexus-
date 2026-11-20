@@ -64,6 +64,7 @@ function makeBot(options = {}) {
       const record = { chatId, text, options: sendOptions || {} };
       attempts.push(record);
       events.push({ type: 'send', options: sendOptions || {} });
+      if (options.failSends) throw new Error('Telegram delivery failed');
       if (options.rejectHtml && sendOptions && sendOptions.parse_mode === 'HTML') {
         throw new Error("Bad Request: can't parse entities: Unsupported start tag");
       }
@@ -179,6 +180,12 @@ test('normal messages create a chat automatically and send the AI response', asy
   assert.equal(ctx.sent.at(-1).options.parse_mode, 'HTML');
   const completion = JSON.parse(ctx.providerCalls.at(-1).request.body);
   assert.match(completion.messages[0].content, /Отвечай без таблиц и заголовков #/);
+});
+
+test('Telegram send failures propagate instead of being silently swallowed', async () => {
+  const ctx = makeBot({ failSends: true });
+  await assert.rejects(ctx.bot.handleMessage(message('/add_chat')), /Telegram delivery failed/);
+  assert.equal(ctx.bot.store.getUser(123456).chats.length, 1);
 });
 
 test('missing API key asks the user to call /key and still creates an active chat', async () => {
