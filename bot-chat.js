@@ -943,6 +943,9 @@ function createBotChat(options = {}) {
       const numericTemperature = Number(temperature);
       if (Number.isFinite(numericTemperature)) requestBody.temperature = Math.max(0, Math.min(2, numericTemperature));
     }
+    if (typeof userSettings.reasoning === 'string' && ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(userSettings.reasoning)) {
+      requestBody.reasoning_effort = userSettings.reasoning;
+    }
     if (userSettings.internetSearch === true && new URL(providerBase).hostname === 'openrouter.ai') {
       requestBody.tools = [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }];
       requestBody.max_tool_calls = 5;
@@ -1078,6 +1081,7 @@ function createBotChat(options = {}) {
           'API: ' + apiBase,
           'Модель: ' + ((currentChat && currentChat.model) || user.model || defaultModel),
           'Лимит ответа: ' + maxTokens + ' токенов',
+          'Рассуждения: ' + (settings.reasoning || 'auto'),
           'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
           'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
           'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
@@ -1292,6 +1296,11 @@ function createBotChat(options = {}) {
       if (typeof source.systemPrompt === 'string') next.systemPrompt = source.systemPrompt.slice(0, 20_000);
       if (source.temperature === '' || source.temperature === null) next.temperature = null;
       else if (source.temperature !== undefined && Number.isFinite(Number(source.temperature))) next.temperature = Math.max(0, Math.min(2, Number(source.temperature)));
+      if (typeof source.reasoning === 'string' && ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(source.reasoning)) next.reasoning = source.reasoning;
+      if (source.balBase === null || source.balBase === '') next.balBase = null;
+      else if (source.balBase !== undefined && Number.isFinite(Number(source.balBase))) next.balBase = Math.max(-1_000_000, Math.min(1_000_000, Number(source.balBase)));
+      if (source.balUsage !== undefined && Number.isFinite(Number(source.balUsage))) next.balUsage = Math.max(0, Math.min(1_000_000, Number(source.balUsage)));
+      if (source.minBal !== undefined && Number.isFinite(Number(source.minBal))) next.minBal = Math.max(0, Math.min(10_000, Number(source.minBal)));
       if (source.maxTokens !== undefined && Number.isFinite(Number(source.maxTokens))) next.maxTokens = Math.max(1, Math.min(32_000, Math.round(Number(source.maxTokens))));
       ['internetSearch', 'sandbox', 'sandboxInternet', 'multiAgent', 'autoMemory', 'askCode', 'balanceCheck'].forEach((key) => {
         if (typeof source[key] === 'boolean') next[key] = source[key];
