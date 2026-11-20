@@ -425,7 +425,7 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   const state = ctx.bot.applySyncState(userId, {
     apiBaseUrl: 'https://provider.example/v1',
     model: 'test/model-b',
-    settings: { systemPrompt: 'Custom instructions', maxTokens: 777, temperature: 0.3 },
+    settings: { systemPrompt: 'Custom instructions', maxTokens: 777, temperature: 0.3, reasoning: 'high', balBase: 12.5, minBal: 25 },
     activeChatId: 'mini-app-chat',
     chats: [{
       id: 'mini-app-chat',
@@ -441,6 +441,9 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   assert.equal(state.activeChatId, 'mini-app-chat');
   assert.equal(state.apiBaseUrl, 'https://provider.example/v1');
   assert.equal(state.settings.maxTokens, 777);
+  assert.equal(state.settings.reasoning, 'high');
+  assert.equal(state.settings.balBase, 12.5);
+  assert.equal(state.settings.minBal, 25);
   assert.equal(state.chats[0].messages[0].id, 'mini-user-message');
 
   await ctx.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
@@ -473,6 +476,7 @@ test('per-user system prompt, token limit, temperature, and OpenRouter web searc
       systemPrompt: 'Use the custom test instruction.',
       maxTokens: 333,
       temperature: 0.4,
+      reasoning: 'high',
       internetSearch: true
     }
   });
@@ -481,6 +485,7 @@ test('per-user system prompt, token limit, temperature, and OpenRouter web searc
   const request = JSON.parse(ctx.providerCalls.at(-1).request.body);
   assert.equal(request.max_tokens, 333);
   assert.equal(request.temperature, 0.4);
+  assert.equal(request.reasoning_effort, 'high');
   assert.match(request.messages[0].content, /Use the custom test instruction/);
   assert.deepEqual(request.tools, [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }]);
   assert.equal(request.max_tool_calls, 5);
