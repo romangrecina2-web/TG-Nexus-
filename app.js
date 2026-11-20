@@ -157,6 +157,8 @@ function load(){
   return norm(s);
 }
 var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+var BACKEND_API_BASE=String(window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl||'').replace(/\\/+$/,'');
+var syncReady=false,syncApplying=false,syncBusy=false,syncAgain=false,syncTimer=null,syncPendingKey=false,syncPendingClear=false,syncRetryCount=0;
 var TG=(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initData)?window.Telegram.WebApp:null;
 var secureKeyStorage=(window.TGShellSecureKeyStorage&&TG)?window.TGShellSecureKeyStorage.create(TG):null;
 var keyStorageStatus='loading',keyInputTouched=false,keyRestorePromise=null;
@@ -166,7 +168,190 @@ function saveNow(){
   if(saveTimer){clearTimeout(saveTimer);saveTimer=null}
   try{localStorage.setItem(KEY,JSON.stringify(S,function(k,v){if(k==='keys'||k==='err')return undefined;if(k==='reasoning'&&this&&this.role==='assistant')return undefined;return v}))}
   catch(e){if(!warned){warned=true;toast('Не хватает места в памяти браузера. Скачайте копию и удалите старые чаты.')}}
+  if(!syncApplying)queueRemoteSync(false,false);
 }
+function syncStatus(message,cls){
+  var el=$('#syncStatus');if(!el)return;
+  el.textContent='Синхронизация: '+message;
+  el.className='note'+(cls?' '+cls:'');
+}
+function remoteSyncRequest(action,state){
+  if(!BACKEND_API_BASE||!TG||!TG.initData)throw new Error('Откройте Mini App из Telegram для синхронизации.');
+  var payload={action:action,initData:TG.initData};
+  if(state)payload.state=state;
+  return fetch(BACKEND_API_BASE+'/api/sync',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload),
+    signal:AbortSignal.timeout(75000)
+  }).then(async function(response){
+    var data=await response.json().catch(function(){return{}});
+    if(!response.ok||!data.ok)throw new Error(data.error||('HTTP '+response.status));
+    return data.state||{};
+  });
+}
+function syncSettingsPayload(){
+  return {
+    systemPrompt:String(S.cfg.sys||'').slice(0,20000),
+    temperature:S.cfg.temp===''?null:Math.max(0,Math.min(2,Number(S.cfg.temp)||0)),
+    maxTokens:S.cfg.max===''?1200:Math.max(1,Math.min(32000,Math.round(Number(S.cfg.max)||1200))),
+    internetSearch:!!S.cfg.internet,
+    sandbox:!!S.cfg.sandbox,
+    sandboxInternet:!!S.cfg.sandboxInternet,
+    sandboxTimeout:Math.max(1,Math.min(3600,Math.round(Number(S.cfg.sandboxTimeout)||60))),
+    multiAgent:!!S.cfg.multiAgent,
+    agentCount:Math.max(1,Math.min(20,Math.round(Number(S.cfg.agentCount)||3))),
+    autoMemory:!!S.cfg.auto,
+    askCode:!!S.cfg.askCode,
+    balanceCheck:!!S.cfg.balOn,
+    sumAt:Math.max(2000,Math.min(2000000,Math.round(Number(S.cfg.sumAt)||10000))),
+    keep:Math.max(2,Math.min(100,Math.round(Number(S.cfg.keep)||4))),
+    pinCap:Math.max(300,Math.min(100000,Math.round(Number(S.cfg.pinCap)||4000)))
+  };
+}
+function makeRemoteSyncState(includeApiKey,clearApiKey){
+  var chats=S.chats.slice().sort(function(a,b){return(Number(b.ts)||0)-(Number(a.ts)||0)}).slice(0,40).map(function(chat){
+    var messages=(chat.msgs||[]).filter(function(m){return m&&(m.role==='user'||m.role==='assistant')&&typeof m.content==='string'})
+      .slice(-25).map(function(m){
+        if(!m.id)m.id=makeId();
+        var content=String(m.content||'');
+        if(m.role==='user'&&Array.isArray(m.attachments)){
+          m.attachments.forEach(function(file){if(file&&typeof file.text==='string'&&file.text)content+='\\n\\n[Файл '+String(file.name||'attachment').slice(0,100)+']\\n'+file.text.slice(0,2500)});
+        }
+        return {id:String(m.id).slice(0,160),role:m.role,content:content.slice(0,2500),createdAt:Number(m.ts)||Number(chat.ts)||Date.now()};
+      });
+    return {id:String(chat.id).slice(0,128),title:String(chat.title||'Чат').slice(0,100),model:String(chat.model||S.cfg.model||'').slice(0,256),createdAt:Number(chat.createdAt)||Number(chat.ts)||Date.now(),updatedAt:Number(chat.ts)||Date.now(),messages:messages};
+  });
+  var state={apiBaseUrl:S.cfg.url,model:S.cfg.model,settings:syncSettingsPayload(),activeChatId:S.cur,chats:chats};
+  if(includeApiKey&&ACTIVE_KEY)state.apiKey=ACTIVE_KEY;
+  if(clearApiKey)state.clearApiKey=true;
+  return state;
+}
+function mergeRemoteChats(remoteChats){
+  if(!Array.isArray(remoteChats))return;
+  var byId={};
+  S.chats.forEach(function(chat){byId[String(chat.id)]=chat});
+  remoteChats.forEach(function(remote){
+    if(!remote||typeof remote.id!=='string')return;
+    var chat=byId[remote.id];
+    if(!chat){
+      chat={id:remote.id,title:String(remote.title||'Чат'),msgs:[],model:remote.model||S.cfg.model,draft:'',draftAttachments:[],ts:Number(remote.updatedAt)||Date.now(),createdAt:Number(remote.createdAt)||Date.now()};
+      S.chats.push(chat);byId[remote.id]=chat;
+    }
+    var localByMessage={};
+    (chat.msgs||[]).forEach(function(message){if(message&&message.id)localByMessage[String(message.id)]=message});
+    (remote.messages||[]).forEach(function(message){
+      if(!message||!message.id||!['user','assistant'].includes(message.role)||typeof message.content!=='string')return;
+      var existing=localByMessage[String(message.id)];
+      if(existing){if(!existing.content&&message.content)existing.content=message.content;return}
+      var imported={id:String(message.id),role:message.role,content:message.content,ts:Number(message.createdAt)||Number(remote.updatedAt)||Date.now()};
+      chat.msgs.push(imported);localByMessage[imported.id]=imported;
+    });
+    chat.msgs.sort(function(a,b){return(Number(a.ts)||0)-(Number(b.ts)||0)});
+    var remoteUpdated=Number(remote.updatedAt)||0;
+    if(remoteUpdated>=(Number(chat.ts)||0)){
+      if(remote.title)chat.title=String(remote.title).slice(0,100);
+      if(remote.model)chat.model=String(remote.model).slice(0,256);
+    }
+    chat.ts=Math.max(Number(chat.ts)||0,remoteUpdated);
+    if(!chat.createdAt)chat.createdAt=Number(remote.createdAt)||chat.ts;
+  });
+  S.chats.sort(function(a,b){return(Number(b.ts)||0)-(Number(a.ts)||0)});
+}
+async function applyRemoteSyncState(state){
+  if(!state||state.initialized!==true)return;
+  var previousBase=S.cfg.url;
+  if(typeof state.apiBaseUrl==='string'&&validApiBase(state.apiBaseUrl)){
+    S.cfg.url=state.apiBaseUrl;
+    if(previousBase!==S.cfg.url){
+      ACTIVE_KEY='';keyInputTouched=false;keyStorageStatus='loading';
+      if(secureKeyStorage&&secureKeyStorage.isAvailable()){
+        try{
+          var restored=await secureKeyStorage.load(S.cfg.url);
+          if(restored.matches&&restored.key){ACTIVE_KEY=restored.key;keyStorageStatus='saved'}
+          else keyStorageStatus=restored.found?'other-provider':'empty';
+        }catch(error){keyStorageStatus='error'}
+      }
+    }
+  }
+  if(typeof state.model==='string'&&state.model.trim()){
+    S.cfg.model=state.model;addSavedModel(state.model);
+  }
+  var settings=state.settings||{};
+  if(typeof settings.systemPrompt==='string')S.cfg.sys=settings.systemPrompt;
+  if(settings.temperature===null||settings.temperature===undefined)S.cfg.temp='';
+  else if(Number.isFinite(Number(settings.temperature)))S.cfg.temp=String(settings.temperature);
+  if(Number.isFinite(Number(settings.maxTokens)))S.cfg.max=String(settings.maxTokens);
+  if(typeof settings.internetSearch==='boolean')S.cfg.internet=settings.internetSearch;
+  if(typeof settings.sandbox==='boolean')S.cfg.sandbox=settings.sandbox;
+  if(typeof settings.sandboxInternet==='boolean')S.cfg.sandboxInternet=settings.sandboxInternet;
+  if(Number.isFinite(Number(settings.sandboxTimeout)))S.cfg.sandboxTimeout=settings.sandboxTimeout;
+  if(typeof settings.multiAgent==='boolean')S.cfg.multiAgent=settings.multiAgent;
+  if(Number.isFinite(Number(settings.agentCount)))S.cfg.agentCount=settings.agentCount;
+  if(typeof settings.autoMemory==='boolean')S.cfg.auto=settings.autoMemory;
+  if(typeof settings.askCode==='boolean')S.cfg.askCode=settings.askCode;
+  if(typeof settings.balanceCheck==='boolean')S.cfg.balOn=settings.balanceCheck;
+  if(Number.isFinite(Number(settings.sumAt)))S.cfg.sumAt=settings.sumAt;
+  if(Number.isFinite(Number(settings.keep)))S.cfg.keep=settings.keep;
+  if(Number.isFinite(Number(settings.pinCap)))S.cfg.pinCap=settings.pinCap;
+  mergeRemoteChats(state.chats);
+  if(typeof state.activeChatId==='string'&&S.chats.some(function(chat){return chat.id===state.activeChatId})&&(!S.cur||!S.chats.some(function(chat){return chat.id===S.cur})))S.cur=state.activeChatId;
+  if(typeof state.apiKey==='string'&&state.apiKey&&state.apiKey!==ACTIVE_KEY){
+    ACTIVE_KEY=state.apiKey;
+    if(secureKeyStorage&&secureKeyStorage.isAvailable()){
+      try{await secureKeyStorage.save(S.cfg.url,ACTIVE_KEY);keyStorageStatus='saved'}
+      catch(error){keyStorageStatus='save-error'}
+    }else keyStorageStatus=TG?'unsupported':'outside';
+  }
+  syncApplying=true;
+  saveNow();
+  syncApplying=false;
+  fillChatModel();updSub();
+  if($('#sheet').className==='on')fillSet();
+}
+async function pullRemoteSync(){
+  syncStatus('подключаюсь к серверу…');
+  var state=await remoteSyncRequest('pull');
+  await applyRemoteSyncState(state);
+  syncStatus('данные получены', 'ok');
+  syncRetryCount=0;
+  return state;
+}
+function queueRemoteSync(includeApiKey,clearApiKey){
+  if(includeApiKey)syncPendingKey=true;
+  if(clearApiKey)syncPendingClear=true;
+  if(!syncReady||syncApplying||!TG||!BACKEND_API_BASE)return;
+  if(syncTimer)clearTimeout(syncTimer);
+  syncTimer=setTimeout(function(){flushRemoteSync()},900);
+}
+async function flushRemoteSync(){
+  if(syncBusy){syncAgain=true;return}
+  if(!syncReady||syncApplying||!TG||!BACKEND_API_BASE)return;
+  syncBusy=true;syncAgain=false;
+  var includeKey=syncPendingKey,clearKey=syncPendingClear;
+  syncPendingKey=false;syncPendingClear=false;
+  try{
+    var state=makeRemoteSyncState(includeKey&&!clearKey,clearKey);
+    var result=await remoteSyncRequest('push',state);
+    await applyRemoteSyncState(result);
+    syncStatus('синхронизировано', 'ok');
+    syncRetryCount=0;
+  }catch(error){
+    if(includeKey)syncPendingKey=true;
+    if(clearKey)syncPendingClear=true;
+    syncRetryCount++;
+    syncStatus('ошибка, повторю автоматически: '+String(error&&error.message||error).slice(0,100),'bad');
+    if(syncTimer)clearTimeout(syncTimer);
+    syncTimer=setTimeout(function(){flushRemoteSync()},Math.min(60000,5000*syncRetryCount));
+  }finally{
+    syncBusy=false;
+    if(syncAgain){syncAgain=false;queueRemoteSync(false,false)}
+  }
+}
+function shouldOpenSettings(){
+  try{return new URL(window.location.href).searchParams.get('open')==='settings'}catch(error){return false}
+}
+
 function save(){if(!storageOK)return;if(saveTimer)clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,420)}
 function cur(){return S.chats.filter(function(c){return c.id===S.cur})[0]||null}
 function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
