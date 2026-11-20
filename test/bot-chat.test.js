@@ -38,6 +38,15 @@ function message(text, userId = 123456, messageId = 1) {
   };
 }
 
+function callbackQuery(data, userId = 123456, messageId = 500) {
+  return {
+    id: 'callback-' + messageId + '-' + String(data).replace(/[^a-z0-9]/gi, ''),
+    data,
+    from: { id: userId, is_bot: false },
+    message: { message_id: messageId, chat: { id: userId, type: 'private' } }
+  };
+}
+
 function makeBot(options = {}) {
   const dir = options.dir || tempDir();
   const sent = [];
@@ -45,6 +54,8 @@ function makeBot(options = {}) {
   const providerCalls = [];
   const events = [];
   const attempts = [];
+  const callbackAnswers = [];
+  const editedMessages = [];
   const fetchImpl = options.fetchImpl || (async (url, request) => {
     providerCalls.push({ url, request });
     events.push({ type: 'provider' });
@@ -82,9 +93,13 @@ function makeBot(options = {}) {
       }
       sent.push(record);
     },
-    deleteTelegramMessage: async (chatId, messageId) => { actions.push({ type: 'delete', chatId, messageId }); events.push({ type: 'delete' }); }
+    deleteTelegramMessage: async (chatId, messageId) => { actions.push({ type: 'delete', chatId, messageId }); events.push({ type: 'delete' }); },
+    answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
+    editTelegramMessage: async (chatId, messageId, text, replyMarkup) => {
+      editedMessages.push({ chatId, messageId, text, replyMarkup });
+    }
   });
-  return { bot, dir, sent, attempts, actions, providerCalls, events };
+  return { bot, dir, sent, attempts, actions, providerCalls, events, callbackAnswers, editedMessages };
 }
 
 test('API endpoint must be HTTPS and cannot contain credentials or query parameters', () => {
@@ -456,14 +471,62 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   assert.ok(chat.messages.some((item) => item.role === 'assistant' && item.content === 'Ответ ИИ'));
 });
 
-test('Telegram settings command returns current settings and a Mini App deep link', async () => {
+test('Telegram settings command exposes interactive controls and the Mini App deep link', async () => {
   const ctx = makeBot({ webAppUrl: 'https://example.com/app' });
   await ctx.bot.handleMessage(message('/settings'));
   const sent = ctx.sent.at(-1);
   assert.match(sent.text, /Настройки TG Nexus/);
   assert.match(sent.text, /Лимит ответа: 1200 токенов/);
-  assert.equal(sent.options.reply_markup.inline_keyboard[0][0].text, 'Открыть настройки');
-  assert.equal(sent.options.reply_markup.inline_keyboard[0][0].web_app.url, 'https://example.com/app?open=settings');
+  const rows = sent.options.reply_markup.inline_keyboard;
+  const callbacks = rows.flat().map((button) => button.callback_data).filter(Boolean);
+  assert.ok(callbacks.includes('tn:search'));
+  assert.ok(callbacks.includes('tn:reason'));
+  assert.ok(callbacks.includes('tn:tokens'));
+  assert.ok(callbacks.includes('tn:model'));
+  const webAppButton = rows.flat().find((button) => button.web_app);
+  assert.equal(webAppButton.text, 'Открыть все настройки');
+  assert.equal(webAppButton.web_app.url, 'https://example.com/app?open=settings');
+});
+
+test('Telegram settings buttons toggle internet search and save the state', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:search'));
+  assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, true);
+  assert.match(ctx.editedMessages.at(-1).text, /Интернет-поиск: включён/);
+  assert.equal(ctx.callbackAnswers.at(-1).text, 'Поиск в интернете включён.');
+});
+
+test('Telegram settings buttons change the token limit and reasoning level', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:t:4000'));
+  assert.equal(ctx.bot.getSyncState(123456).settings.maxTokens, 4000);
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', 123456, 501));
+  assert.equal(ctx.bot.getSyncState(123456).settings.reasoning, 'high');
+  assert.match(ctx.editedMessages.at(-1).text, /Текущее значение: Высокий/);
+});
+
+test('Telegram model buttons fetch choices and save the selected model', async () => {
+  const ctx = makeBot();
+  await ctx.bot.setApiKey(123456, 'valid-key', 'https://provider.example/v1');
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model'));
+  const modelButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
+  assert.ok(modelButtons.some((button) => button.callback_data === 'tn:m:1'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:m:1', 123456, 502));
+  assert.equal(ctx.bot.getSyncState(123456).model, 'test/model-b');
+});
+
+test('Telegram settings callbacks cannot be used from another user identity', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleCallbackQuery({
+    ...callbackQuery('tn:search'),
+    from: { id: 999999, is_bot: false }
+  });
+  assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, undefined);
+  assert.equal(ctx.bot.getSyncState(999999).settings.internetSearch, undefined);
+  assert.equal(ctx.editedMessages.length, 0);
 });
 
 test('per-user system prompt, token limit, temperature, and OpenRouter web search reach the model request', async () => {

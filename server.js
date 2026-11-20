@@ -340,7 +340,14 @@ async function handleStart(message) {
   });
 }
 
-async function processTelegramUpdate(update) {
+async function processTelegramUpdate(update, targetBot = botChat) {
+  const callbackQuery = update && update.callback_query;
+  if (callbackQuery) {
+    if (targetBot && typeof targetBot.handleCallbackQuery === 'function') {
+      await targetBot.handleCallbackQuery(callbackQuery);
+    }
+    return;
+  }
   const message = update && update.message;
   if (!message) return;
   const text = typeof message.text === 'string' ? message.text.trim() : '';
@@ -350,11 +357,11 @@ async function processTelegramUpdate(update) {
   }
   if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
       message.chat && message.chat.type === 'private') {
-    await botChat.sendMessage(message.chat.id,
+    await targetBot.sendMessage(message.chat.id,
       'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.');
     return;
   }
-  await botChat.handleMessage(message);
+  await targetBot.handleMessage(message);
 }
 
 async function handleWebhook(req, res, dependencies = {}) {
@@ -549,7 +556,7 @@ async function configureWebhook() {
     await telegramApi('setWebhook', {
       url: webhookUrl,
       secret_token: WEBHOOK_SECRET,
-      allowed_updates: ['message']
+      allowed_updates: ['message', 'callback_query']
     });
     webhookDiagnostics.configured = true;
 
@@ -699,6 +706,7 @@ module.exports = {
   createRateLimiter,
   createServer,
   isRetryableWebhookError,
+  processTelegramUpdate,
   safeFileName,
   validateTelegramInitData
 };

@@ -10,6 +10,7 @@ const {
   createRateLimiter,
   createServer,
   isRetryableWebhookError,
+  processTelegramUpdate,
   safeFileName,
   validateTelegramInitData
 } = require('../server');
@@ -293,6 +294,21 @@ test('sync endpoint returns only the authenticated user state and accepts valid 
     assert.equal(pull.body.state.model, 'provider/model');
     assert.equal(pull.body.state.chats[0].title, 'Sync test');
   });
+});
+
+test('Telegram callback_query updates reach the bot settings handler', async () => {
+  const received = [];
+  const fakeBot = {
+    async handleCallbackQuery(query) { received.push(query); }
+  };
+  const query = {
+    id: 'callback-test',
+    data: 'tn:search',
+    from: { id: 123456 },
+    message: { message_id: 5, chat: { id: 123456, type: 'private' } }
+  };
+  await processTelegramUpdate({ update_id: 11, callback_query: query }, fakeBot);
+  assert.deepEqual(received, [query]);
 });
 
 test('sync endpoint blocks browser origins outside the configured Mini App origin', async () => {

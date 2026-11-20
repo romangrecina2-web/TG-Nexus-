@@ -148,8 +148,11 @@ function createEncryptedStore(options = {}) {
   }
 
   function queueUserKey(update, updateId) {
-    const message = update && (update.message || update.edited_message || update.channel_post);
-    const userId = message && message.from && message.from.id;
+    const callbackQuery = update && update.callback_query;
+    const message = update && (update.message || update.edited_message || update.channel_post ||
+      (callbackQuery && callbackQuery.message));
+    const userId = (callbackQuery && callbackQuery.from && callbackQuery.from.id) ||
+      (message && message.from && message.from.id);
     const chatId = message && message.chat && message.chat.id;
     return userId != null ? String(userId) : (chatId != null ? String(chatId) : 'update:' + String(updateId));
   }
@@ -698,6 +701,19 @@ function createBotChat(options = {}) {
     return telegramRequest('deleteMessage', { chat_id: chatId, message_id: messageId });
   }
 
+  const answerCallbackQuery = options.answerCallbackQuery || ((callbackQueryId, text = '') =>
+    telegramRequest('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      ...(text ? { text } : {})
+    }));
+  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
+    telegramRequest('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      reply_markup: replyMarkup
+    }));
+
   async function sendText(chatId, text) {
     const chunks = splitTelegramText(text);
     for (const chunk of chunks) await sendTelegramMessage(chatId, chunk);
@@ -714,6 +730,261 @@ function createBotChat(options = {}) {
         await sendTelegramMessage(chatId, chunk.text);
       }
     }
+  }
+
+  const modelChoiceCache = new Map();
+  const tokenPresets = [512, 1200, 2000, 4000, 8000, 16000, 32000];
+  const reasoningChoices = ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  const reasoningLabels = {
+    auto: 'Авто',
+    minimal: 'Минимальный',
+    low: 'Низкий',
+    medium: 'Средний',
+    high: 'Высокий',
+    xhigh: 'Максимальный'
+  };
+
+  function getSettingsUrl() {
+    let value = options.webAppUrl || process.env.WEB_APP_URL || '';
+    try {
+      const target = new URL(value);
+      if (target.protocol !== 'https:') return '';
+      target.searchParams.set('open', 'settings');
+      return target.toString();
+    } catch {
+      return '';
+    }
+  }
+
+  function currentUserModel(user) {
+    return (activeChat(user) || {}).model || user.model || defaultModel;
+  }
+
+  function currentTokenLimit(user) {
+    return Math.max(1, Math.min(32_000, Math.round(Number(user.settings && user.settings.maxTokens) || 1_200)));
+  }
+
+  function settingsMessageText(user, view = 'main') {
+    if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
+    if (view === 'reasoning') {
+      const current = user.settings && user.settings.reasoning || 'auto';
+      return 'Выберите уровень рассуждений. Текущее значение: ' + (reasoningLabels[current] || 'Авто') + '.';
+    }
+    if (view === 'models') {
+      const entry = modelChoiceCache.get(String(user.id || ''));
+      const count = entry && Array.isArray(entry.models) ? entry.models.length : 0;
+      return 'Выберите модель из списка провайдера' + (count ? ' (' + count + ' вариантов)' : '') + '.';
+    }
+
+    const settings = user.settings || {};
+    const apiBase = user.apiBaseUrl || apiBaseUrl || 'не задан';
+    const currentChat = activeChat(user);
+    const maxTokens = currentTokenLimit(user);
+    return [
+      'Настройки TG Nexus',
+      'API: ' + apiBase,
+      'Модель: ' + currentUserModel(user),
+      'Лимит ответа: ' + maxTokens + ' токенов',
+      'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто'),
+      'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
+      'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
+      'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
+      'История синхронизируется с Mini App при открытии и сохранении.',
+      'Часть параметров можно менять кнопками ниже; полный набор доступен в Mini App.'
+    ].join('\n');
+  }
+
+  function settingsKeyboard(user, view = 'main') {
+    if (view === 'tokens') {
+      const current = currentTokenLimit(user);
+      const rows = [];
+      for (let i = 0; i < tokenPresets.length; i += 3) {
+        rows.push(tokenPresets.slice(i, i + 3).map((value) => ({
+          text: (value === current ? '✓ ' : '') + value.toLocaleString('ru-RU'),
+          callback_data: 'tn:t:' + value
+        })));
+      }
+      rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
+      return { inline_keyboard: rows };
+    }
+    if (view === 'reasoning') {
+      const current = user.settings && user.settings.reasoning || 'auto';
+      const rows = [];
+      for (let i = 0; i < reasoningChoices.length; i += 2) {
+        rows.push(reasoningChoices.slice(i, i + 2).map((value) => ({
+          text: (value === current ? '✓ ' : '') + reasoningLabels[value],
+          callback_data: 'tn:r:' + value
+        })));
+      }
+      rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
+      return { inline_keyboard: rows };
+    }
+    if (view === 'models') {
+      const entry = modelChoiceCache.get(String(user.id || ''));
+      const models = entry && entry.expiresAt > Date.now() ? entry.models : [];
+      const rows = [];
+      for (let i = 0; i < models.length; i += 2) {
+        rows.push(models.slice(i, i + 2).map((model, offset) => ({
+          text: (model === currentUserModel(user) ? '✓ ' : '') + model.slice(0, 40),
+          callback_data: 'tn:m:' + (i + offset)
+        })));
+      }
+      rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
+      return { inline_keyboard: rows };
+    }
+
+    const settings = user.settings || {};
+    const rows = [
+      [
+        { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
+        { text: '🧠 Рассуждения', callback_data: 'tn:reason' }
+      ],
+      [
+        { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
+        { text: '🤖 Модель', callback_data: 'tn:model' }
+      ],
+      [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
+    ];
+    const url = getSettingsUrl();
+    if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
+    return { inline_keyboard: rows };
+  }
+
+  async function safeAnswerCallback(queryId, text = '') {
+    try { await answerCallbackQuery(queryId, text); } catch {}
+  }
+
+  async function renderSettingsCallback(query, user, view = 'main', answerText = 'Настройки обновлены.') {
+    const message = query && query.message;
+    if (!message || !message.chat || !Number.isSafeInteger(Number(message.message_id))) {
+      await safeAnswerCallback(query.id, 'Сообщение настроек недоступно. Отправьте /settings ещё раз.');
+      return false;
+    }
+    try {
+      await editTelegramMessage(
+        message.chat.id,
+        message.message_id,
+        settingsMessageText(user, view),
+        settingsKeyboard(user, view)
+      );
+    } catch (error) {
+      const description = String(error && (error.telegramDescription || error.message) || '');
+      if (!/message is not modified/i.test(description)) {
+        await safeAnswerCallback(query.id, 'Не удалось обновить панель. Отправьте /settings ещё раз.');
+        return false;
+      }
+    }
+    await safeAnswerCallback(query.id, answerText);
+    return true;
+  }
+
+  async function handleCallbackQuery(query) {
+    if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
+        !query.data.startsWith('tn:')) return false;
+
+    const message = query.message;
+    const userId = query.from && query.from.id;
+    if (!message || !message.chat || message.chat.type !== 'private' ||
+        userId == null || Number(message.chat.id) !== Number(userId)) {
+      await safeAnswerCallback(query.id, 'Эти настройки доступны только в личном чате.');
+      return false;
+    }
+    if (!store.enabled) {
+      await safeAnswerCallback(query.id, 'Защищённое хранилище недоступно.');
+      return true;
+    }
+
+    let user;
+    try {
+      user = store.getUser(userId);
+      user.id = String(userId);
+    } catch {
+      await safeAnswerCallback(query.id, 'Не удалось открыть хранилище настроек.');
+      return true;
+    }
+
+    const data = query.data;
+    let view = 'main';
+    let notice = 'Настройки обновлены.';
+    try {
+      if (data === 'tn:search') {
+        const previous = user.settings || {};
+        user.settings = { ...previous, internetSearch: previous.internetSearch !== true };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        notice = 'Поиск в интернете ' + (user.settings.internetSearch ? 'включён.' : 'выключен.');
+      } else if (data === 'tn:reason') {
+        view = 'reasoning';
+        notice = 'Выберите уровень рассуждений.';
+      } else if (data === 'tn:tokens') {
+        view = 'tokens';
+        notice = 'Выберите лимит ответа.';
+      } else if (data === 'tn:model') {
+        if (!user.apiKey) {
+          await safeAnswerCallback(query.id, 'Ключ для Telegram-чата не настроен. Откройте полные настройки Mini App.');
+          return true;
+        }
+        const models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl);
+        const current = currentUserModel(user);
+        const choices = [current, ...models.filter((model) => model !== current)].slice(0, 20);
+        modelChoiceCache.set(String(userId), { models: choices, expiresAt: Date.now() + 10 * 60_000 });
+        while (modelChoiceCache.size > 100) modelChoiceCache.delete(modelChoiceCache.keys().next().value);
+        view = 'models';
+        notice = 'Выберите модель.';
+      } else if (data === 'tn:back' || data === 'tn:refresh') {
+        view = 'main';
+      } else {
+        const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
+        const tokenMatch = data.match(/^tn:t:(512|1200|2000|4000|8000|16000|32000)$/);
+        const modelMatch = data.match(/^tn:m:(\d{1,2})$/);
+        if (reasoningMatch) {
+          const previous = user.settings || {};
+          user.settings = { ...previous, reasoning: reasoningMatch[1] };
+          try { store.save(); } catch (error) { user.settings = previous; throw error; }
+          notice = 'Уровень рассуждений: ' + reasoningLabels[reasoningMatch[1]] + '.';
+        } else if (tokenMatch) {
+          const previous = user.settings || {};
+          user.settings = { ...previous, maxTokens: Number(tokenMatch[1]) };
+          try { store.save(); } catch (error) { user.settings = previous; throw error; }
+          notice = 'Лимит ответа: ' + tokenMatch[1] + ' токенов.';
+        } else if (modelMatch) {
+          const entry = modelChoiceCache.get(String(userId));
+          const index = Number(modelMatch[1]);
+          const model = entry && entry.expiresAt > Date.now() && entry.models[index];
+          if (!model) {
+            await safeAnswerCallback(query.id, 'Список моделей устарел. Нажмите «Модель» ещё раз.');
+            return true;
+          }
+          const previousModel = user.model;
+          const previousExplicit = user.modelExplicit;
+          const chat = activeChat(user);
+          const previousChatModel = chat && chat.model;
+          user.model = model;
+          user.modelExplicit = true;
+          if (chat) { chat.model = model; chat.updatedAt = Date.now(); }
+          try { store.save(); } catch (error) {
+            user.model = previousModel;
+            user.modelExplicit = previousExplicit;
+            if (chat) chat.model = previousChatModel;
+            throw error;
+          }
+          notice = 'Модель выбрана: ' + model;
+        } else {
+          await safeAnswerCallback(query.id, 'Эта кнопка устарела. Отправьте /settings ещё раз.');
+          return true;
+        }
+      }
+      return await renderSettingsCallback(query, user, view, notice);
+    } catch {
+      await safeAnswerCallback(query.id, 'Не удалось сохранить настройку. Повторите попытку.');
+      return true;
+    }
+  }
+
+  async function sendSettings(chatId, user) {
+    user.id = String(user.id || '');
+    await sendTelegramMessage(chatId, settingsMessageText(user), {
+      reply_markup: settingsKeyboard(user)
+    });
   }
 
   function isPrivateUserMessage(message) {
@@ -1072,28 +1343,7 @@ function createBotChat(options = {}) {
         return true;
       }
       if (command === 'settings') {
-        const settings = user.settings || {};
-        const apiBase = user.apiBaseUrl || apiBaseUrl || 'не задан';
-        const currentChat = activeChat(user);
-        const maxTokens = Math.max(1, Math.min(32_000, Math.round(Number(settings.maxTokens) || 1_200)));
-        const status = [
-          'Настройки TG Nexus',
-          'API: ' + apiBase,
-          'Модель: ' + ((currentChat && currentChat.model) || user.model || defaultModel),
-          'Лимит ответа: ' + maxTokens + ' токенов',
-          'Рассуждения: ' + (settings.reasoning || 'auto'),
-          'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
-          'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
-          'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
-          'История синхронизируется с Mini App при открытии и сохранении.'
-        ].join('\n');
-        let settingsUrl = options.webAppUrl || process.env.WEB_APP_URL || '';
-        try { const target = new URL(settingsUrl); target.searchParams.set('open', 'settings'); settingsUrl = target.toString(); }
-        catch { settingsUrl = ''; }
-        const sendOptions = settingsUrl ? { reply_markup: { inline_keyboard: [[
-          { text: 'Открыть настройки', web_app: { url: settingsUrl } }
-        ]] } } : {};
-        await sendTelegramMessage(chatId, status, sendOptions);
+        await sendSettings(chatId, user);
         return true;
       }
       if (parsed) {
@@ -1378,6 +1628,7 @@ function createBotChat(options = {}) {
 
   return {
     handleMessage,
+    handleCallbackQuery,
     getSyncState,
     applySyncState,
     setApiKey,
