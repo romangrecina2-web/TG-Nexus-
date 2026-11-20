@@ -364,7 +364,7 @@ function createEncryptedStore(options = {}) {
     }
     const user = current.users[id];
     if (typeof user.apiKey !== 'string') user.apiKey = '';
-    if (!normalizeApiBase(user.apiBaseUrl)) user.apiBaseUrl = apiBaseUrl || DEFAULT_API_BASE_URL;
+    if (!normalizeApiBase(user.apiBaseUrl)) user.apiBaseUrl = options.apiBaseUrl || DEFAULT_API_BASE_URL;
     if (!user.settings || typeof user.settings !== 'object' || Array.isArray(user.settings)) user.settings = {};
     if (!Array.isArray(user.chats)) user.chats = [];
     if (!user.model) user.model = options.defaultModel || DEFAULT_MODEL;
@@ -641,7 +641,8 @@ function createBotChat(options = {}) {
   const store = options.store || createEncryptedStore({
     encryptionKey: options.encryptionKey || process.env.BOT_DATA_ENCRYPTION_KEY,
     dataDir: options.dataDir || process.env.DATA_DIR,
-    defaultModel
+    defaultModel,
+    apiBaseUrl
   });
   const updateContext = new AsyncLocalStorage();
 
@@ -975,6 +976,7 @@ function createBotChat(options = {}) {
     }
 
     chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'user', content: text.slice(0, MAX_MESSAGE_LENGTH) });
+    chat.updatedAt = Date.now();
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
@@ -989,6 +991,7 @@ function createBotChat(options = {}) {
     }
 
     chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'assistant', content: answer });
+    chat.updatedAt = Date.now();
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
