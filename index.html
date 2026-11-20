@@ -71,13 +71,21 @@
         <button data-p="or">OpenRouter, бесплатно</button>
         <button data-p="nv">NVIDIA</button>
       </div>
+      <label for="providerProfile">Сохранённые профили API</label>
+      <select id="providerProfile" aria-label="Выбрать профиль API"></select>
+      <div class="r2">
+        <input id="providerName" maxlength="48" placeholder="Название профиля" autocomplete="off">
+        <button class="sec" id="providerSave" type="button">Сохранить профиль</button>
+      </div>
+      <div class="btns"><button class="sec danger" id="providerRemove" type="button" disabled>Удалить профиль</button></div>
+      <small>Можно сохранить до 12 адресов OpenAI-совместимых API. Поддерживаются GET /models и POST /chat/completions. У каждого адреса свой ключ; ключи сохраняются отдельно в Telegram SecureStorage. Для API с другим форматом нужен отдельный адаптер.</small>
       <label for="cUrl">Адрес API</label>
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
       <div class="r2"><input id="cKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="sec" id="kEye" type="button" style="display:none">Показать</button></div>
       <div class="btns"><button class="sec danger" id="keyRemove" type="button" disabled>Удалить сохранённый ключ</button></div>
       <small id="keyStatus" aria-live="polite">Проверяю защищённое хранилище Telegram…</small>
-      <small>После успешной проверки ключ сохраняется в SecureStorage Telegram на этом устройстве (Android Keystore / iOS Keychain). Он не попадает в localStorage, историю чатов, экспорт или GitHub. Сохранение переживает перезапуск Mini App и сон Render. Если ваш клиент Telegram не поддерживает SecureStorage, ключ останется только в памяти вкладки.</small>
+      <small>После успешной проверки ключ текущего профиля сохраняется в SecureStorage Telegram на этом устройстве (Android Keystore / iOS Keychain). Ключи разных профилей не перезаписывают друг друга. Они не попадают в localStorage, историю чатов, экспорт или GitHub. Если ваш клиент Telegram не поддерживает SecureStorage, ключи доступны только в текущей вкладке.</small>
       <label for="cModel">Модель</label>
       <input id="cModel" list="mlist" autocomplete="off" autocapitalize="off" spellcheck="false">
       <datalist id="mlist"></datalist>
@@ -106,10 +114,10 @@
         <summary><span><b>Разработка и песочница</b><small>Мультиагентный режим, JavaScript и интернет</small></span></summary>
         <div class="settings-accordion-body">
           <label class="chk" for="cMultiAgent"><input type="checkbox" id="cMultiAgent"> Использовать несколько ИИ для задач с кодом</label>
-          <small>Вспомогательные агенты анализируют задачу параллельно и передают замечания основной модели, которая собирает итоговый ответ. Модели берутся из сохранённого списка и используют текущий адрес API. Одну модель можно использовать в нескольких ролях.</small>
+          <small>Вспомогательные агенты анализируют задачу параллельно и передают замечания основной модели, которая собирает итоговый ответ. Каждый агент может использовать отдельный сохранённый профиль API со своим адресом, ключом и списком моделей. Если доступен только один профиль с ключом, агенты используют его модели.</small>
           <label for="cAgentCount">Количество ИИ в команде: <output id="agentCountValue">3</output></label>
           <input type="range" id="cAgentCount" min="1" max="20" step="1" value="3">
-          <small>От 1 до 20, включая основную модель. Остальные ИИ работают как специалисты; запросы отправляются группами максимум по 4. Каждый дополнительный агент расходует токены и может тарифицироваться провайдером.</small>
+          <small>От 1 до 20, включая основную модель. Остальные ИИ работают как специалисты; запросы отправляются группами максимум по 4. Каждый дополнительный агент расходует токены и может тарифицироваться своим провайдером. Дополнительные профили и их ключи хранятся на этом устройстве; в Telegram-бот синхронизируется только выбранный основной профиль.</small>
           <label class="chk" for="cSandbox"><input type="checkbox" id="cSandbox"> Разрешить запуск JavaScript в песочнице</label>
           <small>Код запускается в отдельном изолированном iframe без доступа к файлам, localStorage, sessionStorage и API-ключу. Это не полноценный сервер и не Python-среда.</small>
           <label class="chk" for="cSandboxInternet"><input type="checkbox" id="cSandboxInternet"> Разрешить интернет в песочнице</label>
