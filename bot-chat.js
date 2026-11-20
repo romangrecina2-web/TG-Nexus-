@@ -165,6 +165,7 @@ function splitTelegramText(value, maxLength = TELEGRAM_CHUNK_LENGTH) {
 }
 
 
+
 function escapeHtml(value) {
   return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -178,10 +179,10 @@ function formatInlineMarkdown(value) {
   const tick = String.fromCharCode(96);
   const pattern = new RegExp(
     tick + "[^" + tick + "\\n]*" + tick +
-    "|\\\\[[^\\\\]\\\\n]+\\\\]\\\\((?:https?:\\\\/\\\\/|tg:\\\\/\\\\/)[^\\\\s)]{1,2048}\\\\)" +
-    "|\\\\*\\\\*[^*\\\\n]+\\\\*\\\\*|__[^_\\\\n]+__" +
-    "|(?<![\\\\p{L}\\\\p{N}*])\\\\*(?!\\\\s)[^*\\\\n]+?\\\\*(?!\\\\*)" +
-    "|(?<![\\\\p{L}\\\\p{N}])_(?!\\\\s)[^_\\\\n]+?_(?![\\\\p{L}\\\\p{N}])",
+    "|\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|tg:\\/\\/)[^\\s)]{1,2048}\\)" +
+    "|\\*\\*[^*\\n]+\\*\\*|__[^_\\n]+__" +
+    "|(?<![\\p{L}\\p{N}*])\\*(?!\\s)[^*\\n]+?\\*(?!\\*)" +
+    "|(?<![\\p{L}\\p{N}])_(?!\\s)[^_\\n]+?_(?![\\p{L}\\p{N}])",
     'gu'
   );
   let result = '';
@@ -192,7 +193,7 @@ function formatInlineMarkdown(value) {
     if (token.startsWith(tick)) {
       result += '<code>' + escapeHtml(token.slice(1, -1)) + '</code>';
     } else if (token.startsWith('[')) {
-      const link = token.match(/^\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+|tg:\\/\\/[^\\s)]+)\\)$/u);
+      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+|tg:\/\/[^\s)]+)\)$/u);
       if (!link) {
         result += escapeHtml(token);
       } else {
@@ -219,7 +220,7 @@ function formatInlineMarkdown(value) {
 }
 
 function splitTableCells(line) {
-  return String(line).trim().replace(/^\\|/, '').replace(/\\|$/, '').split('|').map((cell) => cell.trim());
+  return String(line).trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
 }
 
 function isTableSeparator(line) {
@@ -228,7 +229,7 @@ function isTableSeparator(line) {
 }
 
 function markdownToTelegramHtml(markdown) {
-  const lines = String(markdown == null ? '' : markdown).replace(/\\r\\n?/g, '\\n').split('\\n');
+  const lines = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n').split('\n');
   const output = [];
   const fence = String.fromCharCode(96).repeat(3);
 
@@ -241,12 +242,11 @@ function markdownToTelegramHtml(markdown) {
         code.push(lines[i]);
         i += 1;
       }
-      output.push('<pre><code>' + escapeHtml(code.join('\\n')) + '</code></pre>');
+      output.push('<pre><code>' + escapeHtml(code.join('\n')) + '</code></pre>');
       continue;
     }
 
     if (i + 1 < lines.length && line.includes('|') && lines[i + 1].includes('|') && isTableSeparator(lines[i + 1])) {
-      const headers = splitTableCells(line);
       i += 2;
       while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
         const cells = splitTableCells(lines[i]);
@@ -262,15 +262,15 @@ function markdownToTelegramHtml(markdown) {
       continue;
     }
 
-    if (/^\\s*(?:-{3,}|\\*{3,}|_{3,})\\s*$/.test(line)) continue;
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) continue;
 
-    const heading = line.match(/^ {0,3}#{1,6}\\s+(.+?)\\s*#*\\s*$/);
+    const heading = line.match(/^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
     if (heading) {
       output.push('<b>' + formatInlineMarkdown(heading[1]) + '</b>');
       continue;
     }
 
-    const bullet = line.match(/^(\\s*)[*+-]\\s+(.*)$/);
+    const bullet = line.match(/^(\s*)[*+-]\s+(.*)$/);
     if (bullet) {
       output.push((bullet[1] ? '  ' : '') + '• ' + formatInlineMarkdown(bullet[2]));
       continue;
@@ -279,14 +279,14 @@ function markdownToTelegramHtml(markdown) {
     output.push(formatInlineMarkdown(line));
   }
 
-  return output.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function telegramHtmlToPlainText(html) {
   return String(html)
-    .replace(/<\\/?(?:b|i|code|pre)(?:\\s+[^>]*)?>/gi, '')
-    .replace(/<a\\s+href="[^"]*">/gi, '')
-    .replace(/<\\/a>/gi, '')
+    .replace(/<\/?(?:b|i|code|pre)(?:\s+[^>]*)?>/gi, '')
+    .replace(/<a\s+href="[^"]*">/gi, '')
+    .replace(/<\/a>/gi, '')
     .replace(/&(amp|lt|gt|quot|#39);/g, (entity) => ({
       '&amp;': '&',
       '&lt;': '<',
@@ -299,7 +299,7 @@ function telegramHtmlToPlainText(html) {
 function splitTelegramHtml(value, maxLength = TELEGRAM_CHUNK_LENGTH) {
   const html = String(value == null ? '' : value);
   if (!html) return [{ html: ' ', text: ' ' }];
-  const tokenPattern = /<\\/?(?:b|i|code|pre|a)(?:\\s+href="[^"]*")?\\s*>|&(?:amp|lt|gt|quot|#39);|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\s\\S]/g;
+  const tokenPattern = /<\/?(?:b|i|code|pre|a)(?:\s+href="[^"]*")?\s*>|&(?:amp|lt|gt|quot|#39);|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/g;
   const tokens = html.match(tokenPattern) || [];
   const chunks = [];
   const stack = [];
@@ -322,8 +322,8 @@ function splitTelegramHtml(value, maxLength = TELEGRAM_CHUNK_LENGTH) {
   }
 
   for (const token of tokens) {
-    const opening = token.match(/^<(b|i|code|pre|a)(?:\\s+href="[^"]*")?\\s*>$/i);
-    const closing = token.match(/^<\\/(b|i|code|pre|a)>$/i);
+    const opening = token.match(/^<(b|i|code|pre|a)(?:\s+href="[^"]*")?\s*>$/i);
+    const closing = token.match(/^<\/(b|i|code|pre|a)>$/i);
 
     if (opening) {
       const item = { name: opening[1].toLowerCase(), raw: token };
