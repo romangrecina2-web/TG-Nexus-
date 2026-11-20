@@ -229,7 +229,7 @@ function makeRemoteSyncState(includeApiKey,clearApiKey){
 }
 function mergeRemoteChats(remoteChats){
   if(!Array.isArray(remoteChats))return;
-  var byId={};
+  var byId=Object.create(null);
   S.chats.forEach(function(chat){byId[String(chat.id)]=chat});
   remoteChats.forEach(function(remote){
     if(!remote||typeof remote.id!=='string')return;
@@ -278,10 +278,12 @@ async function applyRemoteSyncState(state){
     S.cfg.model=state.model;addSavedModel(state.model);
   }
   var settings=state.settings||{};
-  if(typeof settings.systemPrompt==='string')S.cfg.sys=settings.systemPrompt;
-  if(settings.temperature===null||settings.temperature===undefined)S.cfg.temp='';
-  else if(Number.isFinite(Number(settings.temperature)))S.cfg.temp=String(settings.temperature);
-  if(Number.isFinite(Number(settings.maxTokens)))S.cfg.max=String(settings.maxTokens);
+  if(Object.prototype.hasOwnProperty.call(settings,'systemPrompt')&&typeof settings.systemPrompt==='string')S.cfg.sys=settings.systemPrompt;
+  if(Object.prototype.hasOwnProperty.call(settings,'temperature')){
+    if(settings.temperature===null||settings.temperature===undefined)S.cfg.temp='';
+    else if(Number.isFinite(Number(settings.temperature)))S.cfg.temp=String(settings.temperature);
+  }
+  if(Object.prototype.hasOwnProperty.call(settings,'maxTokens')&&Number.isFinite(Number(settings.maxTokens)))S.cfg.max=String(settings.maxTokens);
   if(typeof settings.internetSearch==='boolean')S.cfg.internet=settings.internetSearch;
   if(typeof settings.sandbox==='boolean')S.cfg.sandbox=settings.sandbox;
   if(typeof settings.sandboxInternet==='boolean')S.cfg.sandboxInternet=settings.sandboxInternet;
@@ -342,7 +344,7 @@ async function flushRemoteSync(){
     syncRetryCount++;
     syncStatus('ошибка, повторю автоматически: '+String(error&&error.message||error).slice(0,100),'bad');
     if(syncTimer)clearTimeout(syncTimer);
-    syncTimer=setTimeout(function(){flushRemoteSync()},Math.min(60000,5000*syncRetryCount));
+    syncTimer=setTimeout(function(){flushRemoteSync()},syncRetryCount===1?60000:Math.min(60000,5000*syncRetryCount));
   }finally{
     syncBusy=false;
     if(syncAgain){syncAgain=false;queueRemoteSync(false,false)}
@@ -406,6 +408,7 @@ async function removeSavedApiKey(){
   try{
     await secureKeyStorage.remove();
     ACTIVE_KEY='';keyInputTouched=true;keyStorageStatus='empty';$('#cKey').value='';
+    queueRemoteSync(false,true);
     updateKeyStorageUi();render();toast('Сохранённый API-ключ удалён');
   }catch(error){toast('Не удалось удалить сохранённый ключ')}
 }
@@ -1214,6 +1217,7 @@ $('#bTest').onclick=async function(){
     }
     updateKeyStorageUi();
     note(out+persistenceNote,'ok');
+    queueRemoteSync(true,false);
   }catch(e){note(niceErr(e),'bad')}
 };
 $('#bModels').onclick=async function(){
@@ -1533,9 +1537,17 @@ if(TG){
 if(!storageOK)$('#nostore').style.display='block';
 if(TG){
   keyRestorePromise=restoreSavedApiKey();
-  keyRestorePromise.then(function(restored){if(restored)render()});
+  keyRestorePromise.then(async function(restored){
+    try{await pullRemoteSync()}
+    catch(error){syncStatus('сервер пока недоступен: '+String(error&&error.message||error).slice(0,90),'bad')}
+    syncReady=true;
+    queueRemoteSync(!!ACTIVE_KEY,false);
+    if(shouldOpenSettings())openSet();
+    if(restored||ACTIVE_KEY)render();
+  });
 }else{
   keyStorageStatus='outside';updateKeyStorageUi();
+  syncStatus('откройте Mini App через Telegram');
 }
 window.addEventListener('beforeunload',saveNow);
 window.addEventListener('pagehide',saveNow);
