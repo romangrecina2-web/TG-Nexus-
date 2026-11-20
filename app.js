@@ -420,7 +420,7 @@ async function applyRemoteSyncState(state){
   mergeRemoteChats(state.chats);
   if(typeof state.activeChatId==='string'&&S.chats.some(function(chat){return chat.id===state.activeChatId}))S.cur=state.activeChatId;
   if(typeof state.apiKey==='string'&&state.apiKey&&state.apiKey!==ACTIVE_KEY){
-    ACTIVE_KEY=state.apiKey;
+    ACTIVE_KEY=state.apiKey;providerKeyMemory[keyApiBase()]=state.apiKey;
     if(secureKeyStorage&&secureKeyStorage.isAvailable()){
       try{await secureKeyStorage.save(S.cfg.url,ACTIVE_KEY);keyStorageStatus='saved'}
       catch(error){keyStorageStatus='save-error'}
@@ -1304,6 +1304,12 @@ $('#cUrl').addEventListener('change',function(){
   if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}
   if(next!==S.cfg.url){
     if(ACTIVE_KEY&&!keyInputTouched)providerKeyMemory[S.cfg.url]=ACTIVE_KEY;
+    var existing=(S.cfg.providers||[]).find(function(profile){return profile.url===next});
+    if(existing){applyProviderProfile(existing);return}
+    if((S.cfg.providers||[]).length>=12){this.value=S.cfg.url;toast('Сначала удалите профиль: разрешено не больше 12.');return}
+    syncActiveProviderProfile();
+    var added={id:'provider_'+makeId(),name:host(next)||'Новый API',url:next,model:S.cfg.model,models:(S.cfg.models||[]).slice()};
+    S.cfg.providers.push(added);S.cfg.activeProviderId=added.id;
     ACTIVE_KEY=providerKeyMemory[next]||'';keyInputTouched=false;keyStorageStatus=ACTIVE_KEY?'session':'loading';$('#cKey').value='';
   }
   S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;
