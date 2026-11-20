@@ -3,11 +3,20 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
 const { URL } = require('node:url');
+const { createBotChat, BOT_COMMANDS } = require('./bot-chat');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
 const PORT = Number(process.env.PORT || 10000);
+
+const botChat = createBotChat({
+  botToken: BOT_TOKEN,
+  apiBaseUrl: process.env.AI_API_BASE_URL,
+  defaultModel: process.env.AI_DEFAULT_MODEL,
+  encryptionKey: process.env.BOT_DATA_ENCRYPTION_KEY,
+  dataDir: process.env.DATA_DIR
+});
 
 const MAX_TELEGRAM_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BYTES = MAX_TELEGRAM_FILE_BYTES + 2 * 1024 * 1024;
@@ -288,7 +297,7 @@ async function handleStart(message) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
       !message.from || message.chat.id !== message.from.id) return;
 
-  const text = 'На данный момент бот находится в разработке. Нажмите на мини-приложение, чтобы начать пользоваться.';
+  const text = 'Привет! Можно общаться с ИИ прямо в этом чате или открыть мини-приложение кнопкой ниже.';
   await telegramApi('sendMessage', {
     chat_id: message.chat.id,
     text,
@@ -325,8 +334,11 @@ async function handleWebhook(req, res) {
                message.chat && message.chat.type === 'private') {
       await telegramApi('sendMessage', {
         chat_id: message.chat.id,
-        text: 'Откройте мини-приложение кнопкой внизу чата или кнопкой «Открыть мини-приложение».'
+        text: 'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.'
       });
+    }
+    else {
+      await botChat.handleMessage(message);
     }
   } catch (error) {
     // Do not log request bodies, Telegram initData, or user file contents.
@@ -413,6 +425,11 @@ async function configureWebhook() {
       secret_token: WEBHOOK_SECRET,
       allowed_updates: ['message']
     });
+    try {
+      await telegramApi('setMyCommands', { commands: BOT_COMMANDS });
+    } catch {
+      console.error('Could not register Telegram bot commands.');
+    }
     console.log('Telegram webhook configured.');
   } catch {
     console.error('Could not configure Telegram webhook.');

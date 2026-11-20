@@ -14,3 +14,11 @@ services:
         value: https://romangrecina2-web.github.io/TG-test-/
       - key: ALLOWED_ORIGINS
         value: https://romangrecina2-web.github.io
+      - key: AI_API_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: AI_DEFAULT_MODEL
+        value: nvidia/nemotron-3-ultra-550b-a55b:free
+      - key: BOT_DATA_ENCRYPTION_KEY
+        sync: false
+      - key: DATA_DIR
+        value: ./data

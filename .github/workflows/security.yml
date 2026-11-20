@@ -20,6 +20,7 @@ jobs:
       - name: Syntax checks
         run: |
           node --check server.js
+          node --check bot-chat.js
           node --check app.js
           node --check sandbox.js
       - name: Unit tests
