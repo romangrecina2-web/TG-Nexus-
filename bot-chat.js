@@ -900,8 +900,9 @@ function createBotChat(options = {}) {
     }
 
     user.model = selected;
+    user.modelExplicit = true;
     const chat = activeChat(user);
-    if (chat) chat.model = selected;
+    if (chat) { chat.model = selected; chat.updatedAt = Date.now(); }
     store.save();
     await sendText(message.chat.id, 'Модель выбрана: ' + selected);
   }
@@ -1261,13 +1262,13 @@ function createBotChat(options = {}) {
   function getSyncState(userId) {
     const user = store.getUser(userId);
     return {
-      apiBaseUrl: user.apiBaseUrl || apiBaseUrl,
-      model: user.model || defaultModel,
+      apiBaseUrl: (user.apiBaseUrlExplicit || user.apiKey) ? (user.apiBaseUrl || apiBaseUrl) : '',
+      model: user.modelExplicit || user.model !== defaultModel ? (user.model || defaultModel) : '',
       apiKey: user.apiKey || '',
       settings: user.settings || {},
       activeChatId: user.activeChatId || null,
       chats: user.chats || [],
-      initialized: !!(user.syncInitialized || user.apiKey || user.chats.length || Object.keys(user.settings || {}).length || user.model !== defaultModel || user.apiBaseUrl !== apiBaseUrl)
+      initialized: !!(user.syncInitialized || user.apiKey || user.chats.length || Object.keys(user.settings || {}).length || user.modelExplicit || user.apiBaseUrlExplicit)
     };
   }
 
@@ -1279,9 +1280,11 @@ function createBotChat(options = {}) {
       const previousBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
       if (previousBase !== nextBase) user.apiKey = '';
       user.apiBaseUrl = nextBase;
+      user.apiBaseUrlExplicit = true;
     }
     if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\\s/.test(input.model)) {
       user.model = input.model.trim();
+      user.modelExplicit = true;
     }
     if (input.settings && typeof input.settings === 'object' && !Array.isArray(input.settings)) {
       const source = input.settings;
@@ -1348,6 +1351,7 @@ function createBotChat(options = {}) {
     }
     if (!(await validateKey(apiKey, providerBase))) throw new Error('API key validation failed.');
     user.apiBaseUrl = providerBase;
+    user.apiBaseUrlExplicit = true;
     user.apiKey = apiKey;
     store.save();
     return true;
