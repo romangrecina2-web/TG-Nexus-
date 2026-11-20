@@ -260,9 +260,9 @@ function safeEqualText(left, right) {
 }
 
 function isRetryableWebhookError(error) {
-  const code = Number(error && error.telegramErrorCode);
+  const code = Number(error && (error.telegramErrorCode || error.status));
   if (!Number.isInteger(code) || code <= 0) return true;
-  return code === 429 || code >= 500;
+  return code === 408 || code === 425 || code === 429 || code >= 500;
 }
 
 async function telegramApi(method, payload) {
@@ -276,6 +276,7 @@ async function telegramApi(method, payload) {
   if (!response.ok || !result.ok) {
     const error = new Error(result.description || ('Telegram API error: HTTP ' + response.status));
     error.telegramErrorCode = Number(result.error_code) || response.status;
+    error.retryAfterSeconds = Number(result.parameters && result.parameters.retry_after) || 0;
     throw error;
   }
   return result.result;
@@ -318,11 +319,8 @@ async function sendCodeToBot(userId, fileName, code) {
 async function handleStart(message) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
       !message.from || message.chat.id !== message.from.id) return;
-
   const text = 'Привет! Можно общаться с ИИ прямо в этом чате или открыть мини-приложение кнопкой ниже.';
-  await telegramApi('sendMessage', {
-    chat_id: message.chat.id,
-    text,
+  await botChat.sendMessage(message.chat.id, text, {
     reply_markup: {
       inline_keyboard: [[
         { text: 'Открыть мини-приложение', web_app: { url: WEB_APP_URL } }
@@ -331,17 +329,30 @@ async function handleStart(message) {
   });
 }
 
+async function processTelegramUpdate(update) {
+  const message = update && update.message;
+  if (!message) return;
+  const text = typeof message.text === 'string' ? message.text.trim() : '';
+  if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
+    await handleStart(message);
+    return;
+  }
+  if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
+      message.chat && message.chat.type === 'private') {
+    await botChat.sendMessage(message.chat.id,
+      'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.');
+    return;
+  }
+  await botChat.handleMessage(message);
+}
+
 async function handleWebhook(req, res, dependencies = {}) {
   const webhookSecret = dependencies.webhookSecret || WEBHOOK_SECRET;
-  const sendTelegram = dependencies.telegramApi || telegramApi;
-  const startHandler = dependencies.handleStart || handleStart;
   const textBot = dependencies.botChat || botChat;
-
   if (!safeEqualText(req.headers['x-telegram-bot-api-secret-token'], webhookSecret)) {
     webhookDiagnostics.rejectedRequests += 1;
     return json(res, 403, { ok: false });
   }
-
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
     return json(res, 415, { ok: false });
   }
@@ -355,38 +366,31 @@ async function handleWebhook(req, res, dependencies = {}) {
 
   webhookDiagnostics.updatesReceived += 1;
   webhookDiagnostics.lastReceivedAt = new Date().toISOString();
-
   try {
-    const message = update && update.message;
-    const text = message && typeof message.text === 'string' ? message.text.trim() : '';
-    if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-      await startHandler(message);
-    } else if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
-               message.chat && message.chat.type === 'private') {
-      await sendTelegram('sendMessage', {
-        chat_id: message.chat.id,
-        text: 'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.'
-      });
-    } else {
-      await textBot.handleMessage(message);
+    if (!textBot || typeof textBot.enqueueUpdate !== 'function') {
+      const error = new Error('Telegram update queue is unavailable.');
+      error.status = 503;
+      throw error;
     }
-
+    const result = await textBot.enqueueUpdate(update);
     webhookDiagnostics.updatesProcessed += 1;
     webhookDiagnostics.lastProcessedAt = new Date().toISOString();
-    return json(res, 200, { ok: true });
+    return json(res, 200, {
+      ok: true,
+      queued: Boolean(result && result.accepted),
+      duplicate: Boolean(result && result.duplicate)
+    });
   } catch (error) {
     // Never log message text, chat/user IDs, API keys, webhook secrets, or request bodies.
-    const telegramErrorCode = Number(error && error.telegramErrorCode) || null;
+    const code = Number(error && (error.telegramErrorCode || error.status)) || null;
     webhookDiagnostics.processingFailures += 1;
     webhookDiagnostics.lastFailureAt = new Date().toISOString();
-    webhookDiagnostics.lastFailureCode = telegramErrorCode;
+    webhookDiagnostics.lastFailureCode = code;
     const updateId = update && Number.isSafeInteger(update.update_id) ? update.update_id : null;
     const errorName = error && typeof error.name === 'string' ? error.name : 'Error';
-    console.error('Webhook processing failed.', { updateId, errorName, telegramErrorCode });
-
-    // Telegram retries 5xx responses. Do not endlessly retry permanent 4xx delivery errors.
+    console.error('Webhook enqueue failed.', { updateId, errorName, telegramErrorCode: code });
     const retryable = isRetryableWebhookError(error);
-    return json(res, retryable ? 500 : 200, { ok: false, retryable });
+    return json(res, retryable ? 503 : 200, { ok: false, retryable });
   }
 }
 async function handleSendCode(req, res) {
@@ -445,19 +449,21 @@ async function configureWebhook() {
   if (!BOT_TOKEN || !baseUrl) {
     webhookDiagnostics.configured = false;
     console.log('Webhook not configured: BOT_TOKEN or public service URL is missing.');
-    return;
+    return false;
   }
 
   let parsedBase;
   try {
     parsedBase = new URL(baseUrl);
   } catch {
+    webhookDiagnostics.configured = false;
     console.error('Webhook not configured: invalid public service URL.');
-    return;
+    return false;
   }
   if (parsedBase.protocol !== 'https:') {
+    webhookDiagnostics.configured = false;
     console.error('Webhook not configured: public service URL must use HTTPS.');
-    return;
+    return false;
   }
 
   const webhookUrl = new URL('/telegram/webhook', parsedBase).toString();
@@ -493,13 +499,24 @@ async function configureWebhook() {
       console.error('Could not register Telegram bot commands.');
     }
     console.log('Telegram webhook configured.');
+    return webhookDiagnostics.configured;
   } catch (error) {
     webhookDiagnostics.configured = false;
     console.error('Could not configure Telegram webhook.', {
       errorName: error && error.name ? error.name : 'Error',
       telegramErrorCode: Number(error && error.telegramErrorCode) || null
     });
+    return false;
   }
+}
+
+function scheduleWebhookMaintenance(attempt = 0) {
+  const delay = attempt === 0 ? 5_000 : Math.min(5 * 60_000, 5_000 * (2 ** Math.min(attempt, 6)));
+  const timer = setTimeout(async () => {
+    const ok = await configureWebhook();
+    scheduleWebhookMaintenance(ok ? 5 : attempt + 1);
+  }, delay);
+  if (typeof timer.unref === 'function') timer.unref();
 }
 
 function createServer(options = {}) {
@@ -518,17 +535,33 @@ function createServer(options = {}) {
         }
       }
 
-      if (req.method === 'GET' && url.pathname === '/health') {
-        return json(res, 200, {
+      if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/health/ready')) {
+        const bot = options.botChat || botChat;
+        let queue = null;
+        let storageReady = Boolean(bot.store && bot.store.enabled);
+        if (storageReady && typeof bot.getWorkerStats === 'function') {
+          try { queue = bot.getWorkerStats(); } catch { storageReady = false; }
+        }
+        const configuration = {
+          botTokenConfigured: Boolean(BOT_TOKEN),
+          encryptedStorageConfigured: Boolean(bot.store && bot.store.enabled),
+          providerEndpointConfigured: Boolean(bot.apiBaseUrl)
+        };
+        const ready = configuration.botTokenConfigured && configuration.encryptedStorageConfigured &&
+          storageReady && webhookDiagnostics.configured && Boolean(queue && queue.running);
+        const diagnostics = {
           ok: true,
+          ready,
           service: 'telegram-bot-api',
-          configuration: {
-            botTokenConfigured: Boolean(BOT_TOKEN),
-            encryptedStorageConfigured: Boolean(botChat.store && botChat.store.enabled),
-            providerEndpointConfigured: Boolean(botChat.apiBaseUrl)
-          },
+          uptimeSeconds: Math.floor(process.uptime()),
+          configuration,
+          queue,
           telegramWebhook: { ...webhookDiagnostics }
-        });
+        };
+        if (url.pathname === '/health/ready' && !ready) {
+          return json(res, 503, { ...diagnostics, ok: false });
+        }
+        return json(res, 200, diagnostics);
       }
       if (req.method === 'POST' && url.pathname === '/telegram/webhook') {
         return handleWebhook(req, res, webhookDependencies);
@@ -552,10 +585,32 @@ function createServer(options = {}) {
 
 if (require.main === module) {
   const server = createServer();
+  let shuttingDown = false;
+  botChat.startUpdateWorker(processTelegramUpdate, {
+    concurrency: Number(process.env.UPDATE_WORKER_CONCURRENCY) || 3,
+    maxAttempts: Number(process.env.UPDATE_MAX_ATTEMPTS) || 8
+  });
   server.listen(PORT, '0.0.0.0', () => {
     console.log('Bot API listening on port ' + PORT);
-    configureWebhook().catch(() => console.error('Webhook setup failed.'));
+    configureWebhook().then((ok) => scheduleWebhookMaintenance(ok ? 5 : 0))
+      .catch(() => scheduleWebhookMaintenance(0));
   });
+  async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log('Graceful shutdown started.', { signal });
+    server.close();
+    const drained = await botChat.stopUpdateWorker({ timeoutMs: 20_000 });
+    if (!drained) {
+      console.warn('Shutdown deadline reached; unfinished updates will be recovered on next start.');
+      process.exitCode = 1;
+      setTimeout(() => process.exit(1), 500).unref();
+    } else {
+      console.log('Graceful shutdown complete.');
+    }
+  }
+  process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+  process.once('SIGINT', () => { void shutdown('SIGINT'); });
 }
 
 module.exports = {

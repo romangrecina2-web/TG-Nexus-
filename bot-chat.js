@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const DEFAULT_API_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
@@ -11,6 +12,11 @@ const MAX_CHATS_PER_USER = 100;
 const MAX_MESSAGES_PER_CHAT = 40;
 const MAX_MESSAGE_LENGTH = 50_000;
 const TELEGRAM_CHUNK_LENGTH = 3_900;
+const MAX_PENDING_UPDATES = 500;
+const MAX_PROCESSED_UPDATE_IDS = 10_000;
+const MAX_DEAD_LETTERS = 200;
+const DEFAULT_WORKER_CONCURRENCY = 3;
+const DEFAULT_MAX_UPDATE_ATTEMPTS = 8;
 
 const BOT_COMMANDS = [
   { command: 'start', description: 'Открыть мини-приложение' },
@@ -39,28 +45,20 @@ function createEncryptedStore(options = {}) {
   const encryptionKey = parseEncryptionKey(options.encryptionKey);
   const dataDir = path.resolve(options.dataDir || path.join(__dirname, 'data'));
   const filePath = path.join(dataDir, 'telegram-bot-store.enc');
+  const backupPath = filePath + '.bak';
   const fsApi = options.fs || fs;
   let state = null;
+  let recoveredFromBackup = false;
 
-  function load() {
-    if (state) return state;
-    if (!encryptionKey) throw new Error('Encrypted storage is not configured.');
-
-    if (!fsApi.existsSync(filePath)) {
-      state = { version: 1, users: {} };
-      return state;
-    }
-
-    const packedText = fsApi.readFileSync(filePath, 'utf8');
+  function decodeStoreFile(sourcePath) {
+    const packedText = fsApi.readFileSync(sourcePath, 'utf8');
     if (Buffer.byteLength(packedText, 'utf8') > MAX_STORED_BYTES * 2) {
       throw new Error('Encrypted storage exceeds the supported size.');
     }
-
     const packed = JSON.parse(packedText);
     if (!packed || packed.version !== 1 || !packed.iv || !packed.tag || !packed.data) {
       throw new Error('Encrypted storage has an invalid format.');
     }
-
     const decipher = crypto.createDecipheriv(
       'aes-256-gcm',
       encryptionKey,
@@ -75,16 +73,44 @@ function createEncryptedStore(options = {}) {
     if (!decoded || decoded.version !== 1 || !decoded.users || typeof decoded.users !== 'object') {
       throw new Error('Encrypted storage has an invalid payload.');
     }
-    state = decoded;
+    if (!Array.isArray(decoded.queue)) decoded.queue = [];
+    if (!Array.isArray(decoded.processedUpdateIds)) decoded.processedUpdateIds = [];
+    if (!Array.isArray(decoded.deadLetterUpdates)) decoded.deadLetterUpdates = [];
+    return decoded;
+  }
+
+  function load() {
+    if (state) return state;
+    if (!encryptionKey) throw new Error('Encrypted storage is not configured.');
+    if (fsApi.existsSync(filePath)) {
+      try {
+        state = decodeStoreFile(filePath);
+      } catch (primaryError) {
+        if (!fsApi.existsSync(backupPath)) throw primaryError;
+        state = decodeStoreFile(backupPath);
+        recoveredFromBackup = true;
+      }
+      return state;
+    }
+    if (fsApi.existsSync(backupPath)) {
+      state = decodeStoreFile(backupPath);
+      recoveredFromBackup = true;
+      return state;
+    }
+    state = {
+      version: 1,
+      users: {},
+      queue: [],
+      processedUpdateIds: [],
+      deadLetterUpdates: []
+    };
     return state;
   }
 
   function save() {
     const current = load();
     const plain = Buffer.from(JSON.stringify(current), 'utf8');
-    if (plain.length > MAX_STORED_BYTES) {
-      throw new Error('Encrypted storage is full.');
-    }
+    if (plain.length > MAX_STORED_BYTES) throw new Error('Encrypted storage is full.');
 
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey, iv);
@@ -98,14 +124,228 @@ function createEncryptedStore(options = {}) {
 
     fsApi.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try { fsApi.chmodSync(dataDir, 0o700); } catch {}
+    if (!recoveredFromBackup && fsApi.existsSync(filePath)) {
+      fsApi.copyFileSync(filePath, backupPath);
+      try { fsApi.chmodSync(backupPath, 0o600); } catch {}
+    }
+
     const tempPath = filePath + '.' + process.pid + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     try {
       fsApi.writeFileSync(tempPath, packed, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      const fileFd = fsApi.openSync(tempPath, 'r');
+      try { fsApi.fsyncSync(fileFd); } finally { fsApi.closeSync(fileFd); }
       fsApi.renameSync(tempPath, filePath);
       try { fsApi.chmodSync(filePath, 0o600); } catch {}
+      try {
+        const dirFd = fsApi.openSync(dataDir, 'r');
+        try { fsApi.fsyncSync(dirFd); } finally { fsApi.closeSync(dirFd); }
+      } catch {}
+      recoveredFromBackup = false;
     } finally {
       try { if (fsApi.existsSync(tempPath)) fsApi.unlinkSync(tempPath); } catch {}
     }
+  }
+
+  function queueUserKey(update, updateId) {
+    const message = update && (update.message || update.edited_message || update.channel_post);
+    const userId = message && message.from && message.from.id;
+    const chatId = message && message.chat && message.chat.id;
+    return userId != null ? String(userId) : (chatId != null ? String(chatId) : 'update:' + String(updateId));
+  }
+
+  function queueItem(updateId) {
+    return load().queue.find((item) => item.updateId === updateId) || null;
+  }
+
+  function enqueueUpdate(update) {
+    if (!update || !Number.isSafeInteger(update.update_id) || update.update_id < 0) {
+      const error = new Error('Telegram update is missing a valid update_id.');
+      error.status = 400;
+      throw error;
+    }
+    const current = load();
+    const id = update.update_id;
+    const duplicate = current.processedUpdateIds.includes(id) ||
+      current.queue.some((item) => item.updateId === id) ||
+      current.deadLetterUpdates.some((item) => item.updateId === id);
+    if (duplicate) return { accepted: false, duplicate: true, updateId: id };
+    if (current.queue.length >= MAX_PENDING_UPDATES) {
+      const error = new Error('Telegram update queue is full.');
+      error.status = 503;
+      throw error;
+    }
+    current.queue.push({
+      updateId: id,
+      userKey: queueUserKey(update, id),
+      update,
+      status: 'queued',
+      attempts: 0,
+      nextAttemptAt: Date.now(),
+      createdAt: Date.now(),
+      outbox: []
+    });
+    save();
+    return { accepted: true, duplicate: false, updateId: id };
+  }
+
+  function recoverProcessingUpdates() {
+    const current = load();
+    let changed = false;
+    for (const item of current.queue) {
+      if (item.status === 'processing') {
+        item.status = 'queued';
+        item.nextAttemptAt = Date.now();
+        item.recoveredAt = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) save();
+    return changed;
+  }
+
+  function claimNextUpdate(activeUserKeys = [], now = Date.now()) {
+    const current = load();
+    const blocked = new Set(activeUserKeys.map(String));
+    for (const item of current.queue) {
+      const userKey = String(item.userKey || queueUserKey(item.update, item.updateId));
+      if (item.status === 'processing') {
+        blocked.add(userKey);
+        continue;
+      }
+      if (blocked.has(userKey)) continue;
+      if (item.status !== 'queued' || Number(item.nextAttemptAt || 0) > now) {
+        blocked.add(userKey);
+        continue;
+      }
+      item.status = 'processing';
+      item.attempts = Math.max(0, Number(item.attempts) || 0) + 1;
+      item.startedAt = now;
+      save();
+      return {
+        updateId: item.updateId,
+        userKey,
+        update: item.update,
+        attempts: item.attempts,
+        createdAt: item.createdAt
+      };
+    }
+    return null;
+  }
+
+  function appendOutbox(updateId, message) {
+    const item = queueItem(updateId);
+    if (!item) throw new Error('The queued Telegram update no longer exists.');
+    const index = item.outbox.length;
+    item.outbox.push({
+      chatId: message.chatId,
+      text: String(message.text == null ? '' : message.text),
+      options: message.options || {},
+      status: 'pending',
+      createdAt: Date.now()
+    });
+    save();
+    return { index };
+  }
+
+  function getOutboxState(updateId) {
+    const item = queueItem(updateId);
+    if (!item) return { exists: false, pending: [] };
+    return {
+      exists: item.outbox.length > 0,
+      pending: item.outbox.map((entry, index) => ({ ...entry, index }))
+        .filter((entry) => entry.status === 'pending')
+    };
+  }
+
+  function markOutboxDelivered(updateId, index) {
+    const item = queueItem(updateId);
+    if (!item || !item.outbox[index]) return false;
+    if (item.outbox[index].status !== 'delivered') {
+      item.outbox[index].status = 'delivered';
+      item.outbox[index].deliveredAt = Date.now();
+      save();
+    }
+    return true;
+  }
+
+  function discardOutbox(updateId, index) {
+    const item = queueItem(updateId);
+    if (!item || !item.outbox[index]) return false;
+    if (item.outbox[index].status === 'pending') {
+      item.outbox[index].status = 'discarded';
+      item.outbox[index].discardedAt = Date.now();
+      save();
+    }
+    return true;
+  }
+
+  function completeUpdate(updateId) {
+    const current = load();
+    const index = current.queue.findIndex((item) => item.updateId === updateId);
+    if (index < 0) return false;
+    current.queue.splice(index, 1);
+    current.processedUpdateIds.push(updateId);
+    if (current.processedUpdateIds.length > MAX_PROCESSED_UPDATE_IDS) {
+      current.processedUpdateIds.splice(0, current.processedUpdateIds.length - MAX_PROCESSED_UPDATE_IDS);
+    }
+    save();
+    return true;
+  }
+
+  function retryUpdate(updateId, error, retryOptions = {}) {
+    const current = load();
+    const index = current.queue.findIndex((item) => item.updateId === updateId);
+    if (index < 0) return { retried: false, deadLettered: false };
+    const item = current.queue[index];
+    const attempts = Math.max(1, Number(item.attempts) || 1);
+    const errorCode = Number(error && (error.telegramErrorCode || error.status)) || null;
+    const permanentTelegramError = errorCode >= 400 && errorCode < 500 && errorCode !== 429;
+    const maxAttempts = Math.max(1, Number(retryOptions.maxAttempts) || DEFAULT_MAX_UPDATE_ATTEMPTS);
+
+    if (permanentTelegramError || attempts >= maxAttempts) {
+      current.queue.splice(index, 1);
+      current.deadLetterUpdates.push({
+        updateId,
+        userKey: item.userKey,
+        attempts,
+        errorCode,
+        errorName: String(error && error.name || 'Error').slice(0, 80),
+        failedAt: Date.now()
+      });
+      if (current.deadLetterUpdates.length > MAX_DEAD_LETTERS) {
+        current.deadLetterUpdates.splice(0, current.deadLetterUpdates.length - MAX_DEAD_LETTERS);
+      }
+      save();
+      return { retried: false, deadLettered: true };
+    }
+
+    const exponential = Math.min(5 * 60_000, 1_000 * (2 ** Math.min(attempts - 1, 8)));
+    const retryAfter = Math.max(0, Number(error && error.retryAfterSeconds) || 0) * 1000;
+    const delay = Math.min(15 * 60_000, Math.max(exponential, retryAfter));
+    item.status = 'queued';
+    item.nextAttemptAt = Date.now() + delay;
+    item.lastErrorCode = errorCode;
+    item.lastErrorName = String(error && error.name || 'Error').slice(0, 80);
+    item.lastFailedAt = Date.now();
+    save();
+    return { retried: true, deadLettered: false, retryAt: item.nextAttemptAt };
+  }
+
+  function getQueueStats() {
+    const current = load();
+    const now = Date.now();
+    const queued = current.queue.filter((item) => item.status === 'queued');
+    const processing = current.queue.filter((item) => item.status === 'processing');
+    const oldest = current.queue.reduce((min, item) => Math.min(min, Number(item.createdAt) || now), now);
+    return {
+      pending: queued.length,
+      processing: processing.length,
+      total: current.queue.length,
+      deadLettered: current.deadLetterUpdates.length,
+      oldestPendingAgeMs: current.queue.length ? Math.max(0, now - oldest) : 0,
+      capacity: MAX_PENDING_UPDATES,
+      recoveredFromBackup
+    };
   }
 
   function getUser(userId) {
@@ -129,12 +369,21 @@ function createEncryptedStore(options = {}) {
   return {
     enabled: !!encryptionKey,
     filePath,
+    backupPath,
     getUser,
-    save
+    save,
+    enqueueUpdate,
+    recoverProcessingUpdates,
+    claimNextUpdate,
+    appendOutbox,
+    getOutboxState,
+    markOutboxDelivered,
+    discardOutbox,
+    completeUpdate,
+    retryUpdate,
+    getQueueStats
   };
-}
-
-function normalizeApiBase(value) {
+}function normalizeApiBase(value) {
   try {
     const url = new URL(String(value || DEFAULT_API_BASE_URL));
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
@@ -372,15 +621,39 @@ function createBotChat(options = {}) {
     ? configuredSystemPrompt
     : configuredSystemPrompt + '\n\n' + formattingInstruction;
   const fetchImpl = options.fetchImpl || global.fetch;
-  const sendTelegramMessage = options.sendTelegramMessage || defaultSendTelegramMessage;
+  const rawSendTelegramMessage = options.sendTelegramMessage || defaultSendTelegramMessage;
   const deleteTelegramMessage = options.deleteTelegramMessage || defaultDeleteTelegramMessage;
   const store = options.store || createEncryptedStore({
     encryptionKey: options.encryptionKey || process.env.BOT_DATA_ENCRYPTION_KEY,
     dataDir: options.dataDir || process.env.DATA_DIR,
     defaultModel
   });
+  const updateContext = new AsyncLocalStorage();
+
+  async function sendTelegramMessage(chatId, text, sendOptions = {}) {
+    const context = updateContext.getStore();
+    if (!context || !Number.isSafeInteger(context.updateId)) {
+      return rawSendTelegramMessage(chatId, text, sendOptions);
+    }
+    const queued = store.appendOutbox(context.updateId, { chatId, text, options: sendOptions });
+    try {
+      await rawSendTelegramMessage(chatId, text, sendOptions);
+    } catch (error) {
+      // Telegram may reject malformed HTML. The formatter immediately retries as plain text;
+      // discard the rejected variant so the worker does not retry invalid markup forever.
+      if (isTelegramHtmlParseError(error)) {
+        store.discardOutbox(context.updateId, queued.index);
+      }
+      error.telegramDeliveryFailure = true;
+      throw error;
+    }
+    store.markOutboxDelivered(context.updateId, queued.index);
+  }
   const rateBuckets = new Map();
+  const GLOBAL_AI_LIMIT_PER_MINUTE = Math.max(10, Number(options.globalAiLimitPerMinute) || 90);
   let lastRateSweep = Date.now();
+  let globalRateStartedAt = lastRateSweep;
+  let globalRateCount = 0;
 
   async function telegramRequest(method, payload) {
     if (!botToken) throw new Error('Telegram bot token is not configured.');
@@ -395,6 +668,7 @@ function createBotChat(options = {}) {
       const error = new Error(result.description || 'Telegram request failed.');
       error.telegramDescription = result.description || '';
       error.telegramErrorCode = result.error_code || response.status;
+      error.retryAfterSeconds = Number(result.parameters && result.parameters.retry_after) || 0;
       throw error;
     }
     return result.result;
@@ -517,6 +791,11 @@ function createBotChat(options = {}) {
 
   function checkRateLimit(userId) {
     const now = Date.now();
+    if (now - globalRateStartedAt >= 60_000) {
+      globalRateStartedAt = now;
+      globalRateCount = 0;
+    }
+    if (globalRateCount >= GLOBAL_AI_LIMIT_PER_MINUTE) return false;
     if (now - lastRateSweep >= 60_000) {
       for (const [id, bucket] of rateBuckets) {
         if (now - bucket.lastSeen > 180_000) rateBuckets.delete(id);
@@ -528,6 +807,7 @@ function createBotChat(options = {}) {
     if (!previous) {
       if (rateBuckets.size >= 10_000) return false;
       rateBuckets.set(id, { startedAt: now, lastSeen: now, count: 1 });
+      globalRateCount += 1;
       return true;
     }
     if (now - previous.startedAt >= 60_000) {
@@ -537,6 +817,7 @@ function createBotChat(options = {}) {
     if (previous.count >= 12) return false;
     previous.count += 1;
     previous.lastSeen = now;
+    globalRateCount += 1;
     return true;
   }
 
@@ -750,8 +1031,8 @@ function createBotChat(options = {}) {
       }
       await handleUserMessage(message, user, text);
       return true;
-    } catch {
-      // Let Telegram delivery errors propagate so the webhook can request a retry.
+    } catch (error) {
+      if (error && error.telegramDeliveryFailure) throw error;
       await sendText(chatId, 'Не удалось выполнить команду. Повторите попытку позже.');
       return true;
     }
@@ -764,15 +1045,160 @@ function createBotChat(options = {}) {
     const parsed = parseCommand(text);
     try {
       return await processMessage(message, parsed, text);
-    } catch {
-      // Do not acknowledge an update if even the fallback reply cannot be delivered.
+    } catch (error) {
+      if (error && error.telegramDeliveryFailure) throw error;
       await sendText(message.chat.id, 'Не удалось обработать сообщение. Повторите попытку позже.');
       return true;
     }
   }
 
+
+  async function flushPendingOutbox(updateId) {
+    const state = store.getOutboxState(updateId);
+    for (const entry of state.pending) {
+      await rawSendTelegramMessage(entry.chatId, entry.text, entry.options || {});
+      store.markOutboxDelivered(updateId, entry.index);
+    }
+  }
+
+  let workerStopped = true;
+  let workerTimer = null;
+  let workerHandler = null;
+  let workerActive = 0;
+  let workerConcurrency = DEFAULT_WORKER_CONCURRENCY;
+  let workerMaxAttempts = DEFAULT_MAX_UPDATE_ATTEMPTS;
+  const activeUserKeys = new Set();
+
+  function scheduleWorker(delayMs = 0) {
+    if (workerStopped || workerTimer) return;
+    workerTimer = setTimeout(() => {
+      workerTimer = null;
+      pumpWorker();
+    }, Math.max(0, delayMs));
+    if (workerTimer && typeof workerTimer.unref === 'function') workerTimer.unref();
+  }
+
+  async function runQueuedUpdate(job) {
+    try {
+      const outbox = store.getOutboxState(job.updateId);
+      if (outbox.exists) {
+        await flushPendingOutbox(job.updateId);
+      } else {
+        await updateContext.run({ updateId: job.updateId }, () => workerHandler(job.update));
+        await flushPendingOutbox(job.updateId);
+      }
+      store.completeUpdate(job.updateId);
+    } catch (error) {
+      try {
+        const result = store.retryUpdate(job.updateId, error, { maxAttempts: workerMaxAttempts });
+        if (result.deadLettered) {
+          console.error('Telegram update moved to dead-letter storage.', {
+            updateId: job.updateId,
+            attempts: job.attempts,
+            errorCode: Number(error && (error.telegramErrorCode || error.status)) || null
+          });
+        }
+      } catch (storageError) {
+        console.error('Could not persist Telegram update retry state.', {
+          updateId: job.updateId,
+          errorName: storageError && storageError.name ? storageError.name : 'Error'
+        });
+      }
+    } finally {
+      activeUserKeys.delete(job.userKey);
+      workerActive = Math.max(0, workerActive - 1);
+      scheduleWorker(0);
+    }
+  }
+
+  function pumpWorker() {
+    if (workerStopped || typeof workerHandler !== 'function') return;
+    while (workerActive < workerConcurrency) {
+      let job;
+      try {
+        job = store.claimNextUpdate([...activeUserKeys]);
+      } catch (error) {
+        console.error('Telegram update queue is unavailable.', {
+          errorName: error && error.name ? error.name : 'Error'
+        });
+        scheduleWorker(5_000);
+        return;
+      }
+      if (!job) break;
+      workerActive += 1;
+      activeUserKeys.add(job.userKey);
+      void runQueuedUpdate(job);
+    }
+    if (!workerStopped && workerActive < workerConcurrency) {
+      let stats;
+      try { stats = store.getQueueStats(); } catch { stats = null; }
+      if (stats && stats.pending > 0) scheduleWorker(1_000);
+    }
+  }
+
+  function enqueueUpdate(update) {
+    const result = store.enqueueUpdate(update);
+    scheduleWorker(0);
+    return result;
+  }
+
+  function startUpdateWorker(handler, workerOptions = {}) {
+    if (typeof handler !== 'function') throw new TypeError('A Telegram update handler is required.');
+    if (!workerStopped) return false;
+    if (!store.enabled) {
+      console.error('Telegram update worker is disabled because encrypted storage is not configured.');
+      return false;
+    }
+    try {
+      store.recoverProcessingUpdates();
+    } catch (error) {
+      console.error('Telegram update worker could not recover its queue.', {
+        errorName: error && error.name ? error.name : 'Error'
+      });
+      return false;
+    }
+    workerHandler = handler;
+    workerConcurrency = Math.max(1, Math.min(8, Math.round(Number(workerOptions.concurrency) || DEFAULT_WORKER_CONCURRENCY)));
+    workerMaxAttempts = Math.max(1, Math.min(20, Math.round(Number(workerOptions.maxAttempts) || DEFAULT_MAX_UPDATE_ATTEMPTS)));
+    workerStopped = false;
+    scheduleWorker(0);
+    return true;
+  }
+
+  async function stopUpdateWorker(stopOptions = {}) {
+    workerStopped = true;
+    if (workerTimer) {
+      clearTimeout(workerTimer);
+      workerTimer = null;
+    }
+    const timeoutMs = Math.max(0, Number(stopOptions.timeoutMs) || 20_000);
+    const deadline = Date.now() + timeoutMs;
+    while (workerActive > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return workerActive === 0;
+  }
+
+  function getWorkerStats() {
+    return {
+      ...store.getQueueStats(),
+      running: !workerStopped,
+      activeWorkers: workerActive,
+      concurrency: workerConcurrency
+    };
+  }
+
+  async function sendMessage(chatId, text, sendOptions = {}) {
+    return sendTelegramMessage(chatId, text, sendOptions);
+  }
+
   return {
     handleMessage,
+    enqueueUpdate,
+    startUpdateWorker,
+    stopUpdateWorker,
+    getWorkerStats,
+    sendMessage,
     store,
     apiBaseUrl
   };
