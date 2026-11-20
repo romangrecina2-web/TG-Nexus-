@@ -1266,15 +1266,18 @@ function createBotChat(options = {}) {
       apiKey: user.apiKey || '',
       settings: user.settings || {},
       activeChatId: user.activeChatId || null,
-      chats: user.chats || []
+      chats: user.chats || [],
+      initialized: !!(user.syncInitialized || user.apiKey || user.chats.length || Object.keys(user.settings || {}).length || user.model !== defaultModel || user.apiBaseUrl !== apiBaseUrl)
     };
   }
 
   function applySyncState(userId, input = {}) {
     const user = store.getUser(userId);
-    if (Object.prototype.hasOwnProperty.call(input, 'apiBaseUrl')) {
+    if (typeof input.apiBaseUrl === 'string') {
       const nextBase = normalizeApiBase(input.apiBaseUrl);
       if (!nextBase) throw new Error('Invalid API endpoint.');
+      const previousBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
+      if (previousBase !== nextBase) user.apiKey = '';
       user.apiBaseUrl = nextBase;
     }
     if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\\s/.test(input.model)) {
@@ -1332,6 +1335,7 @@ function createBotChat(options = {}) {
     if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
       user.activeChatId = input.activeChatId;
     }
+    user.syncInitialized = true;
     store.save();
     return getSyncState(userId);
   }
