@@ -179,7 +179,7 @@ function formatInlineMarkdown(value) {
   const tick = String.fromCharCode(96);
   const pattern = new RegExp(
     tick + "[^" + tick + "\\n]*" + tick +
-    "|\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|tg:\\/\\/)[^\\s)]{1,2048}\\)" +
+    "|\\[[^\\n]+?\\]\\((?:https?:\\/\\/|tg:\\/\\/)[^\\s)]{1,2048}\\)" +
     "|\\*\\*[^*\\n]+\\*\\*|__[^_\\n]+__" +
     "|(?<![\\p{L}\\p{N}*])\\*(?!\\s)[^*\\n]+?\\*(?!\\*)" +
     "|(?<![\\p{L}\\p{N}])_(?!\\s)[^_\\n]+?_(?![\\p{L}\\p{N}])",
@@ -247,15 +247,15 @@ function markdownToTelegramHtml(markdown) {
     }
 
     if (i + 1 < lines.length && line.includes('|') && lines[i + 1].includes('|') && isTableSeparator(lines[i + 1])) {
+      const headers = splitTableCells(line);
       i += 2;
       while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
         const cells = splitTableCells(lines[i]);
-        const first = cells[0] || '';
-        const rest = cells.slice(1).filter(Boolean);
-        let row = first ? '<b>' + formatInlineMarkdown(first) + '</b>' : '';
-        if (rest.length) row += (row ? ': ' : '') + rest.map(formatInlineMarkdown).join(' · ');
-        if (!row) row = cells.map(formatInlineMarkdown).join(' · ');
-        output.push('• ' + row);
+        const values = cells.map((cell, index) => {
+          const header = headers[index] || ('Колонка ' + (index + 1));
+          return '<b>' + formatInlineMarkdown(header) + ':</b> ' + formatInlineMarkdown(cell);
+        });
+        output.push('• ' + values.join(' · '));
         i += 1;
       }
       i -= 1;
