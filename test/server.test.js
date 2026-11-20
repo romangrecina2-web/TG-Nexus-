@@ -213,3 +213,99 @@ test('webhook does not acknowledge malformed update IDs', async () => {
     assert.deepEqual(result.body, { ok: false, retryable: false });
   });
 });
+
+
+async function postSync(baseUrl, payload, origin) {
+  const headers = { 'content-type': 'application/json' };
+  if (origin) headers.origin = origin;
+  const response = await fetch(baseUrl + '/api/sync', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+test('sync endpoint authenticates Telegram initData before reading private state', async () => {
+  const bot = {
+    store: { enabled: true },
+    getSyncState() { return { initialized: true, apiKey: '', chats: [], settings: {} }; },
+    applySyncState() { throw new Error('must not be called'); }
+  };
+  const server = createServer({ botChat: bot });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const result = await postSync(baseUrl, { action: 'pull', initData: 'user=forged' });
+    assert.equal(result.status, 401);
+    assert.equal(result.body.ok, false);
+  });
+});
+
+test('sync endpoint returns only the authenticated user state and accepts valid settings updates', async () => {
+  const states = new Map();
+  const applied = [];
+  const bot = {
+    store: { enabled: true },
+    getSyncState(userId) {
+      return states.get(String(userId)) || {
+        initialized: false, apiBaseUrl: '', model: '', apiKey: '',
+        settings: {}, activeChatId: null, chats: []
+      };
+    },
+    applySyncState(userId, input) {
+      applied.push({ userId, input });
+      const current = this.getSyncState(userId);
+      states.set(String(userId), {
+        ...current,
+        ...input,
+        initialized: true,
+        apiKey: current.apiKey || ''
+      });
+      return this.getSyncState(userId);
+    }
+  };
+  const server = createServer({ botChat: bot });
+  const token = process.env.BOT_TOKEN;
+  const now = Date.now();
+  const initData = signInitData({ botToken: token, userId: 987654, authDate: Math.floor(now / 1000) });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const push = await postSync(baseUrl, {
+      action: 'push',
+      initData,
+      state: {
+        apiBaseUrl: 'https://provider.example/v1',
+        model: 'provider/model',
+        settings: { systemPrompt: 'Private test prompt', maxTokens: 444 },
+        activeChatId: 'chat-sync',
+        chats: [{ id: 'chat-sync', title: 'Sync test', messages: [] }]
+      }
+    });
+    assert.equal(push.status, 200);
+    assert.equal(push.body.ok, true);
+    assert.equal(applied.length, 1);
+    assert.equal(applied[0].userId, 987654);
+    assert.equal(push.body.state.settings.maxTokens, 444);
+    assert.equal(push.body.state.chats[0].id, 'chat-sync');
+
+    const pull = await postSync(baseUrl, { action: 'pull', initData });
+    assert.equal(pull.status, 200);
+    assert.equal(pull.body.state.model, 'provider/model');
+    assert.equal(pull.body.state.chats[0].title, 'Sync test');
+  });
+});
+
+test('sync endpoint blocks browser origins outside the configured Mini App origin', async () => {
+  const bot = {
+    store: { enabled: true },
+    getSyncState() { return { initialized: false, chats: [], settings: {} }; },
+    applySyncState() { return {}; }
+  };
+  const server = createServer({ botChat: bot });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const result = await postSync(baseUrl, { action: 'pull', initData: 'forged' }, 'https://malicious.example');
+    assert.equal(result.status, 403);
+    assert.equal(result.body.ok, false);
+  });
+});
