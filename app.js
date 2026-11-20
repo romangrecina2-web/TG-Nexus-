@@ -220,7 +220,7 @@ function makeRemoteSyncState(includeApiKey,clearApiKey){
         }
         return {id:String(m.id).slice(0,160),role:m.role,content:content.slice(0,2500),createdAt:Number(m.ts)||Number(chat.ts)||Date.now()};
       });
-    return {id:String(chat.id).slice(0,128),title:String(chat.title||'Чат').slice(0,100),model:String(chat.model||S.cfg.model||'').slice(0,256),createdAt:Number(chat.createdAt)||Number(chat.ts)||Date.now(),updatedAt:Number(chat.ts)||Date.now(),messages:messages};
+    return {id:String(chat.id).slice(0,128),title:String(chat.title||'Чат').slice(0,100),model:String(chat.model||S.cfg.model||'').slice(0,256),createdAt:Number(chat.createdAt)||Number(chat.ts)||Date.now(),updatedAt:Number(chat.updatedAt)||Number(chat.ts)||Date.now(),messages:messages};
   });
   var state={apiBaseUrl:S.cfg.url,model:S.cfg.model,settings:syncSettingsPayload(),activeChatId:S.cur,chats:chats};
   if(includeApiKey&&ACTIVE_KEY)state.apiKey=ACTIVE_KEY;
@@ -249,11 +249,12 @@ function mergeRemoteChats(remoteChats){
     });
     chat.msgs.sort(function(a,b){return(Number(a.ts)||0)-(Number(b.ts)||0)});
     var remoteUpdated=Number(remote.updatedAt)||0;
-    if(remoteUpdated>=(Number(chat.ts)||0)){
+    if(remoteUpdated>=(Number(chat.updatedAt)||Number(chat.ts)||0)){
       if(remote.title)chat.title=String(remote.title).slice(0,100);
       if(remote.model)chat.model=String(remote.model).slice(0,256);
     }
     chat.ts=Math.max(Number(chat.ts)||0,remoteUpdated);
+    chat.updatedAt=Math.max(Number(chat.updatedAt)||0,remoteUpdated);
     if(!chat.createdAt)chat.createdAt=Number(remote.createdAt)||chat.ts;
   });
   S.chats.sort(function(a,b){return(Number(b.ts)||0)-(Number(a.ts)||0)});
@@ -297,7 +298,7 @@ async function applyRemoteSyncState(state){
   if(Number.isFinite(Number(settings.keep)))S.cfg.keep=settings.keep;
   if(Number.isFinite(Number(settings.pinCap)))S.cfg.pinCap=settings.pinCap;
   mergeRemoteChats(state.chats);
-  if(typeof state.activeChatId==='string'&&S.chats.some(function(chat){return chat.id===state.activeChatId})&&(!S.cur||!S.chats.some(function(chat){return chat.id===S.cur})))S.cur=state.activeChatId;
+  if(typeof state.activeChatId==='string'&&S.chats.some(function(chat){return chat.id===state.activeChatId}))S.cur=state.activeChatId;
   if(typeof state.apiKey==='string'&&state.apiKey&&state.apiKey!==ACTIVE_KEY){
     ACTIVE_KEY=state.apiKey;
     if(secureKeyStorage&&secureKeyStorage.isAvailable()){
@@ -358,7 +359,7 @@ function save(){if(!storageOK)return;if(saveTimer)clearTimeout(saveTimer);saveTi
 function cur(){return S.chats.filter(function(c){return c.id===S.cur})[0]||null}
 function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
-function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
+function newChat(){var now=Date.now(),c={id:String(now)+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:now,createdAt:now,updatedAt:now};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
 function keyApiBase(){return String(S.cfg.url||'').trim().replace(/\/+$/,'')}
 function updateKeyStorageUi(){
@@ -901,7 +902,7 @@ function sendNow(t,runMax){
   c.msgs.push({id:makeId(),role:'user',content:t,quote:quote,attachments:pendingFiles.map(function(f){return Object.assign({},f)})});
   endEdit();pendingFiles=[];c.draft='';c.draftAttachments=[];c.quoteDraft=null;renderPending();showQuoteDraft();
   if(c.title==='Новый чат'||c.msgs.length===1){var titleText=t||(quote?'Цитата: '+short(quote.text||''):'Файлы: '+(c.msgs[c.msgs.length-1].attachments||[]).map(function(f){return f.name}).join(', '));c.title=short(titleText.replace(/\s+/g,' ')).slice(0,40)}
-  c.ts=Date.now();inp.value='';autosize();stuck=true;saveNow();
+  c.ts=Date.now();c.updatedAt=c.ts;inp.value='';autosize();stuck=true;saveNow();
   run(c,skip,runMax);
 }
 function regen(){
@@ -1037,7 +1038,7 @@ async function run(c,skipTags,runMax,target){
   }catch(e){
     if(e.message==='__guard'){}else if(e.name!=='AbortError')errText=niceErr(e);
   }
-  a.ts=Date.now();c.ts=Math.max(Number(c.ts)||0,a.ts);
+  a.ts=Date.now();c.ts=Math.max(Number(c.ts)||0,a.ts);c.updatedAt=Math.max(Number(c.updatedAt)||0,a.ts);
   a.agentStatus='';busy=false;ctrl=null;setBusy();
   if(a.content&&a.content.indexOf('<summary>')>=0){if(takeSummary(c,a,askSum,before,K,up))toast('Чат сжат: пересказ обновлён')}
   if(!a.content&&!a.execLog.length){
@@ -1070,7 +1071,7 @@ function drawerList(){
       saveNow();S.cur=c.id;endEdit();restoreChatComposer(c);fillChatModel();render(true);closeDrawer();
     };
     var e=document.createElement('button');e.className='x';e.innerHTML='&#9998;&#xFE0E;';e.setAttribute('aria-label','Переименовать');
-    e.onclick=function(){var n=prompt('Название чата',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,60);save();drawerList();render()}};
+    e.onclick=function(){var n=prompt('Название чата',c.title);if(n&&n.trim()){c.title=n.trim().slice(0,60);c.updatedAt=Date.now();save();drawerList();render()}};
     var x=document.createElement('button');x.className='x';x.innerHTML='&#10005;';x.setAttribute('aria-label','Удалить чат');
     x.onclick=function(){
       if(busy)return toast('Дождитесь окончания ответа');
@@ -1129,7 +1130,7 @@ $('#cKey').addEventListener('input',function(){keyInputTouched=true;ACTIVE_KEY=t
 $('#cKey').addEventListener('change',async function(){var el=this;keyInputTouched=true;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';keyStorageStatus='session';updateKeyStorageUi();await $('#bTest').onclick()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
 $('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
-$('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
+$('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;c.updatedAt=Date.now();saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
 function renderSavedModels(){
   var box=$('#savedModels');if(!box)return;box.innerHTML='';
   if(!S.cfg.models.length){box.innerHTML='<div class="none">Список моделей пуст</div>';return}
