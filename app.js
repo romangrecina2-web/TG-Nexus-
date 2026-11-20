@@ -185,11 +185,11 @@ function updateKeyStorageUi(){
     outside:'Откройте Mini App внутри Telegram, чтобы использовать защищённое сохранение ключа.',
     error:'Не удалось прочитать защищённое хранилище. Введите ключ заново.',
     'save-error':'Подключение работает, но сохранить ключ не удалось. Он останется только в памяти вкладки.',
-    session:'Ключ действует до закрытия вкладки; после проверки его можно сохранить в Telegram.'
+    session:'Ключ действует в текущей вкладке. После проверки приложение попробует сохранить его в SecureStorage Telegram.'
   };
   if(input){
     input.placeholder=keyStorageStatus==='saved'?'Ключ сохранён · введите новый, чтобы заменить':
-      (keyStorageStatus==='loading'?'Загружаю сохранённый ключ…':'Вставьте API-ключ');
+      (keyStorageStatus==='loading'?'Загружаю сохранённый ключ…':(ACTIVE_KEY?'Ключ действует в текущей вкладке':'Вставьте API-ключ'));
   }
   if(status)status.textContent=messages[keyStorageStatus]||messages.empty;
   if(remove)remove.disabled=!(secureKeyStorage&&secureKeyStorage.isAvailable()&&
@@ -697,7 +697,10 @@ function send(){
   if(busy){if(ctrl)ctrl.abort();return}
   var c0=cur(),quote=c0&&c0.quoteDraft;
   var t=inp.value.trim();if(!t&&!pendingFiles.length&&!quote)return;
-  if(!curKey()){toast('Сначала добавьте ключ в настройках');openSet();return}
+  if(!curKey()){
+    if(keyStorageStatus==='loading'){toast('Загружаю сохранённый API-ключ…');return}
+    toast('Сначала добавьте ключ в настройках');openSet();return;
+  }
   if(S.cfg.askCode&&codeRe.test(t)){askTok(function(n){sendNow(t,n)});return}
   sendNow(t,0);
 }
@@ -988,7 +991,7 @@ $('#mAdd').onclick=addMem;
 $('#mNew').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addMem()}});
 function note(t,cls){var o=$('#tres');o.className='note '+(cls||'');o.textContent=t}
 $('#bTest').onclick=async function(){
-  if(!curKey())return note('Сначала вставьте ключ.','bad');
+  if(!curKey())return note(keyStorageStatus==='loading'?'Загружаю сохранённый ключ…':'Сначала вставьте ключ.','bad');
   note('Проверяю…');
   try{
     var t0=Date.now();
@@ -1015,14 +1018,14 @@ $('#bTest').onclick=async function(){
       try{
         await secureKeyStorage.save(keyApiBase(),ACTIVE_KEY);
         keyStorageStatus='saved';
-        persistenceNote='\\nКлюч сохранён в защищённом хранилище Telegram на этом устройстве.';
+        persistenceNote='\nКлюч сохранён в защищённом хранилище Telegram на этом устройстве.';
       }catch(saveError){
         keyStorageStatus='save-error';
-        persistenceNote='\\nНе удалось сохранить ключ: '+(saveError&&saveError.message?saveError.message:'ошибка SecureStorage')+'.';
+        persistenceNote='\nНе удалось сохранить ключ: '+(saveError&&saveError.message?saveError.message:'ошибка SecureStorage')+'.';
       }
     }else{
       keyStorageStatus=TG?'unsupported':'outside';
-      persistenceNote='\\nЭтот клиент не поддерживает защищённое сохранение. Ключ действует только до закрытия вкладки.';
+      persistenceNote=TG?'\nЭтот клиент не поддерживает защищённое сохранение. Ключ действует только до закрытия вкладки.':'\nОткройте Mini App из Telegram, чтобы включить защищённое сохранение ключа.';
     }
     updateKeyStorageUi();
     note(out+persistenceNote,'ok');
