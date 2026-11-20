@@ -504,7 +504,7 @@ test('Telegram settings buttons change the token limit and reasoning level', asy
   assert.equal(ctx.bot.getSyncState(123456).settings.maxTokens, 4000);
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.reasoning, 'high');
-  assert.match(ctx.editedMessages.at(-1).text, /Текущее значение: Высокий/);
+  assert.match(ctx.editedMessages.at(-1).text, /Рассуждения: Высокий/);
 });
 
 test('Telegram model buttons fetch choices and save the selected model', async () => {
