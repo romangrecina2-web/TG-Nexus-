@@ -8,6 +8,10 @@
   (typeof globalThis !== 'undefined' ? globalThis : this), function createSecureKeyStorageModule() {
   const STORAGE_KEY = 'tg_shell_provider_key_v1';
 
+  function normalizeApiBase(apiBase) {
+    return String(apiBase || '').trim().replace(/\\/+$/, '');
+  }
+
   function create(webApp) {
     const secureStorage = webApp && webApp.SecureStorage;
 
@@ -55,65 +59,103 @@
       });
     }
 
-    async function load(apiBase) {
-      if (!isAvailable()) {
-        return { supported: false, found: false, matches: false, key: '' };
-      }
+    async function readProviders() {
       const result = await invoke('getItem', [STORAGE_KEY], false);
       const raw = result.value;
-      if (raw == null || raw === '') {
-        return {
-          supported: true,
-          found: false,
-          matches: false,
-          key: '',
-          canBeRestored: result.canBeRestored
-        };
-      }
+      if (raw == null || raw === '') return { providers: {}, canBeRestored: result.canBeRestored };
 
       let record;
       try {
         record = JSON.parse(String(raw));
       } catch {
-        throw new Error('Saved API key has an invalid format.');
-      }
-      if (!record || record.version !== 1 ||
-          typeof record.apiBase !== 'string' ||
-          typeof record.key !== 'string' ||
-          !record.key.trim()) {
-        throw new Error('Saved API key has an invalid format.');
+        throw new Error('Saved API keys have an invalid format.');
       }
 
-      const requestedBase = String(apiBase || '').replace(/\/+$/, '');
+      // Migrate the previous single-provider record without discarding its key.
+      if (record && record.version === 1 &&
+          typeof record.apiBase === 'string' &&
+          typeof record.key === 'string' && record.key.trim()) {
+        const apiBase = normalizeApiBase(record.apiBase);
+        return {
+          providers: { [apiBase]: { key: record.key, savedAt: Number(record.savedAt) || Date.now() } },
+          canBeRestored: result.canBeRestored
+        };
+      }
+
+      if (!record || record.version !== 2 ||
+          !record.providers || typeof record.providers !== 'object' ||
+          Array.isArray(record.providers)) {
+        throw new Error('Saved API keys have an invalid format.');
+      }
+
+      const providers = {};
+      Object.keys(record.providers).slice(0, 32).forEach((rawBase) => {
+        const entry = record.providers[rawBase];
+        const apiBase = normalizeApiBase(rawBase);
+        if (!apiBase || !entry || typeof entry.key !== 'string' || !entry.key.trim()) return;
+        providers[apiBase] = {
+          key: entry.key,
+          savedAt: Number(entry.savedAt) || Date.now()
+        };
+      });
+      return { providers, canBeRestored: result.canBeRestored };
+    }
+
+    async function load(apiBase) {
+      if (!isAvailable()) {
+        return { supported: false, found: false, matches: false, key: '' };
+      }
+      const requestedBase = normalizeApiBase(apiBase);
+      if (!requestedBase) throw new Error('An API address is required.');
+      const stored = await readProviders();
+      const entry = stored.providers[requestedBase];
       return {
         supported: true,
-        found: true,
-        matches: record.apiBase === requestedBase,
-        key: record.apiBase === requestedBase ? record.key : '',
-        canBeRestored: result.canBeRestored
+        found: Object.keys(stored.providers).length > 0,
+        matches: !!entry,
+        key: entry ? entry.key : '',
+        canBeRestored: stored.canBeRestored
       };
     }
 
     async function save(apiBase, apiKey) {
       if (!isAvailable()) throw new Error('Telegram SecureStorage is not available in this client.');
-      const normalizedBase = String(apiBase || '').trim().replace(/\/+$/, '');
+      const normalizedBase = normalizeApiBase(apiBase);
       const normalizedKey = String(apiKey || '').trim();
       if (!normalizedBase || !normalizedKey) throw new Error('An API address and key are required.');
       if (normalizedKey.length > 8_192) throw new Error('The API key is too long to store safely.');
 
-      const record = JSON.stringify({
-        version: 1,
-        apiBase: normalizedBase,
-        key: normalizedKey,
-        savedAt: Date.now()
-      });
-      await invoke('setItem', [STORAGE_KEY, record], true);
+      const stored = await readProviders();
+      stored.providers[normalizedBase] = { key: normalizedKey, savedAt: Date.now() };
+      await invoke('setItem', [STORAGE_KEY, JSON.stringify({
+        version: 2,
+        providers: stored.providers,
+        updatedAt: Date.now()
+      })], true);
       return true;
     }
 
-    async function remove() {
+    async function remove(apiBase) {
       if (!isAvailable()) return false;
-      await invoke('removeItem', [STORAGE_KEY], true);
+      if (apiBase == null || apiBase === '') {
+        await invoke('removeItem', [STORAGE_KEY], true);
+        return true;
+      }
+
+      const normalizedBase = normalizeApiBase(apiBase);
+      if (!normalizedBase) throw new Error('An API address is required.');
+      const stored = await readProviders();
+      if (!stored.providers[normalizedBase]) return false;
+      delete stored.providers[normalizedBase];
+      if (!Object.keys(stored.providers).length) {
+        await invoke('removeItem', [STORAGE_KEY], true);
+      } else {
+        await invoke('setItem', [STORAGE_KEY, JSON.stringify({
+          version: 2,
+          providers: stored.providers,
+          updatedAt: Date.now()
+        })], true);
+      }
       return true;
     }
 
