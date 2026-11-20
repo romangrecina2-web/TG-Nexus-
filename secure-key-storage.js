@@ -9,7 +9,7 @@
   const STORAGE_KEY = 'tg_shell_provider_key_v1';
 
   function normalizeApiBase(apiBase) {
-    return String(apiBase || '').trim().replace(/\\/+$/, '');
+    return String(apiBase || '').trim().replace(/\/+$/, '');
   }
 
   function create(webApp) {
