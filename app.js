@@ -1550,10 +1550,11 @@ if(!storageOK)$('#nostore').style.display='block';
 if(TG){
   keyRestorePromise=restoreSavedApiKey();
   keyRestorePromise.then(async function(restored){
-    try{await pullRemoteSync()}
+    var initialState=null;
+    try{initialState=await pullRemoteSync()}
     catch(error){syncStatus('сервер пока недоступен: '+String(error&&error.message||error).slice(0,90),'bad')}
     syncReady=true;
-    queueRemoteSync(!!ACTIVE_KEY,false);
+    queueRemoteSync(!!ACTIVE_KEY||!initialState||initialState.initialized!==true,false);
     if(shouldOpenSettings())openSet();
     if(restored||ACTIVE_KEY)render();
   });
