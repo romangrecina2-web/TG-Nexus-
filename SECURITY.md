@@ -6,7 +6,7 @@ TG Shell is a browser application. It does not have a trusted server-side sessio
 
 ## Protections implemented
 
-- AI-provider keys remain in memory for the current tab. They are not written to browser storage, chat backups, or exports. Reloading the page or changing the API endpoint requires entering the key again.
+- Mini App AI-provider keys are saved only after a successful connection test in Telegram SecureStorage (Bot API 9.0+), which uses the device Keychain on iOS or Keystore on Android. The saved record is bound to the API endpoint, is not included in localStorage/chat backups/exports, and is restored on the next launch on that device. If SecureStorage is unavailable, the app falls back to session-only memory and displays that limitation.
 - The backend validates Telegram's HMAC signature, rejects duplicate fields, caps initData at 16 KiB, and accepts signatures no older than one hour.
 - Per-user requests are limited to 20 per minute, with a process-wide limit and a bounded, periodically cleaned limiter map.
 - Request bodies, file sizes, HTTP headers, webhook secrets, and outbound Telegram requests have explicit limits and timeouts.
