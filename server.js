@@ -246,6 +246,7 @@ function createRateLimiter(options = {}) {
 }
 
 const checkRateLimit = createRateLimiter();
+const checkSyncRateLimit = createRateLimiter({ limit: 120, globalLimit: 1_000 });
 
 function safeFileName(value) {
   let name = String(value || 'code.txt').split(/[\\/]/).pop();
@@ -409,6 +410,9 @@ async function handleSync(req, res, bot = botChat) {
   const auth = validateTelegramInitData(payload && payload.initData);
   if (!auth) {
     return json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram. Перезапустите Mini App из чата с ботом.' });
+  }
+  if (!checkSyncRateLimit(auth.id)) {
+    return json(res, 429, { ok: false, error: 'Слишком часто выполняется синхронизация. Подождите минуту.' });
   }
   if (!bot || !bot.store || !bot.store.enabled ||
       typeof bot.getSyncState !== 'function' || typeof bot.applySyncState !== 'function') {
