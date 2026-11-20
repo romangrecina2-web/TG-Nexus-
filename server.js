@@ -7,7 +7,16 @@ const { createBotChat, BOT_COMMANDS } = require('./bot-chat');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-test-/';
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || crypto.randomBytes(32).toString('hex');
+const configuredWebhookSecret = String(process.env.WEBHOOK_SECRET || '');
+if (configuredWebhookSecret && Buffer.byteLength(configuredWebhookSecret, 'utf8') < 32) {
+  throw new Error('WEBHOOK_SECRET must contain at least 32 bytes.');
+}
+// Render-generated secrets may be Base64; hash them into Telegram's URL-safe secret-token alphabet.
+const WEBHOOK_SECRET = configuredWebhookSecret
+  ? (/^[A-Za-z0-9_-]{32,256}$/.test(configuredWebhookSecret)
+    ? configuredWebhookSecret
+    : crypto.createHash('sha256').update(configuredWebhookSecret).digest('hex'))
+  : crypto.randomBytes(32).toString('hex');
 const PORT = Number(process.env.PORT || 10000);
 
 const botChat = createBotChat({
@@ -59,7 +68,7 @@ const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
 
 if (WEBHOOK_SECRET.length < 32 || WEBHOOK_SECRET.length > 256 ||
     !/^[A-Za-z0-9_-]+$/.test(WEBHOOK_SECRET)) {
-  throw new Error('WEBHOOK_SECRET must be 32-256 URL-safe characters.');
+  throw new Error('Normalized WEBHOOK_SECRET must be 32-256 URL-safe characters.');
 }
 
 function applySecurityHeaders(res) {
