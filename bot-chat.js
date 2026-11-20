@@ -1326,8 +1326,11 @@ function createBotChat(options = {}) {
           if (!messageId) continue;
           messages.set(messageId, { id: messageId, role: item.role, content: item.content.slice(0, MAX_MESSAGE_LENGTH), createdAt: Math.max(0, Math.min(Date.now() + 60_000, Number(item.createdAt) || updatedAt)) });
         }
-        existing.title = title || existing.title;
-        existing.model = model || existing.model;
+        const incomingIsNewer = updatedAt >= (Number(existing.updatedAt) || 0);
+        if (incomingIsNewer) {
+          existing.title = title || existing.title;
+          existing.model = model || existing.model;
+        }
         existing.createdAt = Math.min(existing.createdAt || createdAt, createdAt);
         existing.updatedAt = Math.max(Number(existing.updatedAt) || 0, updatedAt);
         existing.messages = [...messages.values()].sort((a, b) => a.createdAt - b.createdAt).slice(-200);
