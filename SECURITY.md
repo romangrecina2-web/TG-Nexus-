@@ -2,12 +2,13 @@
 
 ## Security boundary
 
-TG Shell is a browser application. It does not have a trusted server-side session for AI-provider API keys. The Telegram bot backend is a separate service and accepts file-send requests only after validating signed Telegram Mini App initData.
+TG Shell is a browser application. The Mini App uses Telegram's signed initData to authenticate with its backend. The Mini App can call an OpenAI-compatible provider directly from the browser, while the Telegram bot uses a per-user API key stored in the backend's encrypted AES-256-GCM store.
 
 ## Protections implemented
 
-- Mini App AI-provider keys are saved only after a successful connection test in Telegram SecureStorage (Bot API 9.0+), which uses the device Keychain on iOS or Keystore on Android. The saved record is bound to the API endpoint, is not included in localStorage/chat backups/exports, and is restored on the next launch on that device. If SecureStorage is unavailable, the app falls back to session-only memory and displays that limitation.
+- Mini App AI-provider keys are saved only after a successful provider test in Telegram SecureStorage when the Telegram client supports it. The local record is bound to the API endpoint and is not stored in localStorage, chat exports, or GitHub. For Telegram-bot access, the key can be sent over HTTPS through `/api/sync` after HMAC validation of Telegram initData; the backend verifies the provider key and stores it in the existing AES-256-GCM encrypted store. A sync pull returns the key only to the same authenticated Telegram user. If local SecureStorage is unavailable, the browser keeps the key in memory only.
 - The backend validates Telegram's HMAC signature, rejects duplicate fields, caps initData at 16 KiB, and accepts signatures no older than one hour.
+- The `/api/sync` endpoint requires signed Telegram initData, checks the configured browser-origin allowlist, caps request bodies, and rate-limits per-user sync calls. It only reads or changes the authenticated user's encrypted settings and chat data.
 - Per-user requests are limited to 20 per minute, with a process-wide limit and a bounded, periodically cleaned limiter map.
 - Request bodies, file sizes, HTTP headers, webhook secrets, and outbound Telegram requests have explicit limits and timeouts.
 - Telegram updates are written to an encrypted queue, deduplicated by update ID, processed in order per user, and retried with bounded backoff. Replies use an encrypted outbox so a delivery retry does not intentionally repeat the command or paid model call.
