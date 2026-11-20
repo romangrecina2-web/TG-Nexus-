@@ -355,7 +355,7 @@ function createEncryptedStore(options = {}) {
     if (!current.users[id]) {
       current.users[id] = {
         apiKey: '',
-        apiBaseUrl: apiBaseUrl || DEFAULT_API_BASE_URL,
+        apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
         model: options.defaultModel || DEFAULT_MODEL,
         settings: {},
         activeChatId: null,
@@ -931,7 +931,7 @@ function createBotChat(options = {}) {
       ? userSettings.systemPrompt.trim()
       : systemPrompt;
     const formatting = 'Отвечай без таблиц и заголовков #. Используй короткие абзацы, простые списки и жирный шрифт только для важного.';
-    const effectivePrompt = userPrompt.includes(formatting) ? userPrompt : userPrompt + '\\n\\n' + formatting;
+    const effectivePrompt = userPrompt.includes(formatting) ? userPrompt : userPrompt + '\n\n' + formatting;
     const tokenLimit = Math.max(1, Math.min(32_000, Math.round(Number(userSettings.maxTokens) || 1_200)));
     const requestBody = {
       model: chat.model || user.model || defaultModel,
@@ -1082,7 +1082,7 @@ function createBotChat(options = {}) {
           'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
           'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
           'История синхронизируется с Mini App при открытии и сохранении.'
-        ].join('\\n');
+        ].join('\n');
         let settingsUrl = options.webAppUrl || process.env.WEB_APP_URL || '';
         try { const target = new URL(settingsUrl); target.searchParams.set('open', 'settings'); settingsUrl = target.toString(); }
         catch { settingsUrl = ''; }
@@ -1282,7 +1282,7 @@ function createBotChat(options = {}) {
       user.apiBaseUrl = nextBase;
       user.apiBaseUrlExplicit = true;
     }
-    if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\\s/.test(input.model)) {
+    if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\s/.test(input.model)) {
       user.model = input.model.trim();
       user.modelExplicit = true;
     }
@@ -1308,8 +1308,8 @@ function createBotChat(options = {}) {
       for (const raw of input.chats.slice(0, MAX_CHATS_PER_USER)) {
         if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id || raw.id.length > 128) continue;
         const id = raw.id;
-        const title = typeof raw.title === 'string' ? raw.title.replace(/\\s+/g, ' ').trim().slice(0, 100) : 'Чат';
-        const model = typeof raw.model === 'string' && raw.model.length <= 256 && !/\\s/.test(raw.model) ? raw.model : user.model;
+        const title = typeof raw.title === 'string' ? raw.title.replace(/\s+/g, ' ').trim().slice(0, 100) : 'Чат';
+        const model = typeof raw.model === 'string' && raw.model.length <= 256 && !/\s/.test(raw.model) ? raw.model : user.model;
         const createdAt = Math.max(0, Math.min(Date.now(), Number(raw.createdAt) || Date.now()));
         const updatedAt = Math.max(createdAt, Math.min(Date.now() + 60_000, Number(raw.updatedAt) || createdAt));
         const incomingMessages = Array.isArray(raw.messages) ? raw.messages.slice(-200) : [];
@@ -1346,7 +1346,7 @@ function createBotChat(options = {}) {
   async function setApiKey(userId, apiKey, endpoint) {
     const user = store.getUser(userId);
     const providerBase = normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl);
-    if (!providerBase || typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 2_048 || /\\s/.test(apiKey)) {
+    if (!providerBase || typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 2_048 || /\s/.test(apiKey)) {
       throw new Error('Invalid API key or endpoint.');
     }
     if (!(await validateKey(apiKey, providerBase))) throw new Error('API key validation failed.');
