@@ -1248,6 +1248,7 @@ function applyPreset(p){
   syncActiveProviderProfile();
   var profile=(S.cfg.providers||[]).find(function(item){return item.url===preset.url});
   if(!profile){
+    if((S.cfg.providers||[]).length>=12){toast('Сначала удалите профиль: разрешено не больше 12.');return}
     profile={id:'provider_'+makeId(),name:p==='or'?'OpenRouter':'NVIDIA',url:preset.url,model:preset.model,models:[preset.model]};
     S.cfg.providers.push(profile);
   }else{
