@@ -1,3 +1,4 @@
+// Temporary CI verification marker; no runtime impact.
 'use strict';
 
 const test = require('node:test');
