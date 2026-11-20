@@ -15,7 +15,8 @@ const botChat = createBotChat({
   apiBaseUrl: process.env.AI_API_BASE_URL,
   defaultModel: process.env.AI_DEFAULT_MODEL,
   encryptionKey: process.env.BOT_DATA_ENCRYPTION_KEY,
-  dataDir: process.env.DATA_DIR
+  dataDir: process.env.DATA_DIR,
+  webAppUrl: WEB_APP_URL
 });
 
 const MAX_TELEGRAM_FILE_BYTES = 50 * 1024 * 1024;
@@ -393,6 +394,69 @@ async function handleWebhook(req, res, dependencies = {}) {
     return json(res, retryable ? 503 : 200, { ok: false, retryable });
   }
 }
+async function handleSync(req, res, bot = botChat) {
+  if (!/^application\\/json(?:\\s*;|$)/i.test(req.headers['content-type'] || '')) {
+    return json(res, 415, { ok: false, error: 'Ожидается Content-Type: application/json.' });
+  }
+
+  let payload;
+  try {
+    payload = parseJson(await readBody(req, 4 * 1024 * 1024));
+  } catch (error) {
+    return json(res, error.status || 400, { ok: false, error: error.status === 413 ? 'Данные синхронизации слишком большие.' : 'Некорректный JSON.' });
+  }
+
+  const auth = validateTelegramInitData(payload && payload.initData);
+  if (!auth) {
+    return json(res, 401, { ok: false, error: 'Не удалось подтвердить сессию Telegram. Перезапустите Mini App из чата с ботом.' });
+  }
+  if (!bot || !bot.store || !bot.store.enabled ||
+      typeof bot.getSyncState !== 'function' || typeof bot.applySyncState !== 'function') {
+    return json(res, 503, { ok: false, error: 'Защищённое хранилище синхронизации пока недоступно.' });
+  }
+
+  try {
+    if (payload.action === 'pull') {
+      const state = bot.getSyncState(auth.id);
+      return json(res, 200, { ok: true, state });
+    }
+
+    if (payload.action !== 'push' || !payload.state || typeof payload.state !== 'object' || Array.isArray(payload.state)) {
+      return json(res, 400, { ok: false, error: 'Неизвестное действие синхронизации.' });
+    }
+
+    const state = payload.state;
+    const before = bot.getSyncState(auth.id);
+    const allowed = {
+      apiBaseUrl: state.apiBaseUrl,
+      model: state.model,
+      settings: state.settings,
+      chats: state.chats,
+      activeChatId: state.activeChatId
+    };
+    bot.applySyncState(auth.id, allowed);
+
+    if (state.clearApiKey === true) {
+      bot.clearApiKey(auth.id);
+    } else if (typeof state.apiKey === 'string' && state.apiKey.trim() &&
+               state.apiKey !== before.apiKey) {
+      const providerBase = typeof state.apiBaseUrl === 'string' ? state.apiBaseUrl : before.apiBaseUrl;
+      const saved = await bot.setApiKey(auth.id, state.apiKey, providerBase);
+      if (!saved) return json(res, 400, { ok: false, error: 'API-ключ не прошёл проверку провайдера.' });
+    }
+
+    const updated = bot.getSyncState(auth.id);
+    return json(res, 200, { ok: true, state: updated });
+  } catch (error) {
+    const message = String(error && error.message || '');
+    const status = /validation failed|Invalid API endpoint|Invalid API key/i.test(message) ? 400 : 500;
+    return json(res, status, {
+      ok: false,
+      error: status === 400 ? 'Проверьте адрес API и ключ провайдера.' : 'Не удалось сохранить настройки синхронизации.'
+    });
+  }
+}
+
 async function handleSendCode(req, res) {
   if (!BOT_TOKEN) return json(res, 503, { ok: false, error: 'На сервере не настроен BOT_TOKEN.' });
 
@@ -568,6 +632,9 @@ function createServer(options = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/api/send-code') {
         return handleSendCode(req, res);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/sync') {
+        return handleSync(req, res, options.botChat || botChat);
       }
       return json(res, 404, { ok: false, error: 'Not found.' });
     }).catch(() => {
