@@ -269,7 +269,7 @@ test('HTML parse errors retry the same assistant part as plain text', async () =
   const ctx = makeBot({ answer: '**Привет**\n# Заголовок', rejectHtml: true });
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Скажи привет'));
-  const htmlAttempt = ctx.attempts.at(-1);
+  const htmlAttempt = ctx.attempts.find((attempt) => attempt.options.parse_mode === 'HTML');
   const plainFallback = ctx.sent.at(-1);
   assert.equal(htmlAttempt.options.parse_mode, 'HTML');
   assert.equal(htmlAttempt.text, '<b>Привет</b>\n<b>Заголовок</b>');
