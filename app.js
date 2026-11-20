@@ -157,6 +157,9 @@ function load(){
   return norm(s);
 }
 var S=load(),ACTIVE_KEY='',busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
+var TG=(window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.initData)?window.Telegram.WebApp:null;
+var secureKeyStorage=(window.TGShellSecureKeyStorage&&TG)?window.TGShellSecureKeyStorage.create(TG):null;
+var keyStorageStatus='loading',keyInputTouched=false,keyRestorePromise=null;
 try{localStorage.removeItem(OLD);saveNow()}catch(e){}
 function saveNow(){
   if(!storageOK)return;
@@ -170,6 +173,57 @@ function activeModel(c){c=c||cur();return(c&&c.model)||S.cfg.model}
 function addSavedModel(id){id=String(id||'').trim();if(id&&!/\s/.test(id)&&S.cfg.models.indexOf(id)<0)S.cfg.models.push(id);return id}
 function newChat(){var c={id:String(Date.now())+'_'+Math.random().toString(36).slice(2,6),title:'Новый чат',msgs:[],model:S.cfg.model,draft:'',draftAttachments:[],ts:Date.now()};S.chats.unshift(c);S.cur=c.id;saveNow();return c}
 function curKey(){return ACTIVE_KEY}
+function keyApiBase(){return String(S.cfg.url||'').trim().replace(/\\/+$/,'')}
+function updateKeyStorageUi(){
+  var input=$('#cKey'),status=$('#keyStatus'),remove=$('#keyRemove');
+  var messages={
+    loading:'Проверяю защищённое хранилище Telegram…',
+    saved:'Ключ сохранён в защищённом хранилище Telegram на этом устройстве.',
+    empty:'После успешной проверки ключ сохранится в защищённом хранилище Telegram.',
+    'other-provider':'Сохранённый ключ относится к другому адресу API. Для выбранного адреса введите свой ключ.',
+    unsupported:'Этот клиент Telegram не поддерживает SecureStorage. Ключ останется только в памяти вкладки.',
+    outside:'Откройте Mini App внутри Telegram, чтобы использовать защищённое сохранение ключа.',
+    error:'Не удалось прочитать защищённое хранилище. Введите ключ заново.',
+    'save-error':'Подключение работает, но сохранить ключ не удалось. Он останется только в памяти вкладки.',
+    session:'Ключ действует до закрытия вкладки; после проверки его можно сохранить в Telegram.'
+  };
+  if(input){
+    input.placeholder=keyStorageStatus==='saved'?'Ключ сохранён · введите новый, чтобы заменить':
+      (keyStorageStatus==='loading'?'Загружаю сохранённый ключ…':'Вставьте API-ключ');
+  }
+  if(status)status.textContent=messages[keyStorageStatus]||messages.empty;
+  if(remove)remove.disabled=!(secureKeyStorage&&secureKeyStorage.isAvailable()&&
+    (keyStorageStatus==='saved'||keyStorageStatus==='other-provider'));
+}
+async function restoreSavedApiKey(){
+  if(!TG){keyStorageStatus='outside';updateKeyStorageUi();return false}
+  if(!secureKeyStorage||!secureKeyStorage.isAvailable()){
+    keyStorageStatus='unsupported';updateKeyStorageUi();return false;
+  }
+  keyStorageStatus='loading';updateKeyStorageUi();
+  try{
+    var result=await secureKeyStorage.load(keyApiBase());
+    if(keyInputTouched){keyStorageStatus=ACTIVE_KEY?'session':'empty';updateKeyStorageUi();return !!ACTIVE_KEY}
+    if(result.matches&&result.key){ACTIVE_KEY=result.key;keyStorageStatus='saved'}
+    else if(result.found&&!result.matches)keyStorageStatus='other-provider';
+    else keyStorageStatus='empty';
+  }catch(error){
+    keyStorageStatus='error';
+    console.warn('Telegram SecureStorage could not restore the provider key.');
+  }
+  updateKeyStorageUi();
+  return !!ACTIVE_KEY;
+}
+async function removeSavedApiKey(){
+  if(!secureKeyStorage||!secureKeyStorage.isAvailable()){
+    toast('Защищённое хранилище Telegram недоступно в этом клиенте');return;
+  }
+  try{
+    await secureKeyStorage.remove();
+    ACTIVE_KEY='';keyInputTouched=true;keyStorageStatus='empty';$('#cKey').value='';
+    updateKeyStorageUi();render();toast('Сохранённый API-ключ удалён');
+  }catch(error){toast('Не удалось удалить сохранённый ключ')}
+}
 function base(){if(!validApiBase(S.cfg.url))throw new Error('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return S.cfg.url.replace(/\/+$/,'')}
 function hdrs(){var h={'Content-Type':'application/json'};if(curKey())h.Authorization='Bearer '+curKey();return h}
 function memText(){return S.mem.length?'\n\nЧто ты знаешь о пользователе (учитывай это, но не пересказывай без нужды):\n- '+S.mem.join('\n- '):''}
@@ -848,7 +902,7 @@ $('#bNew').onclick=fresh;
 $('#bNewTop').onclick=fresh;
 
 /* ---------- настройки ---------- */
-function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();fillChatModel();updSub()}
+function applyPreset(p){var old=S.cfg.model;ACTIVE_KEY='';keyInputTouched=false;keyStorageStatus='loading';$('#cKey').value='';S.cfg.url=PRESETS[p].url;S.cfg.model=PRESETS[p].model;if(cur()&&activeModel(cur())===old)cur().model=S.cfg.model;addSavedModel(S.cfg.model);saveNow();fillSet();keyRestorePromise=restoreSavedApiKey();fillChatModel();updSub()}
 function hint(){
   var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
   if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
@@ -856,7 +910,7 @@ function hint(){
   else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
 }
 function fillSet(){
-  $('#cUrl').value=S.cfg.url;$('#cKey').value='';$('#cKey').placeholder=curKey()?'Ключ действует до закрытия вкладки':'Ключ не сохраняется. Вставьте его для этой вкладки';$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
+  $('#cUrl').value=S.cfg.url;$('#cKey').value='';updateKeyStorageUi();$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
   $('#cSys').value=S.cfg.sys;$('#cTemp').value=S.cfg.temp;$('#cMax').value=S.cfg.max;$('#cReasoning').value=S.cfg.reasoning||'auto';$('#cAuto').checked=!!S.cfg.auto;$('#cInternet').checked=!!S.cfg.internet;$('#cSandbox').checked=!!S.cfg.sandbox;$('#cSandboxInternet').checked=!!S.cfg.sandboxInternet;$('#cMultiAgent').checked=!!S.cfg.multiAgent;$('#cAgentCount').value=S.cfg.agentCount;$('#agentCountValue').textContent=S.cfg.agentCount;$('#cAgentCount').disabled=!S.cfg.multiAgent;$('#cSandboxTimeout').value=S.cfg.sandboxTimeout;$('#cSandboxInternet').disabled=!S.cfg.sandbox;
   var h=host(S.cfg.url);
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
@@ -878,9 +932,9 @@ function openSet(){fillSet();$('#tres').textContent='';$('#tres').className='not
 $('#bSet').onclick=openSet;
 $('#sDone').onclick=function(){$('#sheet').className='';render()};
 $('#presets').addEventListener('click',function(e){var p=e.target.getAttribute('data-p');if(p){applyPreset(p);$('#tres').textContent=''}});
-$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet()});
-$('#cKey').addEventListener('input',function(){ACTIVE_KEY=this.value.trim()});
-$('#cKey').addEventListener('change',async function(){var el=this;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';el.placeholder='Ключ действует до закрытия вкладки';await $('#bTest').onclick()});
+$('#cUrl').addEventListener('change',function(){var next=this.value.trim();if(!validApiBase(next)){this.value=S.cfg.url;toast('Адрес API должен использовать HTTPS. HTTP разрешён только для localhost.');return}if(next!==S.cfg.url){ACTIVE_KEY='';keyInputTouched=false;keyStorageStatus='loading';$('#cKey').value=''}S.cfg.url=next;if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;save();fillSet();keyRestorePromise=restoreSavedApiKey()});
+$('#cKey').addEventListener('input',function(){keyInputTouched=true;ACTIVE_KEY=this.value.trim();keyStorageStatus=ACTIVE_KEY?'session':'empty';updateKeyStorageUi()});
+$('#cKey').addEventListener('change',async function(){var el=this;keyInputTouched=true;ACTIVE_KEY=el.value.trim();if(!ACTIVE_KEY)return;el.value='';keyStorageStatus='session';updateKeyStorageUi();await $('#bTest').onclick()});
 $('#cModel').addEventListener('input',function(){S.cfg.model=this.value.trim();save();fillChatModel()});
 $('#cModel').addEventListener('change',function(){var v=this.value.trim();if(v){addSavedModel(v);saveNow();renderSavedModels();fillChatModel()}});
 $('#chatModel').addEventListener('change',function(){var c=cur(),v=this.value;if(c){c.model=v;saveNow();updSub();toast('Модель этого чата: '+v)}else{S.cfg.model=v;addSavedModel(v);saveNow();updSub()}});
@@ -928,6 +982,7 @@ $('#cSandboxTimeout').addEventListener('change',function(){
 });
 $('#cAuto').addEventListener('change',function(){S.cfg.auto=this.checked;save()});
 $('#kEye').onclick=function(){var k=$('#cKey');k.type=k.type==='password'?'text':'password';this.textContent=k.type==='password'?'Показать':'Скрыть'};
+$('#keyRemove').onclick=removeSavedApiKey;
 function addMem(){var v=$('#mNew').value;if(addFact(v)){$('#mNew').value='';memList();updSub()}else if(v.trim())toast('Такой факт уже есть или он слишком длинный')}
 $('#mAdd').onclick=addMem;
 $('#mNew').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addMem()}});
@@ -955,7 +1010,22 @@ $('#bTest').onclick=async function(){
         }else{var ke=await httpErr(k);out+='\nНе удалось прочитать статистику ключа: '+niceErr(ke)}
       }catch(e){out+='\nСтатистика ключа недоступна: '+(e.message||e)}
     }
-    note(out,'ok');
+    var persistenceNote='';
+    if(secureKeyStorage&&secureKeyStorage.isAvailable()){
+      try{
+        await secureKeyStorage.save(keyApiBase(),ACTIVE_KEY);
+        keyStorageStatus='saved';
+        persistenceNote='\\nКлюч сохранён в защищённом хранилище Telegram на этом устройстве.';
+      }catch(saveError){
+        keyStorageStatus='save-error';
+        persistenceNote='\\nНе удалось сохранить ключ: '+(saveError&&saveError.message?saveError.message:'ошибка SecureStorage')+'.';
+      }
+    }else{
+      keyStorageStatus=TG?'unsupported':'outside';
+      persistenceNote='\\nЭтот клиент не поддерживает защищённое сохранение. Ключ действует только до закрытия вкладки.';
+    }
+    updateKeyStorageUi();
+    note(out+persistenceNote,'ok');
   }catch(e){note(niceErr(e),'bad')}
 };
 $('#bModels').onclick=async function(){
@@ -1242,7 +1312,6 @@ $('#cBalMan').addEventListener('change',async function(){
   S.cfg.balBase=v;S.cfg.balUsage=u;save();toast('Баланс запомнен: $'+v);
 });
 
-var TG=(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData)?Telegram.WebApp:null;
 function saveText(name,text,mime){
   if(TG){copyText(text).then(function(ok){toast(ok?'Скопировано в буфер. В Телеграме скачивание недоступно':'Не удалось скопировать')});return}
   var b=new Blob([text],{type:mime||'text/plain;charset=utf-8'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1500);
@@ -1274,6 +1343,12 @@ if(TG){
   new MutationObserver(syncBack).observe($('#sheet'),{attributes:true});
 }
 if(!storageOK)$('#nostore').style.display='block';
+if(TG){
+  keyRestorePromise=restoreSavedApiKey();
+  keyRestorePromise.then(function(restored){if(restored)render()});
+}else{
+  keyStorageStatus='outside';updateKeyStorageUi();
+}
 window.addEventListener('beforeunload',saveNow);
 window.addEventListener('pagehide',saveNow);
 document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')saveNow()});
