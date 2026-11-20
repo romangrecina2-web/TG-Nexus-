@@ -10,6 +10,8 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
       - key: WEB_APP_URL
         value: https://romangrecina2-web.github.io/TG-test-/
       - key: ALLOWED_ORIGINS
@@ -22,3 +24,7 @@ services:
         generateValue: true
       - key: DATA_DIR
         value: ./data
+      - key: UPDATE_WORKER_CONCURRENCY
+        value: "3"
+      - key: UPDATE_MAX_ATTEMPTS
+        value: "8"

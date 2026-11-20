@@ -132,9 +132,9 @@ test('webhook forwards private text messages to the Telegram text bot', async ()
     webhookDependencies: {
       webhookSecret: secret,
       botChat: {
-        handleMessage: async (incoming) => {
-          received = incoming;
-          return true;
+        enqueueUpdate: async (incomingUpdate) => {
+          received = incomingUpdate;
+          return { accepted: true, duplicate: false };
         }
       }
     }
@@ -143,8 +143,8 @@ test('webhook forwards private text messages to the Telegram text bot', async ()
   await withListeningServer(server, async (baseUrl) => {
     const result = await postWebhook(baseUrl, update, secret);
     assert.equal(result.status, 200);
-    assert.deepEqual(result.body, { ok: true });
-    assert.deepEqual(received, message);
+    assert.deepEqual(result.body, { ok: true, queued: true, duplicate: false });
+    assert.deepEqual(received, update);
   });
 });
 
@@ -154,8 +154,10 @@ test('webhook returns a retryable failure when text-message handling cannot deli
     webhookDependencies: {
       webhookSecret: secret,
       botChat: {
-        handleMessage: async () => {
-          throw new Error('Temporary Telegram delivery failure');
+        enqueueUpdate: async () => {
+          const error = new Error('Temporary storage failure');
+          error.status = 503;
+          throw error;
         }
       }
     }
@@ -171,7 +173,7 @@ test('webhook returns a retryable failure when text-message handling cannot deli
         from: { id: 123456, is_bot: false }
       }
     }, secret);
-    assert.equal(result.status, 500);
+    assert.equal(result.status, 503);
     assert.deepEqual(result.body, { ok: false, retryable: true });
   });
 });
@@ -187,4 +189,27 @@ test('permanent Telegram 4xx errors are not classified for repeated delivery', (
   assert.equal(isRetryableWebhookError(permanent), false);
   assert.equal(isRetryableWebhookError(rateLimited), true);
   assert.equal(isRetryableWebhookError(unavailable), true);
+});
+
+
+test('webhook does not acknowledge malformed update IDs', async () => {
+  const secret = 'webhook-test-secret-32-characters';
+  const server = createServer({
+    webhookDependencies: {
+      webhookSecret: secret,
+      botChat: {
+        enqueueUpdate: async () => {
+          const error = new Error('Invalid update ID');
+          error.status = 400;
+          throw error;
+        }
+      }
+    }
+  });
+
+  await withListeningServer(server, async (baseUrl) => {
+    const result = await postWebhook(baseUrl, { message: { text: 'hello' } }, secret);
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, { ok: false, retryable: false });
+  });
 });
