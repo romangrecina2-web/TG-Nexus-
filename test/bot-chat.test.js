@@ -10,7 +10,10 @@ const {
   createBotChat,
   createEncryptedStore,
   normalizeApiBase,
-  splitTelegramText
+  markdownToTelegramHtml,
+  splitTelegramHtml,
+  splitTelegramText,
+  telegramHtmlToPlainText
 } = require('../bot-chat');
 
 function tempDir() {
@@ -32,6 +35,7 @@ function makeBot(options = {}) {
   const actions = [];
   const providerCalls = [];
   const events = [];
+  const attempts = [];
   const fetchImpl = options.fetchImpl || (async (url, request) => {
     providerCalls.push({ url, request });
     events.push({ type: 'provider' });
@@ -56,10 +60,18 @@ function makeBot(options = {}) {
     encryptionKey: 'ab'.repeat(32),
     dataDir: dir,
     fetchImpl,
-    sendTelegramMessage: async (chatId, text) => { sent.push({ chatId, text }); events.push({ type: 'send' }); },
+    sendTelegramMessage: async (chatId, text, sendOptions) => {
+      const record = { chatId, text, options: sendOptions || {} };
+      attempts.push(record);
+      events.push({ type: 'send', options: sendOptions || {} });
+      if (options.rejectHtml && sendOptions && sendOptions.parse_mode === 'HTML') {
+        throw new Error("Bad Request: can't parse entities: Unsupported start tag");
+      }
+      sent.push(record);
+    },
     deleteTelegramMessage: async (chatId, messageId) => { actions.push({ type: 'delete', chatId, messageId }); events.push({ type: 'delete' }); }
   });
-  return { bot, dir, sent, actions, providerCalls, events };
+  return { bot, dir, sent, attempts, actions, providerCalls, events };
 }
 
 test('API endpoint must be HTTPS and cannot contain credentials or query parameters', () => {
@@ -164,6 +176,9 @@ test('normal messages create a chat automatically and send the AI response', asy
   assert.equal(user.chats[0].title, 'Чат 1');
   assert.deepEqual(user.chats[0].messages.map((x) => x.role), ['user', 'assistant']);
   assert.equal(ctx.sent.at(-1).text, 'Ответ ИИ');
+  assert.equal(ctx.sent.at(-1).options.parse_mode, 'HTML');
+  const completion = JSON.parse(ctx.providerCalls.at(-1).request.body);
+  assert.match(completion.messages[0].content, /Отвечай без таблиц и заголовков #/);
 });
 
 test('missing API key asks the user to call /key and still creates an active chat', async () => {
@@ -191,6 +206,75 @@ test('long Telegram responses are split below the message-size limit', () => {
   assert.equal(emojiChunks.join(''), '😀'.repeat(4_500));
 });
 
+
+
+test('Markdown inline bold, italic, inline code and fenced code become safe Telegram HTML', () => {
+  const tick = String.fromCharCode(96);
+  assert.equal(
+    markdownToTelegramHtml('**жирный** *курсив* _ещё_ и ' + tick + 'код' + tick),
+    '<b>жирный</b> <i>курсив</i> <i>ещё</i> и <code>код</code>'
+  );
+  assert.equal(
+    markdownToTelegramHtml(tick.repeat(3) + 'js\nconst value = "<tag>";\n' + tick.repeat(3)),
+    '<pre><code>const value = "&lt;tag&gt;";</code></pre>'
+  );
+});
+
+test('Markdown headings, bullets, horizontal rules and links are rendered cleanly', () => {
+  assert.equal(
+    markdownToTelegramHtml('# Заголовок\n- первый\n* второй\n---\n[сайт](https://example.com/?a=1&b=2)'),
+    '<b>Заголовок</b>\n• первый\n• второй\n<a href="https://example.com/?a=1&amp;b=2">сайт</a>'
+  );
+});
+
+test('Markdown tables become readable bullet rows with column labels', () => {
+  assert.equal(
+    markdownToTelegramHtml('| Имя | Значение |\n| --- | --- |\n| alpha | 10 |\n| beta | 20 |'),
+    '• <b>Имя:</b> alpha · <b>Значение:</b> 10\n• <b>Имя:</b> beta · <b>Значение:</b> 20'
+  );
+});
+
+test('malformed Markdown stays readable and raw HTML is escaped', () => {
+  const tick = String.fromCharCode(96);
+  assert.equal(
+    markdownToTelegramHtml('Незакрыто **жирное и ' + tick + 'код <tag> &'),
+    'Незакрыто **жирное и ' + tick + 'код &lt;tag&gt; &amp;'
+  );
+  assert.equal(markdownToTelegramHtml('<b>не HTML</b>'), '&lt;b&gt;не HTML&lt;/b&gt;');
+});
+
+test('HTML chunks stay within the limit and keep every tag balanced, including code blocks', () => {
+  const fence = String.fromCharCode(96).repeat(3);
+  const markdown = 'Перед блоком\n\n' + fence + '\n' +
+    'строка <значение> 😀 '.repeat(100) + '\n' + fence + '\nПосле блока';
+  const chunks = splitTelegramHtml(markdownToTelegramHtml(markdown), 180);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.html.length <= 180);
+    const stack = [];
+    for (const match of chunk.html.matchAll(/<\/?(b|i|code|pre|a)(?:\s+href="[^"]*")?\s*>/g)) {
+      if (match[0].startsWith('</')) {
+        assert.equal(stack.pop(), match[1].toLowerCase());
+      } else {
+        stack.push(match[1].toLowerCase());
+      }
+    }
+    assert.deepEqual(stack, []);
+  }
+  assert.ok(chunks.map((chunk) => chunk.text).join('').includes('<значение>'));
+});
+
+test('HTML parse errors retry the same assistant part as plain text', async () => {
+  const ctx = makeBot({ answer: '**Привет**\n# Заголовок', rejectHtml: true });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Скажи привет'));
+  const htmlAttempt = ctx.attempts.at(-1);
+  const plainFallback = ctx.sent.at(-1);
+  assert.equal(htmlAttempt.options.parse_mode, 'HTML');
+  assert.equal(htmlAttempt.text, '<b>Привет</b>\n<b>Заголовок</b>');
+  assert.equal(plainFallback.text, 'Привет\nЗаголовок');
+  assert.deepEqual(plainFallback.options, {});
+});
 
 test('registered Telegram command names are lowercase and retain /start and /help', () => {
   assert.ok(BOT_COMMANDS.some((item) => item.command === 'start'));
