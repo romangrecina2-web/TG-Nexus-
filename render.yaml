@@ -19,6 +19,6 @@ services:
       - key: AI_DEFAULT_MODEL
         value: nvidia/nemotron-3-ultra-550b-a55b:free
       - key: BOT_DATA_ENCRYPTION_KEY
-        sync: false
+        generateValue: true
       - key: DATA_DIR
         value: ./data

@@ -25,8 +25,14 @@ const BOT_COMMANDS = [
 
 function parseEncryptionKey(value) {
   const raw = String(value || '').trim();
-  if (!/^[a-f0-9]{64}$/i.test(raw)) return null;
-  return Buffer.from(raw, 'hex');
+  if (/^[a-f0-9]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
+
+  // Render generateValue emits a canonical Base64-encoded 256-bit secret.
+  try {
+    const decoded = Buffer.from(raw, 'base64');
+    if (decoded.length === 32 && decoded.toString('base64') === raw) return decoded;
+  } catch {}
+  return null;
 }
 
 function createEncryptedStore(options = {}) {
