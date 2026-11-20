@@ -395,7 +395,7 @@ async function handleWebhook(req, res, dependencies = {}) {
   }
 }
 async function handleSync(req, res, bot = botChat) {
-  if (!/^application\\/json(?:\\s*;|$)/i.test(req.headers['content-type'] || '')) {
+  if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
     return json(res, 415, { ok: false, error: 'Ожидается Content-Type: application/json.' });
   }
 
