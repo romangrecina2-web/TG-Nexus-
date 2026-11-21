@@ -31,6 +31,7 @@ const BOT_COMMANDS = [
   { command: 'key', description: 'Добавить или заменить API-ключ' },
   { command: 'model', description: 'Выбрать модель или показать список' },
   { command: 'test', description: 'Проверить реальный запрос к API' },
+  { command: 'version', description: 'Показать версию backend' },
   { command: 'settings', description: 'Показать настройки ИИ' }
 ];
 
@@ -1550,6 +1551,10 @@ function createBotChat(options = {}) {
     const command = parsed && parsed.name;
 
     if (command === 'start' || command === 'help') return false;
+    if (command === 'version') {
+      await sendText(chatId, 'TG Nexus backend build: 2026-11-21-manual-model-v2. Ручной выбор модели без /models включён.');
+      return true;
+    }
     if (command === 'info') {
       await sendText(chatId,
         '/start — показать кнопку мини-приложения\n' +
@@ -1562,6 +1567,7 @@ function createBotChat(options = {}) {
         '/key [ключ провайдера] — сохранить API-ключ\n' +
         '/model [название модели] — выбрать модель или показать доступные\n' +
         '/test — проверить реальный запрос к API\n' +
+        '/version — показать версию backend\n' +
         '/settings — показать настройки ИИ и открыть Mini App\n\n' +
         'Created tet0r');
       return true;

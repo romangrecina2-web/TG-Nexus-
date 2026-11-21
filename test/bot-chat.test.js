@@ -194,6 +194,12 @@ test('/chat reports empty state and /chat_equip reports an error with the chat l
   assert.match(ctx.sent.at(-1).text, /Чатов пока нет/);
 });
 
+test('/version identifies the deployed Telegram backend build', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/version'));
+  assert.match(ctx.sent.at(-1).text, /TG Nexus backend build: 2026-11-21-manual-model-v2/);
+});
+
 test('/model accepts a manual model ID without depending on the provider catalogue', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/key valid-key'));
