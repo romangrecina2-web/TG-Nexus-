@@ -384,7 +384,9 @@ function createEncryptedStore(options = {}) {
     if (!Array.isArray(user.chats)) user.chats = [];
     if (!user.model && user.modelExplicit !== true) {
       const provider = findProviderByUrl(user.apiBaseUrl);
-      user.model = provider && provider.defaultModel ? provider.defaultModel : (options.defaultModel || DEFAULT_MODEL);
+      user.model = provider && provider.defaultModel
+        ? provider.defaultModel
+        : (provider && provider.id !== 'openrouter' ? (options.defaultModel || '') : (options.defaultModel || DEFAULT_MODEL));
     }
     for (const chat of user.chats) {
       if (!chat || typeof chat !== 'object') continue;
@@ -806,7 +808,8 @@ function createBotChat(options = {}) {
     const nextBase = normalizeApiBase(provider.url);
     if (!nextBase) return { ok: false, reason: 'invalid' };
     if (normalizeApiBase(user.apiBaseUrl || apiBaseUrl) === nextBase &&
-        user.apiProtocol === provider.protocol && user.apiAuthType === provider.authType) {
+        user.apiProtocol === provider.protocol && user.apiAuthType === provider.authType &&
+        user.modelsEndpoint === (provider.modelsEndpoint !== false)) {
       return { ok: true, changed: false, provider };
     }
 
@@ -1061,7 +1064,7 @@ function createBotChat(options = {}) {
           await safeAnswerCallback(query.id, 'Ключ для Telegram-чата не настроен. Откройте полные настройки Mini App.');
           return true;
         }
-        const models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl);
+        const models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl, user);
         const current = currentUserModel(user);
         const choices = [current, ...models.filter((model) => model !== current)].slice(0, 20);
         modelChoiceCache.set(String(userId), { models: choices, expiresAt: Date.now() + 10 * 60_000 });
@@ -1210,37 +1213,6 @@ function createBotChat(options = {}) {
     return [...new Set(models.length ? models : configured)];
   }
 
-  async function validateKey(apiKey, endpoint = apiBaseUrl, user = {}) {
-    const profile = providerProfile(user, endpoint);
-    if (!profile.url || typeof fetchImpl !== 'function') return false;
-    try {
-      if (profile.modelsEndpoint) {
-        const request = PROVIDER_ADAPTERS.modelsRequest(profile, apiKey, false);
-        const response = await fetchImpl(request.url, {
-          method: 'GET',
-          headers: request.headers,
-          signal: AbortSignal.timeout(15_000)
-        });
-        return !!response.ok;
-      }
-      const model = String(user.model || defaultModel).trim();
-      if (!model) return false;
-      const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
-        apiKey, model, maxTokens: 8,
-        messages: [{ role: 'user', content: 'Reply with OK.' }],
-        stream: false
-      }, false);
-      const response = await fetchImpl(request.url, {
-        method: 'POST',
-        headers: request.headers,
-        body: JSON.stringify(request.body),
-        signal: AbortSignal.timeout(15_000)
-      });
-      return !!response.ok;
-    } catch {
-      return false;
-    }
-  }
 
   function checkRateLimit(userId) {
     const now = Date.now();
@@ -1387,7 +1359,7 @@ function createBotChat(options = {}) {
 
   function sanitizeProviderError(value) {
     return String(value || '')
-      .replace(/(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)/gi, '[секрет скрыт]')
+      .replace(/(?:sk-[A-Za-z0-9_-]{8,}|\.storefront\.[A-Za-z0-9_-]{8,}|Bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)/gi, '[секрет скрыт]')
       .replace(/[\r\n\t]+/g, ' ')
       .trim()
       .slice(0, 220);
@@ -1515,6 +1487,10 @@ function createBotChat(options = {}) {
   }
 
   async function handleTestCommand(message, user) {
+    if (!checkRateLimit(message.from.id)) {
+      await sendText(message.chat.id, 'Слишком много запросов. Подождите минуту и повторите.');
+      return;
+    }
     const provider = currentProviderName(user);
     await sendText(message.chat.id, 'Проверяю реальный запрос к ' + provider + '…');
     const result = await testProviderConnection(user);
