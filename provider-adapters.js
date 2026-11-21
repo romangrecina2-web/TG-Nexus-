@@ -118,6 +118,9 @@
       body.reasoning_effort = options.reasoningEffort;
     }
     if (Array.isArray(options && options.tools) && options.tools.length) body.tools = options.tools;
+    if (Number.isInteger(Number(options && options.maxToolCalls)) && Number(options.maxToolCalls) > 0) {
+      body.max_tool_calls = Math.min(20, Number(options.maxToolCalls));
+    }
     return { url: base + '/chat/completions', headers, body, protocol };
   }
 
@@ -205,17 +208,19 @@
             buffer += decoder.decode(item.value, { stream: true });
             const events = buffer.split(/\r?\n\r?\n/);
             buffer = events.pop() || '';
+            let emitted = false;
             for (const eventText of events) {
               const converted = parseEvent(eventText);
               if (converted) {
                 controller.enqueue(encoder.encode(converted));
-                return;
+                emitted = true;
               }
               if (finished) {
                 controller.close();
                 return;
               }
             }
+            if (emitted) return;
           }
         } catch (error) {
           controller.error(error);
