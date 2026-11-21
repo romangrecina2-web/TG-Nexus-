@@ -1365,6 +1365,7 @@ function createBotChat(options = {}) {
 
   function sanitizeProviderError(value) {
     return String(value || '')
+      .replace(/Incorrect API key provided:\s*\S+/gi, 'Incorrect API key provided: [секрет скрыт]')
       .replace(/(?:sk-[A-Za-z0-9_-]{8,}|\.storefront\.[A-Za-z0-9_-]{8,}|Bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)/gi, '[секрет скрыт]')
       .replace(/[\r\n\t]+/g, ' ')
       .trim()
@@ -1425,7 +1426,7 @@ function createBotChat(options = {}) {
     }
     const model = chat.model || user.model || defaultModelForUser(user);
     if (!model || model === 'не выбрана') throw new Error('Модель не выбрана. Выполните /model после добавления ключа.');
-    const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
+    const request = PROVIDER_ADAPTERS.buildModelRequest(profile, {
       apiKey: user.apiKey,
       model,
       messages,
@@ -1448,7 +1449,7 @@ function createBotChat(options = {}) {
       error.status = response.status;
       throw error;
     }
-    const payload = PROVIDER_ADAPTERS.normalizePayload(profile, await response.json().catch(() => ({})));
+    const payload = PROVIDER_ADAPTERS.normalizePayload(profile, await response.json().catch(() => ({})), request.protocol);
     const answer = extractAssistantText(payload);
     if (!answer) throw new Error('Provider returned an empty response.');
     return answer.slice(0, MAX_MESSAGE_LENGTH);
@@ -1463,7 +1464,7 @@ function createBotChat(options = {}) {
       return { ok: false, message: 'Модель не выбрана. Сначала выполните /model и выберите модель.' };
     }
     try {
-      const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
+      const request = PROVIDER_ADAPTERS.buildModelRequest(profile, {
         apiKey: user.apiKey,
         model,
         maxTokens: 512,
@@ -1480,7 +1481,7 @@ function createBotChat(options = {}) {
       if (!response.ok) {
         return { ok: false, message: providerErrorSummary(response.status, extractProviderErrorMessage(payload)), status: response.status };
       }
-      const normalized = PROVIDER_ADAPTERS.normalizePayload(profile, payload);
+      const normalized = PROVIDER_ADAPTERS.normalizePayload(profile, payload, request.protocol);
       const answer = extractAssistantText(normalized);
       if (!answer) return { ok: false, message: 'Провайдер ответил без текста. Проверьте совместимость выбранной модели.' };
       return { ok: true, model, answer: sanitizeProviderError(answer) };

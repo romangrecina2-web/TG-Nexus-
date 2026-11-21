@@ -124,7 +124,107 @@
     return { url: base + '/chat/completions', headers, body, protocol };
   }
 
-  function normalizePayload(profile, payload) {
+  function isOpenAiAstraProModel(profile, model) {
+    const normalizedModel = String(model || '').trim().toLowerCase();
+    if (!/^(?:openai\/)?gpt-6\.2-astra-pro$/.test(normalizedModel)) return false;
+
+    let hostname = '';
+    try { hostname = new URL(cleanBase(profile && profile.url)).hostname.toLowerCase(); } catch {}
+    return !!profile && profile.protocol !== 'anthropic' &&
+      (String(profile.id || '').toLowerCase() === 'openai' || hostname === 'api.openai.com');
+  }
+
+  function buildResponsesRequest(profile, options, browserMode) {
+    const base = cleanBase(profile && profile.url);
+    if (!base) throw new Error('API endpoint is not configured.');
+    if (!isOpenAiAstraProModel(profile, options && options.model)) {
+      throw new Error('The Responses Pro adapter only supports the direct OpenAI GPT-6.2 Astra Pro alias.');
+    }
+
+    const messages = Array.isArray(options && options.messages) ? options.messages : [];
+    const input = [];
+    const instructions = [];
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') continue;
+      if (message.role === 'system' || message.role === 'developer') {
+        if (typeof message.content === 'string' && message.content.trim()) {
+          instructions.push(message.content);
+        }
+        continue;
+      }
+      if ((message.role === 'user' || message.role === 'assistant') &&
+          typeof message.content === 'string' && message.content.length) {
+        input.push({ role: message.role, content: message.content });
+      }
+    }
+    if (!input.some((message) => message.role === 'user')) {
+      throw new Error('Responses API needs at least one user message.');
+    }
+
+    const maxTokens = Math.max(1, Math.min(128_000,
+      Math.round(Number(options && options.maxTokens) || 1200)));
+    const requestedEffort = String(options && options.reasoningEffort || 'medium').toLowerCase();
+    const effort = requestedEffort === 'auto' ? 'medium' :
+      (requestedEffort === 'minimal' ? 'low' : requestedEffort);
+    const supportedEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+    const body = {
+      model: 'gpt-6.2-astra',
+      input,
+      max_output_tokens: maxTokens,
+      reasoning: {
+        mode: 'pro',
+        effort: supportedEfforts.includes(effort) ? effort : 'medium'
+      }
+    };
+    if (instructions.length) body.instructions = instructions.join('\n\n');
+
+    return {
+      url: base + '/responses',
+      headers: authHeaders(profile, options && options.apiKey || '', browserMode),
+      body,
+      protocol: 'responses'
+    };
+  }
+
+  function buildModelRequest(profile, options, browserMode) {
+    if (isOpenAiAstraProModel(profile, options && options.model)) {
+      return buildResponsesRequest(profile, options, browserMode);
+    }
+    return buildChatRequest(profile, options, browserMode);
+  }
+
+  function normalizeResponsesPayload(payload) {
+    const output = Array.isArray(payload && payload.output) ? payload.output : [];
+    const parts = [];
+    for (const item of output) {
+      if (!item || item.type !== 'message' || !Array.isArray(item.content)) continue;
+      for (const part of item.content) {
+        if (part && part.type === 'output_text' && typeof part.text === 'string') parts.push(part.text);
+        else if (part && part.type === 'refusal' && typeof part.refusal === 'string') parts.push(part.refusal);
+      }
+    }
+    const text = parts.join('');
+    const inputTokens = Number(payload && payload.usage && payload.usage.input_tokens) || 0;
+    const outputTokens = Number(payload && payload.usage && payload.usage.output_tokens) || 0;
+    return {
+      id: payload && payload.id,
+      model: payload && payload.model,
+      choices: [{
+        index: 0,
+        message: { role: 'assistant', content: text },
+        finish_reason: 'stop'
+      }],
+      usage: {
+        prompt_tokens: inputTokens,
+        completion_tokens: outputTokens,
+        total_tokens: inputTokens + outputTokens
+      }
+    };
+  }
+
+  function normalizePayload(profile, payload, requestProtocol) {
+    if (requestProtocol === 'responses') return normalizeResponsesPayload(payload);
     if (!profile || profile.protocol !== 'anthropic') return payload;
     const blocks = Array.isArray(payload && payload.content) ? payload.content : [];
     const text = blocks.filter((part) => part && part.type === 'text')
@@ -258,7 +358,10 @@
   return {
     authHeaders,
     buildChatRequest,
+    buildModelRequest,
+    buildResponsesRequest,
     extractModels,
+    isOpenAiAstraProModel,
     modelsRequest,
     normalizePayload,
     normalizeStream,

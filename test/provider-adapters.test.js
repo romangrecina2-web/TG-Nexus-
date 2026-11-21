@@ -36,6 +36,63 @@ test('OpenAI-compatible profile builds Chat Completions with Bearer auth', () =>
   assert.equal(request.body.messages[0].content, 'Hello');
 });
 
+test('OpenAI GPT-6.2 Astra Pro alias uses Responses API with pro reasoning mode', () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const request = adapters.buildModelRequest(openai, {
+    apiKey: 'openai-test-key',
+    model: 'openai/gpt-6.2-astra-pro',
+    messages: [
+      { role: 'system', content: 'Follow the system rules.' },
+      { role: 'user', content: 'Review this patch.' },
+      { role: 'assistant', content: 'I will inspect it.' },
+      { role: 'user', content: 'Now identify the regression.' }
+    ],
+    maxTokens: 700,
+    reasoningEffort: 'xhigh',
+    temperature: 0.2
+  }, false);
+
+  assert.equal(request.url, 'https://api.openai.com/v1/responses');
+  assert.equal(request.protocol, 'responses');
+  assert.equal(request.headers.Authorization, 'Bearer openai-test-key');
+  assert.equal(request.body.model, 'gpt-6.2-astra');
+  assert.equal(request.body.max_output_tokens, 700);
+  assert.deepEqual(request.body.reasoning, { mode: 'pro', effort: 'xhigh' });
+  assert.equal(request.body.instructions, 'Follow the system rules.');
+  assert.deepEqual(request.body.input, [
+    { role: 'user', content: 'Review this patch.' },
+    { role: 'assistant', content: 'I will inspect it.' },
+    { role: 'user', content: 'Now identify the regression.' }
+  ]);
+  assert.equal(request.body.temperature, undefined);
+
+  const normalized = adapters.normalizePayload(openai, {
+    id: 'resp_test',
+    model: 'gpt-6.2-astra',
+    output: [{
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'The regression is fixed.' }]
+    }],
+    usage: { input_tokens: 17, output_tokens: 9 }
+  }, request.protocol);
+  assert.equal(normalized.choices[0].message.content, 'The regression is fixed.');
+  assert.equal(normalized.usage.total_tokens, 26);
+});
+
+test('OpenRouter keeps its own GPT-6.2 Astra Pro model ID and Chat Completions route', () => {
+  const openrouter = catalog.find((item) => item.id === 'openrouter');
+  const request = adapters.buildModelRequest(openrouter, {
+    apiKey: 'openrouter-test-key',
+    model: 'openai/gpt-6.2-astra-pro',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+
+  assert.equal(request.url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(request.body.model, 'openai/gpt-6.2-astra-pro');
+  assert.equal(request.protocol, 'openai');
+});
+
 test('provider-specific authorization headers are applied', () => {
   const clarifai = catalog.find((item) => item.id === 'clarifai');
   const anthropic = catalog.find((item) => item.id === 'anthropic');

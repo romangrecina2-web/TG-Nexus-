@@ -171,6 +171,73 @@ test('/test performs a real completion request and reports upstream authenticati
   assert.equal(ctx.sent.at(-1).text.includes('bad-key'), false);
 });
 
+test('/test uses Responses API and pro reasoning for the direct OpenAI Astra Pro alias', async () => {
+  const calls = [];
+  const ctx = makeBot({
+    fetchImpl: async (url, request) => {
+      calls.push({ url: String(url), request });
+      const body = JSON.parse(request.body);
+      assert.equal(body.model, 'gpt-6.2-astra');
+      assert.deepEqual(body.reasoning, { mode: 'pro', effort: 'medium' });
+      assert.equal(body.max_output_tokens, 512);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'resp_test',
+          model: 'gpt-6.2-astra',
+          output: [{
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'TEST_OK' }]
+          }]
+        })
+      };
+    }
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiBaseUrl = 'https://api.openai.com/v1';
+  user.apiProtocol = 'openai';
+  user.apiAuthType = 'bearer';
+  user.apiKey = 'valid-openai-test-key';
+  user.model = 'openai/gpt-6.2-astra-pro';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/test'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
+  assert.equal(calls[0].request.headers.Authorization, 'Bearer valid-openai-test-key');
+  assert.match(ctx.sent.at(-1).text, /Подключение работает/);
+  assert.match(ctx.sent.at(-1).text, /TEST_OK/);
+  assert.match(ctx.sent.at(-1).text, /openai\/gpt-6\.2-astra-pro/);
+});
+
+test('/test redacts masked API key fragments returned by the provider', async () => {
+  const ctx = makeBot({
+    fetchImpl: async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({
+        error: {
+          message: 'Incorrect API key provided: .storefr****************6e9b. You can find your API key at the dashboard.'
+        }
+      })
+    })
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'invalid-test-key';
+  user.model = 'test/model-a';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/test'));
+  const reply = ctx.sent.at(-1).text;
+  assert.match(reply, /HTTP 401/);
+  assert.match(reply, /секрет скрыт/);
+  assert.doesNotMatch(reply, /storefr|6e9b|\*{4,}/i);
+});
+
 test('/add_chat creates numbered names and /CHAT_EQUIP switches chats case-insensitively', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/add_chat'));
