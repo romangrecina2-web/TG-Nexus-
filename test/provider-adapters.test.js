@@ -360,7 +360,7 @@ test('Responses SSE stream converts text, reasoning and function tool events to 
   assert.ok(text.includes('"reasoning_content":"Checking."'));
   assert.match(text, /"id":"call_1"/);
   assert.match(text, /"name":"sandbox_run_javascript"/);
-  assert.match(text, /"arguments":"\\{\\"code\\":\\"1\\+1\\"\\}"/);
+  assert.ok(text.includes('"arguments":"{\\\"code\\":\\\"1+1\\\"}"'));
   assert.match(text, /"finish_reason":"tool_calls"/);
   assert.match(text, /data: \[DONE\]/);
 });
@@ -407,7 +407,7 @@ test('Responses stream emits final-only function calls without corrupting later 
   const text = await adapters.normalizeStream(source, openai, 'responses').text();
   assert.match(text, /"id":"call_final"/);
   assert.match(text, /"name":"sandbox_run_javascript"/);
-  assert.match(text, /"arguments":"\\{\\"code\\":\\"40\\+2\\"\\}"/);
+  assert.ok(text.includes('"arguments":"{\\\"code\\":\\\"40+2\\\"}"'));
   assert.match(text, /"finish_reason":"tool_calls"/);
   assert.match(text, /data: \[DONE\]/);
 });
