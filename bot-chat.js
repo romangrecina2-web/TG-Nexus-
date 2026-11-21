@@ -246,13 +246,21 @@ function createEncryptedStore(options = {}) {
     const item = queueItem(updateId);
     if (!item) throw new Error('The queued Telegram update no longer exists.');
     const index = item.outbox.length;
-    item.outbox.push({
+    const entry = {
       chatId: message.chatId,
+      kind: message.kind === 'document' ? 'document' : 'message',
       text: String(message.text == null ? '' : message.text),
       options: message.options || {},
       status: 'pending',
       createdAt: Date.now()
-    });
+    };
+    if (entry.kind === 'document') {
+      entry.fileName = String(message.fileName || 'code.txt').slice(0, 120);
+      entry.mimeType = String(message.mimeType || 'text/plain; charset=utf-8').slice(0, 100);
+      entry.caption = String(message.caption || '').slice(0, 900);
+      entry.contentBase64 = String(message.contentBase64 || '');
+    }
+    item.outbox.push(entry);
     save();
     return { index };
   }
@@ -669,6 +677,7 @@ function createBotChat(options = {}) {
     : configuredSystemPrompt + '\n\n' + formattingInstruction;
   const fetchImpl = options.fetchImpl || global.fetch;
   const rawSendTelegramMessage = options.sendTelegramMessage || defaultSendTelegramMessage;
+  const rawSendTelegramDocument = options.sendTelegramDocument || defaultSendTelegramDocument;
   const deleteTelegramMessage = options.deleteTelegramMessage || defaultDeleteTelegramMessage;
   const store = options.store || createEncryptedStore({
     encryptionKey: options.encryptionKey || process.env.BOT_DATA_ENCRYPTION_KEY,
@@ -728,6 +737,29 @@ function createBotChat(options = {}) {
     return telegramRequest('sendMessage', { chat_id: chatId, text, ...sendOptions });
   }
 
+  async function defaultSendTelegramDocument(chatId, document) {
+    if (!botToken) throw new Error('Telegram bot token is not configured.');
+    const bytes = Buffer.from(String(document.contentBase64 || ''), 'base64');
+    const form = new FormData();
+    form.set('chat_id', String(chatId));
+    if (document.caption) form.set('caption', String(document.caption).slice(0, 900));
+    form.set('document', new Blob([bytes], { type: document.mimeType || 'text/plain; charset=utf-8' }), document.fileName || 'code.txt');
+    const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/sendDocument', {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(60_000)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      const error = new Error(result.description || 'Telegram document upload failed.');
+      error.telegramDescription = result.description || '';
+      error.telegramErrorCode = result.error_code || response.status;
+      error.retryAfterSeconds = Number(result.parameters && result.parameters.retry_after) || 0;
+      throw error;
+    }
+    return result.result;
+  }
+
   async function defaultDeleteTelegramMessage(chatId, messageId) {
     return telegramRequest('deleteMessage', { chat_id: chatId, message_id: messageId });
   }
@@ -744,6 +776,27 @@ function createBotChat(options = {}) {
       text,
       reply_markup: replyMarkup
     }));
+
+  async function sendTelegramDocument(chatId, document) {
+    const packet = {
+      fileName: String(document.fileName || 'code.txt').slice(0, 120),
+      mimeType: String(document.mimeType || 'text/plain; charset=utf-8').slice(0, 100),
+      caption: String(document.caption || '').slice(0, 900),
+      contentBase64: Buffer.from(document.content || '').toString('base64')
+    };
+    const context = updateContext.getStore();
+    if (!context || !Number.isSafeInteger(context.updateId)) return rawSendTelegramDocument(chatId, packet);
+    const queued = store.appendOutbox(context.updateId, { chatId, kind: 'document', ...packet });
+    let sent;
+    try {
+      sent = await rawSendTelegramDocument(chatId, packet);
+    } catch (error) {
+      error.telegramDeliveryFailure = true;
+      throw error;
+    }
+    store.markOutboxDelivered(context.updateId, queued.index);
+    return sent;
+  }
 
   async function sendText(chatId, text) {
     const chunks = splitTelegramText(text);
@@ -816,6 +869,103 @@ function createBotChat(options = {}) {
         return seconds;
       }
     };
+  }
+
+  function isCodeArtifactRequest(text) {
+    return /(?:создай|создайте|напиши|напишите|сгенерируй|сгенерируйте|сделай|сделайте|разработай|реализуй|подготовь|сохрани|исправь|перепиши|обнови|build|create|write|generate|make|implement|prepare)\b[\s\S]{0,140}?(?:код|скрипт|программ|приложен|игр|сайт|страниц|бот|плагин|расширен|файл|проект|code|script|program|app|game|website|page|plugin|extension|file|project)/i.test(String(text || ''));
+  }
+
+  function codeFileExtension(language) {
+    const key = String(language || '').toLowerCase().replace(/^language-/, '');
+    const extensions = {
+      python: 'py', py: 'py', javascript: 'js', js: 'js', mjs: 'mjs', cjs: 'cjs',
+      typescript: 'ts', ts: 'ts', jsx: 'jsx', tsx: 'tsx', html: 'html', htm: 'html',
+      css: 'css', json: 'json', xml: 'xml', sql: 'sql', bash: 'sh', shell: 'sh', sh: 'sh',
+      yaml: 'yaml', yml: 'yml', toml: 'toml', markdown: 'md', md: 'md', text: 'txt',
+      txt: 'txt', java: 'java', c: 'c', h: 'h', cpp: 'cpp', hpp: 'hpp', csharp: 'cs',
+      cs: 'cs', go: 'go', rust: 'rs', rs: 'rs', php: 'php', ruby: 'rb', rb: 'rb',
+      swift: 'swift', kotlin: 'kt', kt: 'kt', powershell: 'ps1', ps1: 'ps1',
+      vue: 'vue', svelte: 'svelte'
+    };
+    return extensions[key] || 'txt';
+  }
+
+  function safeGeneratedFileName(value, language, index) {
+    let name = String(value || '').trim().replace(/^['"]|['"]$/g, '');
+    name = name.split(/[\\/]/).pop().replace(/[^\p{L}\p{N}._ -]/gu, '_').trim().slice(0, 100);
+    if (!name || name === '.' || name === '..') name = 'code-' + index;
+    if (!/\.[a-z0-9]{1,8}$/i.test(name)) name += '.' + codeFileExtension(language);
+    return name;
+  }
+
+  function splitAssistantFiles(answer, requestText) {
+    const source = String(answer || '');
+    const tick = String.fromCharCode(96).repeat(3);
+    const fencePattern = new RegExp('(^|\\n)[ \\t]*' + tick + '([^\\n\\x60]*?)\\n([\\s\\S]*?)\\n?[ \\t]*' + tick, 'g');
+    const matches = [...source.matchAll(fencePattern)];
+    if (!matches.length) return null;
+    const shouldCreateFiles = isCodeArtifactRequest(requestText) || matches.some((match) =>
+      /(?:filename=)?[^\\s\\x60]+\\.[a-z0-9]{1,8}(?:\\s|$)/i.test(String(match[2] || ''))
+    );
+    if (!shouldCreateFiles) return null;
+
+    const segments = [];
+    let lastIndex = 0;
+    let fileIndex = 0;
+    for (const match of matches) {
+      const start = match.index + match[1].length;
+      const end = match.index + match[0].length;
+      const before = source.slice(lastIndex, start).trim();
+      if (before) segments.push({ type: 'text', value: before });
+      const parts = String(match[2] || '').trim().split(/\\s+/).filter(Boolean);
+      let language = parts[0] || 'text';
+      let candidateName = '';
+      if (/^[\\w.-]+\\.[a-z0-9]{1,8}$/i.test(language)) {
+        candidateName = language;
+        language = 'text';
+      } else {
+        const namePart = parts.slice(1).find((part) => /(?:filename=)?[^\\s]+\\.[a-z0-9]{1,8}$/i.test(part));
+        if (namePart) candidateName = namePart.replace(/^filename=/i, '');
+      }
+      fileIndex += 1;
+      const name = safeGeneratedFileName(candidateName, language, fileIndex);
+      const content = String(match[3] || '').replace(/\\s+$/, '') + '\\n';
+      segments.push({ type: 'file', name, language, content });
+      lastIndex = end;
+    }
+    const tail = source.slice(lastIndex).trim();
+    if (tail) segments.push({ type: 'text', value: tail });
+    return segments;
+  }
+
+  async function sendAssistantResponse(chatId, answer, requestText) {
+    const segments = splitAssistantFiles(answer, requestText);
+    if (!segments || !segments.some((segment) => segment.type === 'file')) {
+      await sendAssistantText(chatId, answer);
+      return;
+    }
+    const files = segments.filter((segment) => segment.type === 'file');
+    if (files.length > 5) {
+      await sendText(chatId, 'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.');
+      return;
+    }
+    for (const segment of segments) {
+      if (segment.type === 'text') {
+        await sendAssistantText(chatId, segment.value);
+        continue;
+      }
+      const size = Buffer.byteLength(segment.content, 'utf8');
+      if (!size || size > 2 * 1024 * 1024) {
+        await sendText(chatId, 'Файл «' + segment.name + '» не отправлен: пустой или превышает лимит 2 МБ.');
+        continue;
+      }
+      await sendTelegramDocument(chatId, {
+        fileName: segment.name,
+        mimeType: 'text/plain; charset=utf-8',
+        caption: 'Файл с кодом: ' + segment.name,
+        content: segment.content
+      });
+    }
   }
 
   const modelChoiceCache = new Map();
@@ -1525,7 +1675,8 @@ function createBotChat(options = {}) {
       ? userSettings.systemPrompt.trim()
       : systemPrompt;
     const formatting = 'Отвечай без таблиц и заголовков #. Используй короткие абзацы, простые списки и жирный шрифт только для важного.';
-    const effectivePrompt = userPrompt.includes(formatting) ? userPrompt : userPrompt + '\n\n' + formatting;
+    const fileOutputInstruction = 'Когда пользователь просит создать или изменить код/файл/проект, выдавай каждый готовый файл отдельным блоком кода с именем файла после языка, например: ' + String.fromCharCode(96).repeat(3) + 'python main.py. Внутри блока должен быть полный текст файла без пропусков. Для многофайлового проекта используй отдельный блок на каждый файл. Не помещай полный код файла в обычный текст.';
+    const effectivePrompt = (userPrompt.includes(formatting) ? userPrompt : userPrompt + '\n\n' + formatting) + '\n\n' + fileOutputInstruction;
     const messages = [{ role: 'system', content: effectivePrompt }, ...history];
     const tokenLimit = Math.max(1, Math.min(32_000, Math.round(Number(userSettings.maxTokens) || 1_200)));
     const tools = [];
@@ -1655,7 +1806,7 @@ function createBotChat(options = {}) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
     store.save();
-    await sendAssistantText(message.chat.id, answer);
+    await sendAssistantResponse(message.chat.id, answer, text);
   }
 
   async function processMessage(message, parsed, text) {
@@ -1808,7 +1959,16 @@ function createBotChat(options = {}) {
   async function flushPendingOutbox(updateId) {
     const state = store.getOutboxState(updateId);
     for (const entry of state.pending) {
-      await rawSendTelegramMessage(entry.chatId, entry.text, entry.options || {});
+      if (entry.kind === 'document') {
+        await rawSendTelegramDocument(entry.chatId, {
+          fileName: entry.fileName,
+          mimeType: entry.mimeType,
+          caption: entry.caption,
+          contentBase64: entry.contentBase64
+        });
+      } else {
+        await rawSendTelegramMessage(entry.chatId, entry.text, entry.options || {});
+      }
       store.markOutboxDelivered(updateId, entry.index);
     }
   }
