@@ -85,7 +85,7 @@ function makeBot(options = {}) {
     dataDir: dir,
     fetchImpl,
     sendTelegramMessage: async (chatId, text, sendOptions) => {
-      const record = { chatId, text, options: sendOptions || {} };
+      const record = { chatId, text, options: sendOptions || {}, message_id: attempts.length + 1 };
       attempts.push(record);
       events.push({ type: 'send', options: sendOptions || {} });
       if (options.failSends || (options.failSendsOnce && attempts.length === 1)) {
