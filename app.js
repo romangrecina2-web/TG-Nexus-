@@ -161,12 +161,12 @@ function norm(d){
       modelsEndpoint:typeof p.modelsEndpoint==='boolean'?p.modelsEndpoint:(!catalogProfile||catalogProfile.modelsEndpoint!==false)};
     if(catalogProfile){
       merged.catalogId=catalogProfile.id;
-      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','responsesImages','notice'].forEach(function(key){
         if(p[key]===undefined&&catalogProfile[key]!==undefined)merged[key]=catalogProfile[key];
       });
       if(catalogProfile.protocol==='responses'&&p.protocol!=='anthropic')merged.protocol='responses';
     }else{
-      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','responsesImages','notice'].forEach(function(key){
         if(p[key]!==undefined)merged[key]=p[key];
       });
     }
@@ -238,7 +238,7 @@ function addCatalogProvider(){
     protocol:item.protocol||'openai',authType:item.authType||'bearer',
     modelsEndpoint:item.modelsEndpoint!==false,
     chatPath:item.chatPath,responsesPath:item.responsesPath,messagesPath:item.messagesPath,
-    modelsPath:item.modelsPath,responsesModels:item.responsesModels,notice:item.notice
+    modelsPath:item.modelsPath,responsesModels:item.responsesModels,responsesImages:item.responsesImages,notice:item.notice
   };
   S.cfg.providers.push(profile);
   applyProviderProfile(profile);
@@ -255,7 +255,7 @@ function activeProviderProfile(){
   var catalogProfile=PROVIDER_CATALOG.find(function(item){return item.id===profile.catalogId||item.url===profile.url})||null;
   if(catalogProfile){
     profile.catalogId=catalogProfile.id;
-    ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+    ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','responsesImages','notice'].forEach(function(key){
       if(profile[key]===undefined&&catalogProfile[key]!==undefined)profile[key]=catalogProfile[key];
     });
     if(catalogProfile.protocol==='responses'&&profile.protocol!=='anthropic'){
@@ -458,7 +458,7 @@ async function applyRemoteSyncState(state){
       if(nextCatalog){
         var activeProfile=(S.cfg.providers||[]).find(function(profile){return profile.url===S.cfg.url||profile.catalogId===nextCatalog.id});
         if(!activeProfile&&S.cfg.providers.length<30){
-          activeProfile={id:'catalog_'+nextCatalog.id,catalogId:nextCatalog.id,name:nextCatalog.name,url:nextBase,model:S.cfg.model,models:S.cfg.models.slice(),protocol:nextCatalog.protocol||'openai',authType:nextCatalog.authType||'bearer',modelsEndpoint:nextCatalog.modelsEndpoint!==false,chatPath:nextCatalog.chatPath,responsesPath:nextCatalog.responsesPath,messagesPath:nextCatalog.messagesPath,modelsPath:nextCatalog.modelsPath,responsesModels:nextCatalog.responsesModels,notice:nextCatalog.notice};
+          activeProfile={id:'catalog_'+nextCatalog.id,catalogId:nextCatalog.id,name:nextCatalog.name,url:nextBase,model:S.cfg.model,models:S.cfg.models.slice(),protocol:nextCatalog.protocol||'openai',authType:nextCatalog.authType||'bearer',modelsEndpoint:nextCatalog.modelsEndpoint!==false,chatPath:nextCatalog.chatPath,responsesPath:nextCatalog.responsesPath,messagesPath:nextCatalog.messagesPath,modelsPath:nextCatalog.modelsPath,responsesModels:nextCatalog.responsesModels,responsesImages:nextCatalog.responsesImages,notice:nextCatalog.notice};
           S.cfg.providers.push(activeProfile);
         }
         if(!activeProfile){
@@ -469,7 +469,7 @@ async function applyRemoteSyncState(state){
         activeProfile.url=S.cfg.url;
         activeProfile.protocol=nextCatalog.protocol==='responses'?'responses':(state.apiProtocol||nextCatalog.protocol||'openai');
         activeProfile.authType=state.apiAuthType||nextCatalog.authType||'bearer';
-        ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+        ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','responsesImages','notice'].forEach(function(key){
           if(activeProfile[key]===undefined&&nextCatalog[key]!==undefined)activeProfile[key]=nextCatalog[key];
         });
         activeProfile.modelsEndpoint=typeof state.modelsEndpoint==='boolean'?state.modelsEndpoint:nextCatalog.modelsEndpoint!==false;

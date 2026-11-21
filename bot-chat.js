@@ -1208,6 +1208,7 @@ function createBotChat(options = {}) {
       messagesPath: catalog && catalog.messagesPath,
       modelsPath: catalog && catalog.modelsPath,
       responsesModels: catalog && catalog.responsesModels,
+      responsesImages: catalog && catalog.responsesImages,
       notice: catalog && catalog.notice
     };
   }
