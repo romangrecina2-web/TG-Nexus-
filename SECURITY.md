@@ -2,7 +2,7 @@
 
 ## Security boundary
 
-TG Shell is a browser application. The Mini App uses Telegram's signed initData to authenticate with its backend. The Mini App can call an OpenAI-compatible provider directly from the browser, while the Telegram bot uses a per-user API key stored in the backend's encrypted AES-256-GCM store.
+TG Shell is a browser application. The Mini App uses Telegram's signed initData to authenticate with its backend. The Mini App supports 30 provider profiles: most use OpenAI-compatible Chat Completions, and Anthropic uses its native Messages API adapter. The Telegram bot uses the same adapter layer and stores the active per-user API key in the backend's encrypted AES-256-GCM store.
 
 ## Protections implemented
 
@@ -20,7 +20,8 @@ TG Shell is a browser application. The Mini App uses Telegram's signed initData 
 ## Important limitations
 
 - A browser-only app cannot protect a key from malware, browser extensions with broad permissions, or code execution that already has same-origin access. Do not use a high-value API key in a compromised browser profile. Rotate a key immediately if it may have leaked.
-- Multi-agent requests can send task context to several configured providers. Each provider may charge independently and apply its own data-retention terms; use only providers you trust. The app currently supports OpenAI-compatible Chat Completions endpoints rather than every provider's native protocol.
+- Multi-agent requests can send task context to several configured providers. Each provider may charge independently and apply its own data-retention terms; use only providers you trust. The current adapter set covers OpenAI-compatible Chat Completions plus Anthropic Messages. It does not claim to implement every provider's proprietary protocol, provider-specific tools, or every optional parameter.
+- API profiles are presets, not a guarantee that every account can use every listed model. A few providers do not expose a compatible /models endpoint, so model IDs must be entered manually. Direct browser access also depends on the provider's CORS policy.
 - The sandbox network-on mode is an opt-in convenience boundary, not a server-grade network firewall. Browser code can only fetch HTTPS resources that pass browser CORS, and it has request/response limits. The client cannot reliably resolve and validate every DNS answer before connecting, so do not run untrusted code with network access when private-network isolation is a hard requirement.
 - CORS is not authentication. The backend authorization check is Telegram's signed initData; the CORS allowlist is an additional browser-origin restriction.
 - The one-hour initData window is a replay window. Rate limits reduce abuse but do not turn Telegram initData into a per-request nonce.
