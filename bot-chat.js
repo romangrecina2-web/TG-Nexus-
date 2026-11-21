@@ -1464,7 +1464,7 @@ function createBotChat(options = {}) {
       const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
         apiKey: user.apiKey,
         model,
-        maxTokens: 16,
+        maxTokens: 512,
         messages: [{ role: 'user', content: 'Reply with TEST_OK only.' }],
         stream: false
       }, false);
