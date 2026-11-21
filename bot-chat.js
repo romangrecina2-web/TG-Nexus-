@@ -1553,7 +1553,7 @@ function createBotChat(options = {}) {
 
     if (command === 'start' || command === 'help') return false;
     if (command === 'version') {
-      await sendText(chatId, 'TG Nexus backend build: 2026-11-21-manual-model-v2. Ручной выбор модели без /models включён.');
+      await sendText(chatId, 'TG Nexus backend build: 2026-11-21-responses-pro-v3. Astra Pro через Responses API; ручной выбор моделей включён.');
       return true;
     }
     if (command === 'info') {

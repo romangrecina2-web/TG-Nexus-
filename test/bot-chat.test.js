@@ -264,7 +264,7 @@ test('/chat reports empty state and /chat_equip reports an error with the chat l
 test('/version identifies the deployed Telegram backend build', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/version'));
-  assert.match(ctx.sent.at(-1).text, /TG Nexus backend build: 2026-11-21-manual-model-v2/);
+  assert.match(ctx.sent.at(-1).text, /TG Nexus backend build: 2026-11-21-responses-pro-v3/);
 });
 
 test('/model accepts a manual model ID without depending on the provider catalogue', async () => {
@@ -363,6 +363,45 @@ test('Telegram bot uses native Anthropic Messages API with the provider authenti
   assert.equal(calls[0].request.headers['x-api-key'], 'anthropic-test-key');
   assert.equal(calls[0].request.headers['anthropic-version'], '2023-06-01');
   assert.equal(ctx.sent.at(-1).text, 'Ответ от Anthropic');
+});
+
+test('normal chat messages use Responses API for direct OpenAI Astra Pro', async () => {
+  const calls = [];
+  const ctx = makeBot({
+    fetchImpl: async (url, request) => {
+      calls.push({ url: String(url), request });
+      const body = JSON.parse(request.body);
+      assert.equal(body.model, 'gpt-6.2-astra');
+      assert.deepEqual(body.reasoning, { mode: 'pro', effort: 'medium' });
+      assert.ok(body.input.some((item) => item.role === 'user' && item.content === 'Review this patch.'));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'resp_chat_test',
+          model: 'gpt-6.2-astra',
+          output: [{
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'NORMAL_CHAT_OK' }]
+          }]
+        })
+      };
+    }
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiBaseUrl = 'https://api.openai.com/v1';
+  user.apiProtocol = 'openai';
+  user.apiAuthType = 'bearer';
+  user.apiKey = 'valid-openai-test-key';
+  user.model = 'openai/gpt-6.2-astra-pro';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('Review this patch.'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
+  assert.match(ctx.sent.at(-1).text, /NORMAL_CHAT_OK/);
 });
 
 test('normal messages create a chat automatically and send the AI response', async () => {
