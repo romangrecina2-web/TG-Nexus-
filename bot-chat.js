@@ -1625,7 +1625,8 @@ function createBotChat(options = {}) {
         '/model [название модели] — выбрать модель или показать доступные\n' +
         '/test — проверить реальный запрос к API\n' +
         '/version — показать версию backend\n' +
-        '/settings — показать настройки ИИ и открыть Mini App\n\n' +
+        '/settings — показать настройки ИИ и открыть Mini App\n' +
+        '/cancel — отменить текущий ввод настройки\n\n' +
         'Created tet0r');
       return true;
     }
