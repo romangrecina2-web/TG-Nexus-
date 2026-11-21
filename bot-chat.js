@@ -1659,7 +1659,7 @@ function createBotChat(options = {}) {
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Тайм-аут» снова.');
           return true;
         }
-        if (!/^\\d{1,4}$/.test(text)) {
+        if (!/^\d{1,4}$/.test(text)) {
           await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до 7200. Например: 900. Для отмены — /cancel.');
           return true;
         }
