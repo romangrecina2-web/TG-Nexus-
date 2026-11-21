@@ -32,7 +32,8 @@ const BOT_COMMANDS = [
   { command: 'model', description: 'Выбрать модель или показать список' },
   { command: 'test', description: 'Проверить реальный запрос к API' },
   { command: 'version', description: 'Показать версию backend' },
-  { command: 'settings', description: 'Показать настройки ИИ' }
+  { command: 'settings', description: 'Показать настройки ИИ' },
+  { command: 'cancel', description: 'Отменить текущий ввод настройки' }
 ];
 
 function parseEncryptionKey(value) {
@@ -761,6 +762,7 @@ function createBotChat(options = {}) {
   }
 
   const modelChoiceCache = new Map();
+  const pendingTimeoutInput = new Map();
   const tokenPresets = [512, 1200, 2000, 4000, 8000, 16000, 32000];
   const reasoningChoices = ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'];
   const reasoningLabels = {
@@ -863,12 +865,13 @@ function createBotChat(options = {}) {
   }
 
   function currentRequestTimeout(user) {
-    return Math.max(10, Math.min(600, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
+    return Math.max(10, Math.min(7200, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
   }
 
   function settingsMessageText(user, view = 'main') {
     if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
     if (view === 'timeout') return 'Выберите время ожидания ответа провайдера. Текущее значение: ' + currentRequestTimeout(user) + ' секунд.';
+    if (view === 'timeout-input') return 'Отправьте одним сообщением целое число секунд от 10 до 7200. Максимум — 2 часа. Для отмены отправьте /cancel.';
     if (view === 'reasoning') {
       const current = user.settings && user.settings.reasoning || 'auto';
       return 'Выберите уровень рассуждений. Текущее значение: ' + (reasoningLabels[current] || 'Авто') + '.';
@@ -913,7 +916,7 @@ function createBotChat(options = {}) {
   function settingsKeyboard(user, view = 'main') {
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
-      const choices = [10, 30, 60, 120, 180, 300, 600];
+      const choices = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200];
       const rows = [];
       for (let i = 0; i < choices.length; i += 3) {
         rows.push(choices.slice(i, i + 3).map((value) => ({
@@ -921,9 +924,11 @@ function createBotChat(options = {}) {
           callback_data: 'tn:timeout:' + value
         })));
       }
+      rows.push([{ text: '✍️ Ввести своё значение', callback_data: 'tn:timeout:custom' }]);
       rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
       return { inline_keyboard: rows };
     }
+    if (view === 'timeout-input') return { inline_keyboard: [[{ text: '← Назад', callback_data: 'tn:back' }]] };
     if (view === 'tokens') {
       const current = currentTokenLimit(user);
       const rows = [];
@@ -1083,8 +1088,13 @@ function createBotChat(options = {}) {
         view = 'tokens';
         notice = 'Выберите лимит ответа.';
       } else if (data === 'tn:timeout') {
+        pendingTimeoutInput.delete(String(userId));
         view = 'timeout';
         notice = 'Выберите время ожидания ответа провайдера.';
+      } else if (data === 'tn:timeout:custom') {
+        pendingTimeoutInput.set(String(userId), { createdAt: Date.now() });
+        view = 'timeout-input';
+        notice = 'Жду ваше значение в секундах.';
       } else if (data === 'tn:model') {
         if (!user.apiKey) {
           await safeAnswerCallback(query.id, 'Ключ для Telegram-чата не настроен. Откройте полные настройки Mini App.');
@@ -1098,11 +1108,12 @@ function createBotChat(options = {}) {
         view = 'models';
         notice = 'Выберите модель.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
+        pendingTimeoutInput.delete(String(userId));
         view = 'main';
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
         const tokenMatch = data.match(/^tn:t:(512|1200|2000|4000|8000|16000|32000)$/);
-        const timeoutMatch = data.match(/^tn:timeout:(10|30|60|120|180|300|600)$/);
+        const timeoutMatch = data.match(/^tn:timeout:(10|30|60|120|300|600|1800|3600|7200)$/);
         const modelMatch = data.match(/^tn:m:(\d{1,2})$/);
         if (timeoutMatch) {
           const previous = user.settings || {};
@@ -1592,6 +1603,11 @@ function createBotChat(options = {}) {
     const command = parsed && parsed.name;
 
     if (command === 'start' || command === 'help') return false;
+    if (command === 'cancel') {
+      pendingTimeoutInput.delete(String(message.from.id));
+      await sendText(chatId, 'Ввод тайм-аута отменён.');
+      return true;
+    }
     if (command === 'version') {
       await sendText(chatId, 'TG Nexus backend build: 2026-11-21-responses-pro-v3. Astra Pro через Responses API; ручной выбор моделей включён.');
       return true;
@@ -1635,6 +1651,32 @@ function createBotChat(options = {}) {
     }
 
     try {
+      const timeoutInputKey = String(message.from.id);
+      const pendingTimeout = pendingTimeoutInput.get(timeoutInputKey);
+      if (pendingTimeout && !command) {
+        if (Date.now() - pendingTimeout.createdAt > 10 * 60_000) {
+          pendingTimeoutInput.delete(timeoutInputKey);
+          await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Тайм-аут» снова.');
+          return true;
+        }
+        if (!/^\\d{1,4}$/.test(text)) {
+          await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до 7200. Например: 900. Для отмены — /cancel.');
+          return true;
+        }
+        const seconds = Number(text);
+        if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 7200) {
+          await sendText(chatId, 'Значение должно быть от 10 до 7200 секунд. Текущее значение не изменено.');
+          return true;
+        }
+        const previous = user.settings || {};
+        user.settings = { ...previous, requestTimeoutSeconds: seconds };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        pendingTimeoutInput.delete(timeoutInputKey);
+        await sendText(chatId, 'Тайм-аут ответа провайдера установлен: ' + seconds + ' секунд.');
+        await sendSettings(chatId, user);
+        return true;
+      }
+      if (pendingTimeout && command) pendingTimeoutInput.delete(timeoutInputKey);
       if (command === 'chat') {
         await sendText(chatId, chatListText(user));
         return true;
@@ -1908,7 +1950,7 @@ function createBotChat(options = {}) {
       });
       if (source.agentCount !== undefined && Number.isFinite(Number(source.agentCount))) next.agentCount = Math.max(1, Math.min(20, Math.round(Number(source.agentCount))));
       if (source.sandboxTimeout !== undefined && Number.isFinite(Number(source.sandboxTimeout))) next.sandboxTimeout = Math.max(1, Math.min(3600, Math.round(Number(source.sandboxTimeout))));
-      if (source.requestTimeoutSeconds !== undefined && Number.isFinite(Number(source.requestTimeoutSeconds))) next.requestTimeoutSeconds = Math.max(10, Math.min(600, Math.round(Number(source.requestTimeoutSeconds))));
+      if (source.requestTimeoutSeconds !== undefined && Number.isFinite(Number(source.requestTimeoutSeconds))) next.requestTimeoutSeconds = Math.max(10, Math.min(7200, Math.round(Number(source.requestTimeoutSeconds))));
       if (source.sumAt !== undefined && Number.isFinite(Number(source.sumAt))) next.sumAt = Math.max(2_000, Math.min(2_000_000, Math.round(Number(source.sumAt))));
       if (source.keep !== undefined && Number.isFinite(Number(source.keep))) next.keep = Math.max(2, Math.min(100, Math.round(Number(source.keep))));
       if (source.pinCap !== undefined && Number.isFinite(Number(source.pinCap))) next.pinCap = Math.max(300, Math.min(100_000, Math.round(Number(source.pinCap))));
