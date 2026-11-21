@@ -1157,6 +1157,10 @@ function createBotChat(options = {}) {
     }
 
     const keyUser = store.getUser(message.from.id);
+    if (!keyUser.modelsEndpoint && !String(keyUser.model || '').trim()) {
+      await sendText(message.chat.id, 'У этого провайдера нет списка моделей. Сначала задайте модель командой /model [ID модели], затем добавьте ключ командой /key.');
+      return;
+    }
     const valid = await validateKey(args, keyUser.apiBaseUrl || apiBaseUrl, keyUser);
     if (!valid) {
       await sendText(message.chat.id, 'Неудачно, проверьте ключ и повторите попытку');
@@ -1180,6 +1184,24 @@ function createBotChat(options = {}) {
   }
 
   async function handleModelCommand(message, user, args) {
+    if (!user.modelsEndpoint) {
+      if (!args) {
+        await sendText(message.chat.id, 'Этот провайдер не публикует совместимый список моделей. Укажите ID вручную: /model [ID модели].');
+        return;
+      }
+      const manualModel = String(args).trim();
+      if (!manualModel || manualModel.length > 256 || /\s/.test(manualModel)) {
+        await sendText(message.chat.id, 'Укажите один ID модели без пробелов: /model [ID модели].');
+        return;
+      }
+      user.model = manualModel;
+      user.modelExplicit = true;
+      const manualChat = activeChat(user);
+      if (manualChat) { manualChat.model = manualModel; manualChat.updatedAt = Date.now(); }
+      store.save();
+      await sendText(message.chat.id, 'ID модели сохранён: ' + manualModel + '. Добавьте ключ командой /key.');
+      return;
+    }
     if (!user.apiKey) {
       await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key.');
       return;
