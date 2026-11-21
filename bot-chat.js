@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const PROVIDER_ADAPTERS = require('./provider-adapters');
+const PROVIDER_CATALOG = require('./provider-catalog');
 
 const DEFAULT_API_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
@@ -26,8 +27,10 @@ const BOT_COMMANDS = [
   { command: 'add_chat', description: 'Создать чат: /add_chat [название]' },
   { command: 'chat_equip', description: 'Выбрать чат: /chat_equip [название]' },
   { command: 'info', description: 'Показать список команд' },
+  { command: 'provider', description: 'Выбрать API-провайдера' },
   { command: 'key', description: 'Добавить или заменить API-ключ' },
   { command: 'model', description: 'Выбрать модель или показать список' },
+  { command: 'test', description: 'Проверить реальный запрос к API' },
   { command: 'settings', description: 'Показать настройки ИИ' }
 ];
 
@@ -360,6 +363,7 @@ function createEncryptedStore(options = {}) {
       current.users[id] = {
         apiKey: '',
         apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
+        apiProviderId: findProviderByUrl(options.apiBaseUrl || DEFAULT_API_BASE_URL)?.id || 'custom',
         apiProtocol: 'openai',
         apiAuthType: 'bearer',
         modelsEndpoint: true,
@@ -372,12 +376,16 @@ function createEncryptedStore(options = {}) {
     const user = current.users[id];
     if (typeof user.apiKey !== 'string') user.apiKey = '';
     if (!normalizeApiBase(user.apiBaseUrl)) user.apiBaseUrl = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+    user.apiProviderId = findProviderByUrl(user.apiBaseUrl)?.id || 'custom';
     if (!['openai', 'anthropic'].includes(user.apiProtocol)) user.apiProtocol = 'openai';
     if (!['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType)) user.apiAuthType = 'bearer';
     user.modelsEndpoint = user.modelsEndpoint !== false;
     if (!user.settings || typeof user.settings !== 'object' || Array.isArray(user.settings)) user.settings = {};
     if (!Array.isArray(user.chats)) user.chats = [];
-    if (!user.model) user.model = options.defaultModel || DEFAULT_MODEL;
+    if (!user.model && user.modelExplicit !== true) {
+      const provider = findProviderByUrl(user.apiBaseUrl);
+      user.model = provider && provider.defaultModel ? provider.defaultModel : (options.defaultModel || DEFAULT_MODEL);
+    }
     for (const chat of user.chats) {
       if (!chat || typeof chat !== 'object') continue;
       if (typeof chat.id !== 'string' || !chat.id) chat.id = crypto.randomUUID();
@@ -416,6 +424,16 @@ function createEncryptedStore(options = {}) {
   } catch {
     return null;
   }
+}
+
+function findProviderById(id) {
+  return PROVIDER_CATALOG.find((provider) => provider.id === String(id || '').trim().toLowerCase()) || null;
+}
+
+function findProviderByUrl(value) {
+  const base = normalizeApiBase(value);
+  if (!base) return null;
+  return PROVIDER_CATALOG.find((provider) => normalizeApiBase(provider.url) === base) || null;
 }
 
 function splitTelegramText(value, maxLength = TELEGRAM_CHUNK_LENGTH) {
@@ -763,8 +781,75 @@ function createBotChat(options = {}) {
     }
   }
 
+  function currentProvider(user) {
+    return findProviderByUrl(user.apiBaseUrl || apiBaseUrl);
+  }
+
+  function defaultModelForUser(user) {
+    const provider = currentProvider(user);
+    if (provider && provider.defaultModel) return provider.defaultModel;
+    return normalizeApiBase(user.apiBaseUrl || apiBaseUrl) === normalizeApiBase(apiBaseUrl) ? defaultModel : '';
+  }
+
   function currentUserModel(user) {
-    return (activeChat(user) || {}).model || user.model || defaultModel;
+    return (activeChat(user) || {}).model || user.model || defaultModelForUser(user) || 'не выбрана';
+  }
+
+  function currentProviderName(user) {
+    const provider = currentProvider(user);
+    return provider ? provider.name : 'Пользовательский endpoint';
+  }
+
+  function changeProvider(user, providerId) {
+    const provider = findProviderById(providerId);
+    if (!provider) return { ok: false, reason: 'unknown' };
+    const nextBase = normalizeApiBase(provider.url);
+    if (!nextBase) return { ok: false, reason: 'invalid' };
+    if (normalizeApiBase(user.apiBaseUrl || apiBaseUrl) === nextBase &&
+        user.apiProtocol === provider.protocol && user.apiAuthType === provider.authType) {
+      return { ok: true, changed: false, provider };
+    }
+
+    const previous = {
+      apiBaseUrl: user.apiBaseUrl,
+      apiBaseUrlExplicit: user.apiBaseUrlExplicit,
+      apiProviderId: user.apiProviderId,
+      apiProtocol: user.apiProtocol,
+      apiAuthType: user.apiAuthType,
+      modelsEndpoint: user.modelsEndpoint,
+      apiKey: user.apiKey,
+      model: user.model,
+      modelExplicit: user.modelExplicit,
+      chatModels: user.chats.map((chat) => ({ chat, model: chat.model }))
+    };
+    user.apiBaseUrl = nextBase;
+    user.apiBaseUrlExplicit = true;
+    user.apiProviderId = provider.id;
+    user.apiProtocol = provider.protocol || 'openai';
+    user.apiAuthType = provider.authType || 'bearer';
+    user.modelsEndpoint = provider.modelsEndpoint !== false;
+    user.apiKey = '';
+    user.model = provider.defaultModel || '';
+    user.modelExplicit = true;
+    for (const chat of user.chats) chat.model = user.model;
+    try {
+      store.save();
+    } catch (error) {
+      Object.assign(user, {
+        apiBaseUrl: previous.apiBaseUrl,
+        apiBaseUrlExplicit: previous.apiBaseUrlExplicit,
+        apiProviderId: previous.apiProviderId,
+        apiProtocol: previous.apiProtocol,
+        apiAuthType: previous.apiAuthType,
+        modelsEndpoint: previous.modelsEndpoint,
+        apiKey: previous.apiKey,
+        model: previous.model,
+        modelExplicit: previous.modelExplicit
+      });
+      for (const item of previous.chatModels) item.chat.model = item.model;
+      throw error;
+    }
+    return { ok: true, changed: true, provider };
   }
 
   function currentTokenLimit(user) {
@@ -782,6 +867,17 @@ function createBotChat(options = {}) {
       const count = entry && Array.isArray(entry.models) ? entry.models.length : 0;
       return 'Выберите модель из списка провайдера' + (count ? ' (' + count + ' вариантов)' : '') + '.';
     }
+    const providersView = String(view).match(/^providers:(\d+)$/);
+    if (providersView) {
+      const page = Math.max(0, Math.min(Math.ceil(PROVIDER_CATALOG.length / 10) - 1, Number(providersView[1])));
+      const start = page * 10;
+      const current = currentProvider(user);
+      return 'Выберите API-провайдера. Сейчас: ' + currentProviderName(user) + '.\n' +
+        PROVIDER_CATALOG.slice(start, start + 10).map((provider) =>
+          (current && current.id === provider.id ? '✓ ' : '• ') + provider.name + ' (' + provider.id + ')'
+        ).join('\n') + '\nСтраница ' + (page + 1) + ' из ' + Math.ceil(PROVIDER_CATALOG.length / 10) +
+        '. При смене старый ключ и модель отключаются.';
+    }
 
     const settings = user.settings || {};
     const apiBase = user.apiBaseUrl || apiBaseUrl || 'не задан';
@@ -789,6 +885,7 @@ function createBotChat(options = {}) {
     const maxTokens = currentTokenLimit(user);
     return [
       'Настройки TG Nexus',
+      'Провайдер: ' + currentProviderName(user),
       'API: ' + apiBase,
       'Модель: ' + currentUserModel(user),
       'Лимит ответа: ' + maxTokens + ' токенов',
@@ -839,6 +936,25 @@ function createBotChat(options = {}) {
       rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
       return { inline_keyboard: rows };
     }
+    const providersView = String(view).match(/^providers:(\d+)$/);
+    if (providersView) {
+      const page = Math.max(0, Math.min(Math.ceil(PROVIDER_CATALOG.length / 10) - 1, Number(providersView[1])));
+      const current = currentProvider(user);
+      const providers = PROVIDER_CATALOG.slice(page * 10, page * 10 + 10);
+      const rows = [];
+      for (let i = 0; i < providers.length; i += 2) {
+        rows.push(providers.slice(i, i + 2).map((provider) => ({
+          text: (current && current.id === provider.id ? '✓ ' : '') + provider.name.slice(0, 35),
+          callback_data: 'tn:provider:' + provider.id
+        })));
+      }
+      const navigation = [];
+      if (page > 0) navigation.push({ text: '← Предыдущие', callback_data: 'tn:providers:' + (page - 1) });
+      if (page < Math.ceil(PROVIDER_CATALOG.length / 10) - 1) navigation.push({ text: 'Следующие →', callback_data: 'tn:providers:' + (page + 1) });
+      if (navigation.length) rows.push(navigation);
+      rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
+      return { inline_keyboard: rows };
+    }
 
     const settings = user.settings || {};
     const rows = [
@@ -850,6 +966,7 @@ function createBotChat(options = {}) {
         { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
         { text: '🤖 Модель', callback_data: 'tn:model' }
       ],
+      [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
     const url = getSettingsUrl();
@@ -914,7 +1031,21 @@ function createBotChat(options = {}) {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
-      if (data === 'tn:search') {
+      const providersPageMatch = data.match(/^tn:providers:(\d)$/);
+      const providerSelectMatch = data.match(/^tn:provider:([a-z0-9_-]{1,40})$/i);
+      if (providersPageMatch) {
+        view = 'providers:' + providersPageMatch[1];
+        notice = 'Выберите API-провайдера.';
+      } else if (providerSelectMatch) {
+        const result = changeProvider(user, providerSelectMatch[1].toLowerCase());
+        if (!result.ok) {
+          await safeAnswerCallback(query.id, 'Неизвестный провайдер. Обновите панель настроек.');
+          return true;
+        }
+        notice = result.changed
+          ? 'Провайдер изменён на ' + result.provider.name + '. Добавьте API-ключ и выберите модель.'
+          : result.provider.name + ' уже выбран.';
+      } else if (data === 'tn:search') {
         const previous = user.settings || {};
         user.settings = { ...previous, internetSearch: previous.internetSearch !== true };
         try { store.save(); } catch (error) { user.settings = previous; throw error; }
@@ -1018,7 +1149,7 @@ function createBotChat(options = {}) {
     const chat = {
       id: crypto.randomUUID(),
       title: String(title || nextChatTitle(user)).replace(/\s+/g, ' ').trim().slice(0, 100) || nextChatTitle(user),
-      model: user.model || defaultModel,
+      model: user.model || defaultModelForUser(user),
       createdAt: now,
       updatedAt: now,
       messages: []
@@ -1144,7 +1275,7 @@ function createBotChat(options = {}) {
   }
 
   async function handleKeyCommand(message, args) {
-    // Remove the message before any validation request so the key is not left in chat history.
+    // Delete the command immediately so the credential is not retained in Telegram chat history.
     try { await deleteTelegramMessage(message.chat.id, message.message_id); } catch {}
 
     if (!args || /\s/.test(args) || args.length > 2_048) {
@@ -1153,17 +1284,6 @@ function createBotChat(options = {}) {
     }
     if (!store.enabled) {
       await sendText(message.chat.id, 'Безопасное хранилище не настроено на сервере. Обратитесь к администратору.');
-      return;
-    }
-
-    const keyUser = store.getUser(message.from.id);
-    if (!keyUser.modelsEndpoint && !String(keyUser.model || '').trim()) {
-      await sendText(message.chat.id, 'У этого провайдера нет списка моделей. Сначала задайте модель командой /model [ID модели], затем добавьте ключ командой /key.');
-      return;
-    }
-    const valid = await validateKey(args, keyUser.apiBaseUrl || apiBaseUrl, keyUser);
-    if (!valid) {
-      await sendText(message.chat.id, 'Неудачно, проверьте ключ и повторите попытку');
       return;
     }
 
@@ -1177,10 +1297,43 @@ function createBotChat(options = {}) {
         user.apiKey = previousKey;
         throw error;
       }
-      await sendText(message.chat.id, 'Удачно изменено');
+      await sendText(message.chat.id,
+        'Ключ сохранён для провайдера ' + currentProviderName(user) + '.\n' +
+        'Это ещё не проверка доступа: выполните /test после выбора модели.');
     } catch {
       await sendText(message.chat.id, 'Не удалось безопасно сохранить ключ. Обратитесь к администратору.');
     }
+  }
+
+  function listProvidersText(user) {
+    const current = currentProvider(user);
+    return 'Текущий провайдер: ' + currentProviderName(user) + '.\n' +
+      'Выберите командой /provider [ID]:\n' +
+      PROVIDER_CATALOG.map((provider) =>
+        (current && current.id === provider.id ? '✓ ' : '• ') + provider.id + ' — ' + provider.name
+      ).join('\n');
+  }
+
+  async function handleProviderCommand(message, user, args) {
+    if (!args) {
+      await sendText(message.chat.id, listProvidersText(user));
+      return;
+    }
+    const normalized = args.trim().toLowerCase();
+    const provider = findProviderById(normalized) ||
+      PROVIDER_CATALOG.find((item) => item.name.toLowerCase() === normalized) || null;
+    if (!provider) {
+      await sendText(message.chat.id, 'Провайдер не найден. Используйте /provider, чтобы увидеть поддерживаемые варианты.');
+      return;
+    }
+    const result = changeProvider(user, provider.id);
+    if (!result.ok) {
+      await sendText(message.chat.id, 'Не удалось переключить провайдера. Проверьте настройки и повторите.');
+      return;
+    }
+    await sendText(message.chat.id, result.changed
+      ? 'Провайдер изменён: ' + provider.name + '.\nСтарый ключ сброшен, чтобы не отправлять его другому сервису.\nТеперь выполните /key [ключ], затем выберите модель командой /model.'
+      : provider.name + ' уже выбран. Проверьте или добавьте ключ командой /key, а модель — командой /model.');
   }
 
   async function handleModelCommand(message, user, args) {
@@ -1232,6 +1385,35 @@ function createBotChat(options = {}) {
     await sendText(message.chat.id, 'Модель выбрана: ' + selected);
   }
 
+  function sanitizeProviderError(value) {
+    return String(value || '')
+      .replace(/(?:sk-[A-Za-z0-9_-]{8,}|Bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)/gi, '[секрет скрыт]')
+      .replace(/[\r\n\t]+/g, ' ')
+      .trim()
+      .slice(0, 220);
+  }
+
+  function providerErrorSummary(status, detail) {
+    const safeDetail = sanitizeProviderError(detail);
+    const lead = status === 401 || status === 403 ? 'Провайдер отклонил ключ или не дал доступ.'
+      : status === 402 ? 'Провайдер сообщил о недостатке средств или лимита.'
+      : status === 404 ? 'Провайдер не нашёл выбранную модель или endpoint.'
+      : status === 429 ? 'Провайдер ограничил запрос или временно занят.'
+      : status >= 500 ? 'На стороне провайдера произошла серверная ошибка.'
+      : 'Провайдер отклонил запрос.';
+    return lead + ' HTTP ' + status + (safeDetail ? ': ' + safeDetail : '.');
+  }
+
+  function extractProviderErrorMessage(payload) {
+    if (!payload || typeof payload !== 'object') return '';
+    const error = payload.error;
+    if (typeof error === 'string') return error;
+    if (error && typeof error.message === 'string') return error.message;
+    if (typeof payload.message === 'string') return payload.message;
+    if (typeof payload.detail === 'string') return payload.detail;
+    return '';
+  }
+
   function extractAssistantText(payload) {
     const content = payload && payload.choices && payload.choices[0] &&
       payload.choices[0].message && payload.choices[0].message.content;
@@ -1263,9 +1445,11 @@ function createBotChat(options = {}) {
     if (userSettings.internetSearch === true && profile.protocol === 'openai' && new URL(providerBase).hostname === 'openrouter.ai') {
       tools.push({ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } });
     }
+    const model = chat.model || user.model || defaultModelForUser(user);
+    if (!model || model === 'не выбрана') throw new Error('Модель не выбрана. Выполните /model после добавления ключа.');
     const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
       apiKey: user.apiKey,
-      model: chat.model || user.model || defaultModel,
+      model,
       messages,
       maxTokens: tokenLimit,
       temperature: userSettings.temperature,
@@ -1280,11 +1464,66 @@ function createBotChat(options = {}) {
       body: JSON.stringify(request.body),
       signal: AbortSignal.timeout(120_000)
     });
-    if (!response.ok) throw new Error('Provider completion request failed.');
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      const error = new Error(providerErrorSummary(response.status, extractProviderErrorMessage(errorPayload)));
+      error.status = response.status;
+      throw error;
+    }
     const payload = PROVIDER_ADAPTERS.normalizePayload(profile, await response.json().catch(() => ({})));
     const answer = extractAssistantText(payload);
     if (!answer) throw new Error('Provider returned an empty response.');
     return answer.slice(0, MAX_MESSAGE_LENGTH);
+  }
+
+  async function testProviderConnection(user) {
+    if (!user.apiKey) return { ok: false, message: 'API-ключ не сохранён. Сначала выполните /key [ключ].' };
+    const profile = providerProfile(user, user.apiBaseUrl || apiBaseUrl);
+    const chat = activeChat(user);
+    const model = (chat && chat.model) || user.model || defaultModelForUser(user);
+    if (!model || model === 'не выбрана') {
+      return { ok: false, message: 'Модель не выбрана. Сначала выполните /model и выберите модель.' };
+    }
+    try {
+      const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
+        apiKey: user.apiKey,
+        model,
+        maxTokens: 16,
+        messages: [{ role: 'user', content: 'Reply with TEST_OK only.' }],
+        stream: false
+      }, false);
+      const response = await fetchImpl(request.url, {
+        method: 'POST',
+        headers: request.headers,
+        body: JSON.stringify(request.body),
+        signal: AbortSignal.timeout(30_000)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return { ok: false, message: providerErrorSummary(response.status, extractProviderErrorMessage(payload)), status: response.status };
+      }
+      const normalized = PROVIDER_ADAPTERS.normalizePayload(profile, payload);
+      const answer = extractAssistantText(normalized);
+      if (!answer) return { ok: false, message: 'Провайдер ответил без текста. Проверьте совместимость выбранной модели.' };
+      return { ok: true, model, answer: sanitizeProviderError(answer) };
+    } catch (error) {
+      const message = sanitizeProviderError(error && error.message || 'Network request failed.');
+      return { ok: false, message: /timeout|aborted/i.test(message)
+        ? 'Истекло время ожидания ответа провайдера.'
+        : 'Не удалось связаться с endpoint провайдера: ' + message };
+    }
+  }
+
+  async function handleTestCommand(message, user) {
+    const provider = currentProviderName(user);
+    await sendText(message.chat.id, 'Проверяю реальный запрос к ' + provider + '…');
+    const result = await testProviderConnection(user);
+    if (!result.ok) {
+      await sendText(message.chat.id, 'Проверка не пройдена.\n' + result.message);
+      return;
+    }
+    await sendText(message.chat.id,
+      'Подключение работает.\nПровайдер: ' + provider + '\nМодель: ' + result.model + '\nОтвет API: ' + result.answer);
   }
 
   async function handleUserMessage(message, user, text) {
@@ -1310,8 +1549,9 @@ function createBotChat(options = {}) {
     let answer;
     try {
       answer = await requestAssistant(user, chat);
-    } catch {
-      await sendText(message.chat.id, 'Не удалось получить ответ от ИИ. Проверьте подключение, ключ и выбранную модель.');
+    } catch (error) {
+      const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
+      await sendText(message.chat.id, 'Не удалось получить ответ от ИИ.\nПричина: ' + reason);
       return;
     }
 
@@ -1337,8 +1577,10 @@ function createBotChat(options = {}) {
         '/add_chat [название] — создать чат и сделать его активным\n' +
         '/chat_equip [название чата] — выбрать существующий чат\n' +
         '/info — список команд\n' +
-        '/key [ключ провайдера] — добавить или заменить API-ключ\n' +
+        '/provider [ID] — выбрать API-провайдера\n' +
+        '/key [ключ провайдера] — сохранить API-ключ\n' +
         '/model [название модели] — выбрать модель или показать доступные\n' +
+        '/test — проверить реальный запрос к API\n' +
         '/settings — показать настройки ИИ и открыть Mini App\n\n' +
         'Created tet0r');
       return true;
@@ -1347,7 +1589,7 @@ function createBotChat(options = {}) {
       await handleKeyCommand(message, parsed.args);
       return true;
     }
-    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings'].includes(command)) {
+    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -1388,8 +1630,16 @@ function createBotChat(options = {}) {
         await sendText(chatId, 'Активный чат: «' + found.title + '».');
         return true;
       }
+      if (command === 'provider') {
+        await handleProviderCommand(message, user, parsed.args);
+        return true;
+      }
       if (command === 'model') {
         await handleModelCommand(message, user, parsed.args);
+        return true;
+      }
+      if (command === 'test') {
+        await handleTestCommand(message, user);
         return true;
       }
       if (command === 'settings') {
@@ -1567,10 +1817,12 @@ function createBotChat(options = {}) {
     const user = store.getUser(userId);
     return {
       apiBaseUrl: (user.apiBaseUrlExplicit || user.apiKey) ? (user.apiBaseUrl || apiBaseUrl) : '',
+      apiProviderId: findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || 'custom',
+      apiProviderName: (findProviderByUrl(user.apiBaseUrl || apiBaseUrl) || {}).name || 'Пользовательский endpoint',
       apiProtocol: user.apiProtocol || 'openai',
       apiAuthType: user.apiAuthType || 'bearer',
       modelsEndpoint: user.modelsEndpoint !== false,
-      model: user.modelExplicit || user.model !== defaultModel ? (user.model || defaultModel) : '',
+      model: user.modelExplicit ? (user.model || '') : (user.model !== defaultModel ? (user.model || '') : ''),
       apiKey: user.apiKey || '',
       settings: user.settings || {},
       activeChatId: user.activeChatId || null,
@@ -1588,6 +1840,7 @@ function createBotChat(options = {}) {
       const previousBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
       if (previousBase !== nextBase) { user.apiKey = ''; providerChanged = true; }
       user.apiBaseUrl = nextBase;
+      user.apiProviderId = findProviderByUrl(nextBase)?.id || 'custom';
       user.apiBaseUrlExplicit = true;
     }
     if (input.apiProtocol === 'openai' || input.apiProtocol === 'anthropic') {
@@ -1671,6 +1924,7 @@ function createBotChat(options = {}) {
     if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
       user.activeChatId = input.activeChatId;
     }
+    user.apiProviderId = findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || 'custom';
     user.syncInitialized = true;
     store.save();
     return getSyncState(userId);
@@ -1688,8 +1942,8 @@ function createBotChat(options = {}) {
       apiProtocol: apiProtocol === 'anthropic' ? 'anthropic' : (apiProtocol === 'openai' ? 'openai' : user.apiProtocol),
       modelsEndpoint: typeof modelsEndpoint === 'boolean' ? modelsEndpoint : user.modelsEndpoint
     };
-    if (!(await validateKey(apiKey, providerBase, candidate))) throw new Error('API key validation failed.');
     user.apiBaseUrl = providerBase;
+    user.apiProviderId = findProviderByUrl(providerBase)?.id || 'custom';
     user.apiBaseUrlExplicit = true;
     user.apiAuthType = candidate.apiAuthType;
     user.apiProtocol = candidate.apiProtocol;
