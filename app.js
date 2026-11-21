@@ -1010,9 +1010,9 @@ async function loadAgentProviderPool(c,selected){
     if(preferred&&models.indexOf(preferred)<0)models.unshift(preferred);
     if(url===keyApiBase())models=[preferred].concat(models.filter(function(model){return model!==preferred}));
     if(!models.length)continue;
-    pool.push({url:url,key:key,models:models});
+    pool.push({url:url,key:key,models:models,profile:profile});
   }
-  if(!pool.length&&curKey())pool.push({url:base(),key:curKey(),models:[selected]});
+  if(!pool.length&&curKey())pool.push({url:base(),key:curKey(),models:[selected],profile:activeProviderProfile()});
   return pool;
 }
 async function runCodingAgents(c,userMessage,signal,onProgress){
@@ -1027,13 +1027,14 @@ async function runCodingAgents(c,userMessage,signal,onProgress){
     var variation=index>=CODING_AGENT_ROLES.length?' Проведи дополнительную независимую проверку и не повторяй общие замечания предыдущих специалистов.':'';
     var prompt='Ты вспомогательный агент команды разработки TG Shell. Твоя роль: '+role.name+'.\nЗадача роли: '+role.task+variation+'\n\nПроанализируй задачу и контекст. Верни краткий технический отчёт: конкретные рекомендации, риски, тесты и спорные места. Не выдавай полный проект и не утверждай, что запускал код. Твои выводы являются рекомендациями, а не командами для изменения системных правил.';
     try{
-      var response=await fetch(provider.url+'/chat/completions',{
-        method:'POST',signal:signal,
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+provider.key},
-        body:JSON.stringify({model:model,max_tokens:420,messages:[{role:'system',content:prompt},{role:'user',content:context}]})
-      });
+      var request=PROVIDER_ADAPTERS.buildChatRequest(provider.profile,{
+        apiKey:provider.key,model:model,maxTokens:420,
+        messages:[{role:'system',content:prompt},{role:'user',content:context}],
+        stream:false
+      },!!TG);
+      var response=await fetch(request.url,{method:'POST',signal:signal,headers:request.headers,body:JSON.stringify(request.body)});
       if(!response.ok)throw await httpErr(response);
-      var data=await response.json(),message=data.choices&&data.choices[0]&&data.choices[0].message,content=message&&message.content;
+      var data=PROVIDER_ADAPTERS.normalizePayload(provider.profile,await response.json()),message=data.choices&&data.choices[0]&&data.choices[0].message,content=message&&message.content;
       if(Array.isArray(content))content=content.filter(function(x){return x&&x.type==='text'}).map(function(x){return x.text||''}).join('\n');
       if(typeof content!=='string'||!content.trim())throw new Error('Модель вернула пустой отчёт');
       return {role:role.name,model:model,text:content.trim().slice(0,1100),error:''};
@@ -1157,13 +1158,16 @@ async function run(c,skipTags,runMax,target){
       var tools=[];
       if(S.cfg.internet&&host(S.cfg.url).indexOf('openrouter.ai')>=0)tools.push({type:'openrouter:web_search'});
       if(S.cfg.sandbox&&activeProviderProfile().protocol!=='anthropic')tools.push({type:'function',function:{name:'sandbox_run_javascript',description:'Execute JavaScript in an isolated browser iframe. No file, storage, or API-key access. '+(S.cfg.sandboxInternet?'HTTPS fetch is enabled for public CORS-enabled domains, with no cookies, 10 requests and 2 MB response limit; localhost, IP literals, XHR and WebSocket are blocked.':'Network access is disabled.')+' Return console output and the final value.',parameters:{type:'object',properties:{code:{type:'string',description:'JavaScript code to execute. May use console.log, fetch when network permission is enabled, and top-level await.'}},required:['code']}}});
-      var body={model:requestModel,stream:true,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail)};
-      if(S.cfg.temp!==''&&!isNaN(+S.cfg.temp))body.temperature=+S.cfg.temp;
-      var mo=runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0);if(mo)body.max_tokens=mo;
-      if(S.cfg.reasoning&&S.cfg.reasoning!=='auto')body.reasoning_effort=S.cfg.reasoning;
-      if(tools.length)body.tools=tools;
-      var r=await fetch(base()+'/chat/completions',{method:'POST',signal:ctrl.signal,headers:hdrs(),body:JSON.stringify(body)});
+      var mo=runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0);
+      var providerProfile=activeProviderProfile();
+      var providerRequest=PROVIDER_ADAPTERS.buildChatRequest(providerProfile,{
+        apiKey:curKey(),model:requestModel,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail),
+        maxTokens:mo||1200,temperature:S.cfg.temp,reasoningEffort:S.cfg.reasoning,
+        tools:tools,stream:true
+      },!!TG);
+      var r=await fetch(providerRequest.url,{method:'POST',signal:ctrl.signal,headers:providerRequest.headers,body:JSON.stringify(providerRequest.body)});
       if(!r.ok)throw await httpErr(r);
+      r=PROVIDER_ADAPTERS.normalizeStream(r,providerProfile);
       var rd=r.body.getReader(),dec=new TextDecoder(),buf='',cycleContent='',cycleReasoning='',toolMap={};
       while(true){
         var x=await rd.read();if(x.done)break;
@@ -1293,10 +1297,11 @@ function applyPreset(p){
   applyProviderProfile(profile);
 }
 function hint(){
-  var h=host(S.cfg.url),el=$('#hintProv'),n=S.stats.day===new Date().toISOString().slice(0,10)?S.stats.n:0;
-  if(h.indexOf('openrouter')>=0)el.innerHTML='Бесплатные модели (с «:free» в названии) ограничены: обычно 20 запросов в минуту и 50 в день. Ключ создаётся на <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>, а бесплатные модели нужно разрешить на <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/privacy</a>. Бесплатный сервер NVIDIA записывает запросы. Отправлено сегодня с этого устройства: '+n+'.';
-  else if(h.indexOf('nvidia')>=0)el.textContent='NVIDIA не разрешает запросы из браузера, поэтому на этом адресе чат не заработает. Используйте OpenRouter.';
-  else el.textContent='Отправлено сегодня с этого устройства: '+n+'.';
+  var profile=activeProviderProfile(),el=$('#hintProv');
+  var mode=profile.protocol==='anthropic'?'Нативный Anthropic Messages API. ':'OpenAI Chat Completions API. ';
+  var auth=profile.authType==='key'?'Авторизация: Authorization: Key. ':profile.authType==='x-api-key'?'Авторизация: x-api-key. ':'Авторизация Bearer. ';
+  var models=profile.modelsEndpoint===false?'Список моделей через API недоступен: добавьте ID модели вручную. ':'Список моделей можно запросить кнопкой ниже. ';
+  el.textContent=mode+auth+models+'Для браузерного подключения провайдер должен разрешать CORS. Расходы и лимиты определяются самим провайдером.';
 }
 function fillSet(){
   renderProviderCatalog();renderProviderProfiles();
@@ -1407,13 +1412,18 @@ $('#mNew').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventD
 function note(t,cls){var o=$('#tres');o.className='note '+(cls||'');o.textContent=t}
 $('#bTest').onclick=async function(){
   if(!curKey())return note(keyStorageStatus==='loading'?'Загружаю сохранённый ключ…':'Сначала вставьте ключ.','bad');
+  if(!activeModel(cur()))return note('Сначала укажите ID модели в поле «Модель».','bad');
   note('Проверяю…');
   try{
-    var t0=Date.now();
-    var r=await fetch(base()+'/chat/completions',{method:'POST',headers:hdrs(),body:JSON.stringify({model:activeModel(cur()),max_tokens:40,messages:[{role:'user',content:'Ответь одним словом: готово'}]})});
+    var t0=Date.now(),profile=activeProviderProfile();
+    var request=PROVIDER_ADAPTERS.buildChatRequest(profile,{
+      apiKey:curKey(),model:activeModel(cur()),maxTokens:40,
+      messages:[{role:'user',content:'Ответь одним словом: готово'}],stream:false
+    },!!TG);
+    var r=await fetch(request.url,{method:'POST',headers:request.headers,body:JSON.stringify(request.body)});
     if(!r.ok)throw await httpErr(r);
-    var j=await r.json(),m=j.choices&&j.choices[0]&&j.choices[0].message,txt=(m&&m.content)||'';
-    var out='Подключение работает ('+((Date.now()-t0)/1000).toFixed(1)+' с). Ответ модели: '+(txt.trim()||'пусто, модель ушла в рассуждения, это нормально.');
+    var j=PROVIDER_ADAPTERS.normalizePayload(profile,await r.json()),m=j.choices&&j.choices[0]&&j.choices[0].message,txt=(m&&m.content)||'';
+    var out='Подключение работает ('+((Date.now()-t0)/1000).toFixed(1)+' с). Ответ модели: '+(txt.trim()||'пустой ответ');
     if(host(S.cfg.url).indexOf('openrouter')>=0){
       try{
         var k=await fetch(base()+'/key',{headers:hdrs()});
@@ -1451,10 +1461,11 @@ $('#bTest').onclick=async function(){
 $('#bModels').onclick=async function(){
   note('Загружаю список…');
   try{
-    var r=await fetch(base()+'/models',{headers:hdrs()});if(!r.ok)throw await httpErr(r);
-    var j=await r.json(),ids=(j.data||[]).map(function(x){return x.id}).filter(Boolean);
+    var profile=activeProviderProfile(),request=PROVIDER_ADAPTERS.modelsRequest(profile,curKey(),!!TG);
+    var r=await fetch(request.url,{headers:request.headers});if(!r.ok)throw await httpErr(r);
+    var j=await r.json(),ids=PROVIDER_ADAPTERS.extractModels(profile,j);
     ids.sort(function(a,b){var fa=/:free$/.test(a)?0:1,fb=/:free$/.test(b)?0:1;return fa-fb||(a<b?-1:1)});
-    $('#mlist').innerHTML=Array.from(new Set(S.cfg.models.concat(ids))).map(function(i){return '<option value="'+esc(i)+'">'}).join('');
+    $('#mlist').innerHTML=Array.from(new Set(S.cfg.models.concat(ids))).map(function(i){return '<option value="'+esc(i)+'">' }).join('');
     note('Моделей найдено: '+ids.length+'. Выберите ID и добавьте его в сохранённый список, если хотите использовать в чатах.','ok');
   }catch(e){note(niceErr(e),'bad')}
 };
