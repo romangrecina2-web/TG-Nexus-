@@ -1271,6 +1271,7 @@ function createBotChat(options = {}) {
       temperature: userSettings.temperature,
       reasoningEffort: userSettings.reasoning,
       tools,
+      maxToolCalls: tools.length ? 5 : 0,
       stream: false
     }, false);
     const response = await fetchImpl(request.url, {
