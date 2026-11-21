@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const PROVIDER_ADAPTERS = require('./provider-adapters');
 
 const DEFAULT_API_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
@@ -359,6 +360,9 @@ function createEncryptedStore(options = {}) {
       current.users[id] = {
         apiKey: '',
         apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
+        apiProtocol: 'openai',
+        apiAuthType: 'bearer',
+        modelsEndpoint: true,
         model: options.defaultModel || DEFAULT_MODEL,
         settings: {},
         activeChatId: null,
@@ -368,6 +372,9 @@ function createEncryptedStore(options = {}) {
     const user = current.users[id];
     if (typeof user.apiKey !== 'string') user.apiKey = '';
     if (!normalizeApiBase(user.apiBaseUrl)) user.apiBaseUrl = options.apiBaseUrl || DEFAULT_API_BASE_URL;
+    if (!['openai', 'anthropic'].includes(user.apiProtocol)) user.apiProtocol = 'openai';
+    if (!['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType)) user.apiAuthType = 'bearer';
+    user.modelsEndpoint = user.modelsEndpoint !== false;
     if (!user.settings || typeof user.settings !== 'object' || Array.isArray(user.settings)) user.settings = {};
     if (!Array.isArray(user.chats)) user.chats = [];
     if (!user.model) user.model = options.defaultModel || DEFAULT_MODEL;
@@ -1046,32 +1053,56 @@ function createBotChat(options = {}) {
     await sendText(chatId, header + unique.map((model) => '• ' + model).join('\n'));
   }
 
-  async function getModels(apiKey, endpoint = apiBaseUrl) {
-    const providerBase = normalizeApiBase(endpoint);
-    if (!providerBase) throw new Error('Provider endpoint is not configured.');
-    const response = await fetchImpl(providerBase + '/models', {
+  function providerProfile(user, endpoint) {
+    return {
+      id: 'custom',
+      url: normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl),
+      protocol: user.apiProtocol === 'anthropic' ? 'anthropic' : 'openai',
+      authType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType) ? user.apiAuthType : 'bearer',
+      modelsEndpoint: user.modelsEndpoint !== false
+    };
+  }
+
+  async function getModels(apiKey, endpoint = apiBaseUrl, user = {}) {
+    const profile = providerProfile(user, endpoint);
+    if (!profile.url) throw new Error('Provider endpoint is not configured.');
+    const request = PROVIDER_ADAPTERS.modelsRequest(profile, apiKey, false);
+    const response = await fetchImpl(request.url, {
       method: 'GET',
-      headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' },
+      headers: request.headers,
       signal: AbortSignal.timeout(20_000)
     });
     if (!response.ok) throw new Error('Provider model list request failed.');
     const payload = await response.json().catch(() => ({}));
-    const source = Array.isArray(payload.data) ? payload.data :
-      (Array.isArray(payload.models) ? payload.models : []);
-    const models = source.map((item) => typeof item === 'string' ? item : item && item.id)
-      .filter((id) => typeof id === 'string' && id.trim())
-      .map((id) => id.trim());
+    const models = PROVIDER_ADAPTERS.extractModels(profile, payload);
     const configured = String(process.env.AI_ALLOWED_MODELS || '').split(',').map((x) => x.trim()).filter(Boolean);
     return [...new Set(models.length ? models : configured)];
   }
 
-  async function validateKey(apiKey, endpoint = apiBaseUrl) {
-    const providerBase = normalizeApiBase(endpoint);
-    if (!providerBase || typeof fetchImpl !== 'function') return false;
+  async function validateKey(apiKey, endpoint = apiBaseUrl, user = {}) {
+    const profile = providerProfile(user, endpoint);
+    if (!profile.url || typeof fetchImpl !== 'function') return false;
     try {
-      const response = await fetchImpl(providerBase + '/models', {
-        method: 'GET',
-        headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' },
+      if (profile.modelsEndpoint) {
+        const request = PROVIDER_ADAPTERS.modelsRequest(profile, apiKey, false);
+        const response = await fetchImpl(request.url, {
+          method: 'GET',
+          headers: request.headers,
+          signal: AbortSignal.timeout(15_000)
+        });
+        return !!response.ok;
+      }
+      const model = String(user.model || defaultModel).trim();
+      if (!model) return false;
+      const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
+        apiKey, model, maxTokens: 8,
+        messages: [{ role: 'user', content: 'Reply with OK.' }],
+        stream: false
+      }, false);
+      const response = await fetchImpl(request.url, {
+        method: 'POST',
+        headers: request.headers,
+        body: JSON.stringify(request.body),
         signal: AbortSignal.timeout(15_000)
       });
       return !!response.ok;
@@ -1125,7 +1156,8 @@ function createBotChat(options = {}) {
       return;
     }
 
-    const valid = await validateKey(args, (store.getUser(message.from.id).apiBaseUrl || apiBaseUrl));
+    const keyUser = store.getUser(message.from.id);
+    const valid = await validateKey(args, keyUser.apiBaseUrl || apiBaseUrl, keyUser);
     if (!valid) {
       await sendText(message.chat.id, 'Неудачно, проверьте ключ и повторите попытку');
       return;
@@ -1154,7 +1186,7 @@ function createBotChat(options = {}) {
     }
     let models;
     try {
-      models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl);
+      models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl, user);
     } catch {
       await sendText(message.chat.id, 'Не удалось получить список моделей. Проверьте API-ключ и настройки провайдера.');
       return;
@@ -1190,48 +1222,43 @@ function createBotChat(options = {}) {
   }
 
   async function requestAssistant(user, chat) {
-    if (!apiBaseUrl) throw new Error('Provider endpoint is not configured.');
+    const providerBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
+    if (!providerBase) throw new Error('Provider endpoint is not configured.');
+    const profile = providerProfile(user, providerBase);
     const history = chat.messages.slice(-MAX_MESSAGES_PER_CHAT).map((message) => ({
       role: message.role,
       content: message.content
     }));
-    const providerBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
-    if (!providerBase) throw new Error('Provider endpoint is not configured.');
     const userSettings = user.settings || {};
     const userPrompt = typeof userSettings.systemPrompt === 'string' && userSettings.systemPrompt.trim()
       ? userSettings.systemPrompt.trim()
       : systemPrompt;
     const formatting = 'Отвечай без таблиц и заголовков #. Используй короткие абзацы, простые списки и жирный шрифт только для важного.';
     const effectivePrompt = userPrompt.includes(formatting) ? userPrompt : userPrompt + '\n\n' + formatting;
+    const messages = [{ role: 'system', content: effectivePrompt }, ...history];
     const tokenLimit = Math.max(1, Math.min(32_000, Math.round(Number(userSettings.maxTokens) || 1_200)));
-    const requestBody = {
+    const tools = [];
+    if (userSettings.internetSearch === true && profile.protocol === 'openai' && new URL(providerBase).hostname === 'openrouter.ai') {
+      tools.push({ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } });
+    }
+    const request = PROVIDER_ADAPTERS.buildChatRequest(profile, {
+      apiKey: user.apiKey,
       model: chat.model || user.model || defaultModel,
-      messages: [{ role: 'system', content: effectivePrompt }, ...history],
-      max_tokens: tokenLimit
-    };
-    const temperature = userSettings.temperature;
-    if (temperature !== null && temperature !== undefined && temperature !== '') {
-      const numericTemperature = Number(temperature);
-      if (Number.isFinite(numericTemperature)) requestBody.temperature = Math.max(0, Math.min(2, numericTemperature));
-    }
-    if (typeof userSettings.reasoning === 'string' && ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(userSettings.reasoning)) {
-      requestBody.reasoning_effort = userSettings.reasoning;
-    }
-    if (userSettings.internetSearch === true && new URL(providerBase).hostname === 'openrouter.ai') {
-      requestBody.tools = [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }];
-      requestBody.max_tool_calls = 5;
-    }
-    const response = await fetchImpl(providerBase + '/chat/completions', {
+      messages,
+      maxTokens: tokenLimit,
+      temperature: userSettings.temperature,
+      reasoningEffort: userSettings.reasoning,
+      tools,
+      stream: false
+    }, false);
+    const response = await fetchImpl(request.url, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + user.apiKey
-      },
-      body: JSON.stringify(requestBody),
+      headers: request.headers,
+      body: JSON.stringify(request.body),
       signal: AbortSignal.timeout(120_000)
     });
     if (!response.ok) throw new Error('Provider completion request failed.');
-    const payload = await response.json().catch(() => ({}));
+    const payload = PROVIDER_ADAPTERS.normalizePayload(profile, await response.json().catch(() => ({})));
     const answer = extractAssistantText(payload);
     if (!answer) throw new Error('Provider returned an empty response.');
     return answer.slice(0, MAX_MESSAGE_LENGTH);
@@ -1517,6 +1544,9 @@ function createBotChat(options = {}) {
     const user = store.getUser(userId);
     return {
       apiBaseUrl: (user.apiBaseUrlExplicit || user.apiKey) ? (user.apiBaseUrl || apiBaseUrl) : '',
+      apiProtocol: user.apiProtocol || 'openai',
+      apiAuthType: user.apiAuthType || 'bearer',
+      modelsEndpoint: user.modelsEndpoint !== false,
       model: user.modelExplicit || user.model !== defaultModel ? (user.model || defaultModel) : '',
       apiKey: user.apiKey || '',
       settings: user.settings || {},
@@ -1536,6 +1566,15 @@ function createBotChat(options = {}) {
       user.apiBaseUrl = nextBase;
       user.apiBaseUrlExplicit = true;
     }
+    if (input.apiProtocol === 'openai' || input.apiProtocol === 'anthropic') {
+      if (user.apiProtocol !== input.apiProtocol) user.apiKey = '';
+      user.apiProtocol = input.apiProtocol;
+    }
+    if (['bearer', 'key', 'api-key', 'x-api-key'].includes(input.apiAuthType)) {
+      if (user.apiAuthType !== input.apiAuthType) user.apiKey = '';
+      user.apiAuthType = input.apiAuthType;
+    }
+    if (typeof input.modelsEndpoint === 'boolean') user.modelsEndpoint = input.modelsEndpoint;
     if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\s/.test(input.model)) {
       user.model = input.model.trim();
       user.modelExplicit = true;
@@ -1605,15 +1644,24 @@ function createBotChat(options = {}) {
     return getSyncState(userId);
   }
 
-  async function setApiKey(userId, apiKey, endpoint) {
+  async function setApiKey(userId, apiKey, endpoint, apiAuthType, apiProtocol, modelsEndpoint) {
     const user = store.getUser(userId);
     const providerBase = normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl);
     if (!providerBase || typeof apiKey !== 'string' || !apiKey.trim() || apiKey.length > 2_048 || /\s/.test(apiKey)) {
       throw new Error('Invalid API key or endpoint.');
     }
-    if (!(await validateKey(apiKey, providerBase))) throw new Error('API key validation failed.');
+    const candidate = {
+      ...user,
+      apiAuthType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(apiAuthType) ? apiAuthType : user.apiAuthType,
+      apiProtocol: apiProtocol === 'anthropic' ? 'anthropic' : (apiProtocol === 'openai' ? 'openai' : user.apiProtocol),
+      modelsEndpoint: typeof modelsEndpoint === 'boolean' ? modelsEndpoint : user.modelsEndpoint
+    };
+    if (!(await validateKey(apiKey, providerBase, candidate))) throw new Error('API key validation failed.');
     user.apiBaseUrl = providerBase;
     user.apiBaseUrlExplicit = true;
+    user.apiAuthType = candidate.apiAuthType;
+    user.apiProtocol = candidate.apiProtocol;
+    user.modelsEndpoint = candidate.modelsEndpoint;
     user.apiKey = apiKey;
     store.save();
     return true;
