@@ -110,8 +110,8 @@
         <div><label for="cMax">Лимит ответа, токенов</label><input id="cMax" inputmode="numeric" placeholder="по умолчанию"></div>
       </div>
       <label for="cRequestTimeout">Время ожидания ответа провайдера, секунд</label>
-      <input type="number" id="cRequestTimeout" min="10" max="600" step="5" value="120" inputmode="numeric">
-      <small>От 10 до 600 секунд. По умолчанию 120 секунд. Настройка применяется к запросам модели в Mini App и Telegram-боте. По истечении времени запрос прерывается.</small>
+      <input type="number" id="cRequestTimeout" min="10" max="7200" step="1" value="120" inputmode="numeric">
+      <small>Введите целое число от 10 до 7200 секунд (максимум 2 часа). По умолчанию 120 секунд. Настройка применяется к запросам модели в Mini App и Telegram-боте. По истечении времени запрос прерывается.</small>
       <small>Уровень рассуждений теперь можно менять прямо в верхней панели чата. Поддержка зависит от модели; при ошибке 400 выберите «Авто».</small>
 
       <h3>Разрешения ИИ</h3>
