@@ -375,7 +375,7 @@ function makeRemoteSyncState(includeApiKey,clearApiKey){
   if(clearApiKey)state.clearApiKey=true;
   return state;
 }
-function mergeRemoteChats(remoteChats){
+function mergeRemoteChats(remoteChats,resetModels){
   if(!Array.isArray(remoteChats))return;
   var byId=Object.create(null);
   S.chats.forEach(function(chat){byId[String(chat.id)]=chat});
@@ -383,7 +383,7 @@ function mergeRemoteChats(remoteChats){
     if(!remote||typeof remote.id!=='string')return;
     var chat=byId[remote.id];
     if(!chat){
-      chat={id:remote.id,title:String(remote.title||'Чат'),msgs:[],model:remote.model||S.cfg.model,draft:'',draftAttachments:[],ts:Number(remote.updatedAt)||Date.now(),createdAt:Number(remote.createdAt)||Date.now()};
+      chat={id:remote.id,title:String(remote.title||'Чат'),msgs:[],model:resetModels?S.cfg.model:(remote.model||S.cfg.model),draft:'',draftAttachments:[],ts:Number(remote.updatedAt)||Date.now(),createdAt:Number(remote.createdAt)||Date.now()};
       S.chats.push(chat);byId[remote.id]=chat;
     }
     var localByMessage={};
@@ -399,7 +399,8 @@ function mergeRemoteChats(remoteChats){
     var remoteUpdated=Number(remote.updatedAt)||0;
     if(remoteUpdated>=(Number(chat.updatedAt)||Number(chat.ts)||0)){
       if(remote.title)chat.title=String(remote.title).slice(0,100);
-      if(remote.model)chat.model=String(remote.model).slice(0,256);
+      if(resetModels)chat.model=S.cfg.model||'';
+      else if(remote.model)chat.model=String(remote.model).slice(0,256);
     }
     chat.ts=Math.max(Number(chat.ts)||0,remoteUpdated);
     chat.updatedAt=Math.max(Number(chat.updatedAt)||0,remoteUpdated);
@@ -410,9 +411,39 @@ function mergeRemoteChats(remoteChats){
 async function applyRemoteSyncState(state){
   if(!state||state.initialized!==true)return;
   var previousBase=S.cfg.url;
+  var previousCatalog=PROVIDER_CATALOG.find(function(item){return item.url===previousBase})||null;
+  var previousProviderId=previousCatalog?previousCatalog.id:null;
+  var nextBase=typeof state.apiBaseUrl==='string'&&validApiBase(state.apiBaseUrl)?state.apiBaseUrl:previousBase;
+  var nextCatalog=PROVIDER_CATALOG.find(function(item){return item.url===nextBase})||null;
+  var nextProviderId=state.apiProviderId|| (nextCatalog?nextCatalog.id:null);
+  var providerChanged=previousBase!==nextBase || (!!previousProviderId&&!!nextProviderId&&previousProviderId!==nextProviderId);
   if(typeof state.apiBaseUrl==='string'&&validApiBase(state.apiBaseUrl)){
     S.cfg.url=state.apiBaseUrl;
-    if(previousBase!==S.cfg.url){
+    if(providerChanged){
+      S.cfg.model=typeof state.model==='string'?state.model:'';
+      S.cfg.models=S.cfg.model?[S.cfg.model]:[];
+      S.chats.forEach(function(chat){chat.model=S.cfg.model});
+      if(nextCatalog){
+        var activeProfile=(S.cfg.providers||[]).find(function(profile){return profile.url===S.cfg.url||profile.catalogId===nextCatalog.id});
+        if(!activeProfile&&S.cfg.providers.length<30){
+          activeProfile={id:'catalog_'+nextCatalog.id,catalogId:nextCatalog.id,name:nextCatalog.name,url:nextCatalog.url,model:S.cfg.model,models:S.cfg.models.slice(),protocol:nextCatalog.protocol||'openai',authType:nextCatalog.authType||'bearer',modelsEndpoint:nextCatalog.modelsEndpoint!==false};
+          S.cfg.providers.push(activeProfile);
+        }
+        if(!activeProfile){
+          activeProfile=activeProviderProfile();
+          activeProfile.catalogId=nextCatalog.id;
+          activeProfile.name=nextCatalog.name;
+        }
+        activeProfile.url=S.cfg.url;
+        activeProfile.protocol=state.apiProtocol||nextCatalog.protocol||'openai';
+        activeProfile.authType=state.apiAuthType||nextCatalog.authType||'bearer';
+        activeProfile.modelsEndpoint=typeof state.modelsEndpoint==='boolean'?state.modelsEndpoint:nextCatalog.modelsEndpoint!==false;
+        activeProfile.model=S.cfg.model;
+        activeProfile.models=S.cfg.models.slice();
+        S.cfg.activeProviderId=activeProfile.id;
+      }
+    }
+    if(providerChanged){
       ACTIVE_KEY='';keyInputTouched=false;keyStorageStatus='loading';
       if(secureKeyStorage&&secureKeyStorage.isAvailable()){
         try{
@@ -426,8 +457,12 @@ async function applyRemoteSyncState(state){
   if(state.apiProtocol==='anthropic'||state.apiProtocol==='openai')S.cfg.protocol=state.apiProtocol;
   if(['bearer','key','api-key','x-api-key'].indexOf(state.apiAuthType)>=0)S.cfg.authType=state.apiAuthType;
   if(typeof state.modelsEndpoint==='boolean')S.cfg.modelsEndpoint=state.modelsEndpoint;
-  if(typeof state.model==='string'&&state.model.trim()){
-    S.cfg.model=state.model;addSavedModel(state.model);
+  if(typeof state.model==='string'){
+    if(state.model.trim()){
+      S.cfg.model=state.model;addSavedModel(state.model);
+    }else if(providerChanged){
+      S.cfg.model='';S.cfg.models=[];
+    }
   }
   var settings=state.settings||{};
   if(Object.prototype.hasOwnProperty.call(settings,'systemPrompt')&&typeof settings.systemPrompt==='string')S.cfg.sys=settings.systemPrompt;
@@ -452,7 +487,7 @@ async function applyRemoteSyncState(state){
   if(Number.isFinite(Number(settings.sumAt)))S.cfg.sumAt=settings.sumAt;
   if(Number.isFinite(Number(settings.keep)))S.cfg.keep=settings.keep;
   if(Number.isFinite(Number(settings.pinCap)))S.cfg.pinCap=settings.pinCap;
-  mergeRemoteChats(state.chats);
+  mergeRemoteChats(state.chats,providerChanged);
   if(typeof state.activeChatId==='string'&&S.chats.some(function(chat){return chat.id===state.activeChatId}))S.cur=state.activeChatId;
   if(typeof state.apiKey==='string'&&state.apiKey&&state.apiKey!==ACTIVE_KEY){
     ACTIVE_KEY=state.apiKey;providerKeyMemory[keyApiBase()]=state.apiKey;
