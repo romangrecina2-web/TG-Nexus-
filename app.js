@@ -218,7 +218,8 @@ function addCatalogProvider(){
   syncActiveProviderProfile();
   var profile={
     id:'provider_'+makeId(),catalogId:item.id,name:item.name,url:item.url,
-    model:'',models:[],protocol:item.protocol||'openai',authType:item.authType||'bearer',
+    model:item.defaultModel||'',models:item.defaultModel?[item.defaultModel]:[],
+    protocol:item.protocol||'openai',authType:item.authType||'bearer',
     modelsEndpoint:item.modelsEndpoint!==false
   };
   S.cfg.providers.push(profile);
