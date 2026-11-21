@@ -1188,12 +1188,16 @@ function createBotChat(options = {}) {
   }
 
   function providerProfile(user, endpoint) {
+    const base = normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl);
+    const catalog = findProviderByUrl(base);
     return {
-      id: 'custom',
-      url: normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl),
-      protocol: user.apiProtocol === 'anthropic' ? 'anthropic' : 'openai',
-      authType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType) ? user.apiAuthType : 'bearer',
-      modelsEndpoint: user.modelsEndpoint !== false
+      id: catalog ? catalog.id : (user.apiProviderId || 'custom'),
+      url: base,
+      protocol: user.apiProtocol === 'anthropic' ? 'anthropic' : (catalog && catalog.protocol === 'anthropic' ? 'anthropic' : 'openai'),
+      authType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType)
+        ? user.apiAuthType
+        : (catalog && catalog.authType || 'bearer'),
+      modelsEndpoint: user.modelsEndpoint !== false && (!catalog || catalog.modelsEndpoint !== false)
     };
   }
 
