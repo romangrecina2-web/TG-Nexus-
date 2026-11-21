@@ -1210,8 +1210,10 @@ function createBotChat(options = {}) {
       headers: request.headers,
       signal: AbortSignal.timeout(20_000)
     });
-    if (!response.ok) throw new Error('Provider model list request failed.');
     const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(providerErrorSummary(response.status, extractProviderErrorMessage(payload)));
+    }
     const models = PROVIDER_ADAPTERS.extractModels(profile, payload);
     const configured = String(process.env.AI_ALLOWED_MODELS || '').split(',').map((x) => x.trim()).filter(Boolean);
     return [...new Set(models.length ? models : configured)];
@@ -1313,52 +1315,51 @@ function createBotChat(options = {}) {
   }
 
   async function handleModelCommand(message, user, args) {
-    if (!user.modelsEndpoint) {
-      if (!args) {
-        await sendText(message.chat.id, 'Этот провайдер не публикует совместимый список моделей. Укажите ID вручную: /model [ID модели].');
-        return;
-      }
+    // An explicit model ID is a manual selection. Do not make it depend on
+    // the provider's optional /models catalogue: several APIs omit it or
+    // expose a catalogue that is temporarily unavailable.
+    if (args) {
       const manualModel = String(args).trim();
       if (!manualModel || manualModel.length > 256 || /\s/.test(manualModel)) {
         await sendText(message.chat.id, 'Укажите один ID модели без пробелов: /model [ID модели].');
         return;
       }
+
       user.model = manualModel;
       user.modelExplicit = true;
       const manualChat = activeChat(user);
-      if (manualChat) { manualChat.model = manualModel; manualChat.updatedAt = Date.now(); }
+      if (manualChat) {
+        manualChat.model = manualModel;
+        manualChat.updatedAt = Date.now();
+      }
       store.save();
-      await sendText(message.chat.id, 'ID модели сохранён: ' + manualModel + '. Добавьте ключ командой /key.');
+      await sendText(message.chat.id,
+        'Модель выбрана вручную: ' + manualModel + '.\n' +
+        'Теперь выполните /test, чтобы проверить доступ и совместимость.');
+      return;
+    }
+
+    if (!user.modelsEndpoint) {
+      await sendText(message.chat.id, 'Этот провайдер не публикует совместимый список моделей. Укажите ID вручную: /model [ID модели].');
       return;
     }
     if (!user.apiKey) {
       await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key.');
       return;
     }
+
     let models;
     try {
       models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl, user);
-    } catch {
-      await sendText(message.chat.id, 'Не удалось получить список моделей. Проверьте API-ключ и настройки провайдера.');
-      return;
-    }
-    if (!args) {
-      await sendModelList(message.chat.id, models, (activeChat(user) || {}).model || user.model);
-      return;
-    }
-    const selected = models.find((model) => model === args);
-    if (!selected) {
-      await sendText(message.chat.id, 'Ошибка: такой модели нет в списке доступных.');
-      await sendModelList(message.chat.id, models, (activeChat(user) || {}).model || user.model);
+    } catch (error) {
+      const reason = sanitizeProviderError(error && error.message || '');
+      await sendText(message.chat.id,
+        'Не удалось получить список моделей. Можно указать ID вручную: /model [ID модели].' +
+        (reason ? '\nПричина: ' + reason : ''));
       return;
     }
 
-    user.model = selected;
-    user.modelExplicit = true;
-    const chat = activeChat(user);
-    if (chat) { chat.model = selected; chat.updatedAt = Date.now(); }
-    store.save();
-    await sendText(message.chat.id, 'Модель выбрана: ' + selected);
+    await sendModelList(message.chat.id, models, (activeChat(user) || {}).model || user.model);
   }
 
   function sanitizeProviderError(value) {

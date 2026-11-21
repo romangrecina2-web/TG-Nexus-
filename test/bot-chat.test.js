@@ -194,15 +194,51 @@ test('/chat reports empty state and /chat_equip reports an error with the chat l
   assert.match(ctx.sent.at(-1).text, /Чатов пока нет/);
 });
 
-test('/model selects an available model and lists choices for a missing model', async () => {
+test('/model accepts a manual model ID without depending on the provider catalogue', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/key valid-key'));
-  await ctx.bot.handleMessage(message('/model test/model-b'));
-  assert.equal(ctx.bot.store.getUser(123456).model, 'test/model-b');
-  assert.equal(ctx.sent.at(-1).text, 'Модель выбрана: test/model-b');
-  await ctx.bot.handleMessage(message('/model missing-model'));
-  assert.match(ctx.sent.at(-2).text, /такой модели нет/);
+  await ctx.bot.handleMessage(message('/model openai/gpt-6.2-astra-pro'));
+
+  const user = ctx.bot.store.getUser(123456);
+  assert.equal(user.model, 'openai/gpt-6.2-astra-pro');
+  assert.equal(user.modelExplicit, true);
+  assert.equal(ctx.providerCalls.length, 0);
+  assert.match(ctx.sent.at(-1).text, /Модель выбрана вручную/);
+
+  await ctx.bot.handleMessage(message('/model'));
+  assert.equal(ctx.providerCalls.length, 1);
   assert.match(ctx.sent.at(-1).text, /test\/model-a/);
+});
+
+test('/model can be selected when the model catalogue is unavailable, and /test checks the selected ID', async () => {
+  const calls = [];
+  const ctx = makeBot({
+    fetchImpl: async (url, request) => {
+      calls.push({ url: String(url), request });
+      if (String(url).endsWith('/models')) {
+        return { ok: false, status: 503, json: async () => ({ error: { message: 'Catalogue temporarily unavailable' } }) };
+      }
+      if (String(url).endsWith('/chat/completions')) {
+        const body = JSON.parse(request.body);
+        assert.equal(body.model, 'openai/gpt-6.2-astra-pro');
+        return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'TEST_OK' } }] }) };
+      }
+      throw new Error('Unexpected URL');
+    }
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'valid-key';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/model openai/gpt-6.2-astra-pro'));
+  assert.equal(user.model, 'openai/gpt-6.2-astra-pro');
+  assert.equal(calls.length, 0);
+
+  await ctx.bot.handleMessage(message('/test'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://provider.example/v1/chat/completions');
+  assert.match(ctx.sent.at(-1).text, /Подключение работает/);
+  assert.match(ctx.sent.at(-1).text, /TEST_OK/);
 });
 
 test('Telegram bot uses native Anthropic Messages API with the provider authentication header', async () => {
