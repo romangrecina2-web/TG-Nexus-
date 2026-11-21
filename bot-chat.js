@@ -916,7 +916,7 @@ function createBotChat(options = {}) {
   function settingsKeyboard(user, view = 'main') {
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
-      const choices = [10, 30, 60, 120, 300, 600, 1800, 3600, 7200];
+      const choices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
       const rows = [];
       for (let i = 0; i < choices.length; i += 3) {
         rows.push(choices.slice(i, i + 3).map((value) => ({
@@ -1113,7 +1113,7 @@ function createBotChat(options = {}) {
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
         const tokenMatch = data.match(/^tn:t:(512|1200|2000|4000|8000|16000|32000)$/);
-        const timeoutMatch = data.match(/^tn:timeout:(10|30|60|120|300|600|1800|3600|7200)$/);
+        const timeoutMatch = data.match(/^tn:timeout:(10|30|60|120|180|300|600|1800|3600|7200)$/);
         const modelMatch = data.match(/^tn:m:(\d{1,2})$/);
         if (timeoutMatch) {
           const previous = user.settings || {};
