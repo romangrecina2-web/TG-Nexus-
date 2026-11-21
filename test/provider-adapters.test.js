@@ -192,3 +192,191 @@ test('Anthropic SSE stream is converted to OpenAI-style chunks', async () => {
   assert.match(text, /"finish_reason":"stop"/);
   assert.match(text, /data: \[DONE\]/);
 });
+
+
+test('direct OpenAI models use Responses API, preserving model IDs and model parameters', () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const request = adapters.buildModelRequest(openai, {
+    apiKey: 'openai-test-key',
+    model: 'gpt-5.4',
+    messages: [
+      { role: 'system', content: 'Be concise.' },
+      { role: 'user', content: 'Hello' }
+    ],
+    maxTokens: 333,
+    temperature: 0.4,
+    reasoningEffort: 'high',
+    stream: true
+  }, false);
+
+  assert.equal(request.url, 'https://api.openai.com/v1/responses');
+  assert.equal(request.protocol, 'responses');
+  assert.equal(request.body.model, 'gpt-5.4');
+  assert.equal(request.body.max_output_tokens, 333);
+  assert.equal(request.body.stream, true);
+  assert.equal(request.body.instructions, 'Be concise.');
+  assert.deepEqual(request.body.input, [{ role: 'user', content: 'Hello' }]);
+  assert.deepEqual(request.body.reasoning, { effort: 'high' });
+  assert.equal(request.body.temperature, undefined);
+});
+
+test('Responses request converts image content and prior function call history', () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const request = adapters.buildModelRequest(openai, {
+    apiKey: 'openai-test-key',
+    model: 'gpt-4.1',
+    messages: [
+      { role: 'system', content: 'Inspect images and use tools carefully.' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this image.' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA', detail: 'high' } }
+        ]
+      },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'call_123',
+          type: 'function',
+          function: { name: 'sandbox_run_javascript', arguments: '{"code":"1+1"}' }
+        }]
+      },
+      { role: 'tool', tool_call_id: 'call_123', name: 'sandbox_run_javascript', content: '{"status":"ok"}' }
+    ],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'sandbox_run_javascript',
+        description: 'Run isolated JavaScript.',
+        parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }
+      }
+    }],
+    maxToolCalls: 3
+  }, false);
+
+  assert.equal(request.url, 'https://api.openai.com/v1/responses');
+  assert.deepEqual(request.body.input, [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'Describe this image.' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAA', detail: 'high' }
+      ]
+    },
+    {
+      type: 'function_call',
+      call_id: 'call_123',
+      name: 'sandbox_run_javascript',
+      arguments: '{"code":"1+1"}'
+    },
+    { type: 'function_call_output', call_id: 'call_123', output: '{"status":"ok"}' }
+  ]);
+  assert.deepEqual(request.body.tools, [{
+    type: 'function',
+    name: 'sandbox_run_javascript',
+    description: 'Run isolated JavaScript.',
+    parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }
+  }]);
+  assert.equal(request.body.max_tool_calls, 3);
+  assert.equal(request.body.temperature, 0.4);
+});
+
+test('Responses payload normalizes text, function calls and token usage', () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const normalized = adapters.normalizePayload(openai, {
+    id: 'resp_test',
+    model: 'gpt-5.4',
+    output: [
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'I will run a check.' }]
+      },
+      {
+        type: 'function_call',
+        id: 'fc_1',
+        call_id: 'call_1',
+        name: 'sandbox_run_javascript',
+        arguments: '{"code":"1+1"}'
+      }
+    ],
+    usage: { input_tokens: 17, output_tokens: 9 }
+  }, 'responses');
+
+  assert.equal(normalized.choices[0].message.content, 'I will run a check.');
+  assert.equal(normalized.choices[0].finish_reason, 'tool_calls');
+  assert.deepEqual(normalized.choices[0].message.tool_calls, [{
+    id: 'call_1',
+    type: 'function',
+    function: { name: 'sandbox_run_javascript', arguments: '{"code":"1+1"}' }
+  }]);
+  assert.deepEqual(normalized.usage, {
+    prompt_tokens: 17, completion_tokens: 9, total_tokens: 26
+  });
+});
+
+test('Responses SSE stream converts text, reasoning and function tool events to Chat Completions chunks', async () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const encoder = new TextEncoder();
+  const source = new Response(new ReadableStream({
+    start(controller) {
+      const events = [
+        { type: 'response.output_text.delta', delta: 'Hello' },
+        { type: 'response.reasoning_summary_text.delta', delta: 'Checking.' },
+        {
+          type: 'response.output_item.added',
+          output_index: 1,
+          item: { id: 'fc_item_1', type: 'function_call', call_id: 'call_1', name: 'sandbox_run_javascript', arguments: '' }
+        },
+        { type: 'response.function_call_arguments.delta', item_id: 'fc_item_1', delta: '{"code":"1+1"}' },
+        {
+          type: 'response.output_item.done',
+          output_index: 1,
+          item: { id: 'fc_item_1', type: 'function_call', call_id: 'call_1', name: 'sandbox_run_javascript', arguments: '{"code":"1+1"}' }
+        },
+        {
+          type: 'response.completed',
+          response: {
+            output: [{
+              id: 'fc_item_1', type: 'function_call', call_id: 'call_1',
+              name: 'sandbox_run_javascript', arguments: '{"code":"1+1"}'
+            }]
+          }
+        }
+      ];
+      for (const event of events) {
+        controller.enqueue(encoder.encode('event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n'));
+      }
+      controller.close();
+    }
+  }));
+
+  const converted = adapters.normalizeStream(source, openai, 'responses');
+  const text = await converted.text();
+  assert.match(text, /"content":"Hello"/);
+  assert.match(text, /"reasoning_content":"Checking\\."/);
+  assert.match(text, /"id":"call_1"/);
+  assert.match(text, /"name":"sandbox_run_javascript"/);
+  assert.match(text, /"arguments":"\\{\\"code\\":\\"1\\+1\\"\\}"/);
+  assert.match(text, /"finish_reason":"tool_calls"/);
+  assert.match(text, /data: \[DONE\]/);
+});
+
+test('custom OpenAI-compatible providers remain on Chat Completions', () => {
+  const request = adapters.buildModelRequest({
+    id: 'openrouter',
+    url: 'https://openrouter.ai/api/v1',
+    protocol: 'openai',
+    authType: 'bearer'
+  }, {
+    apiKey: 'openrouter-test-key',
+    model: 'openai/gpt-5.4',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+
+  assert.equal(request.url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(request.protocol, 'openai');
+  assert.equal(request.body.model, 'openai/gpt-5.4');
+});

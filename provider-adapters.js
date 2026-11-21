@@ -134,50 +134,190 @@
       (String(profile.id || '').toLowerCase() === 'openai' || hostname === 'api.openai.com');
   }
 
-  function buildResponsesRequest(profile, options, browserMode) {
-    const base = cleanBase(profile && profile.url);
-    if (!base) throw new Error('API endpoint is not configured.');
-    if (!isOpenAiAstraProModel(profile, options && options.model)) {
-      throw new Error('The Responses Pro adapter only supports the direct OpenAI GPT-6.2 Astra Pro alias.');
+  function toResponsesContent(content, role) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    const parts = [];
+    const isUser = role === 'user';
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text' && typeof part.text === 'string') {
+        parts.push({ type: 'input_text', text: part.text });
+        continue;
+      }
+      if (part.type === 'input_text' && typeof part.text === 'string') {
+        parts.push({ type: 'input_text', text: part.text });
+        continue;
+      }
+      if ((part.type === 'image_url' || part.type === 'input_image') && isUser) {
+        const imageUrl = part.image_url && typeof part.image_url === 'object'
+          ? part.image_url.url : part.image_url;
+        const url = typeof imageUrl === 'string' ? imageUrl :
+          (typeof part.url === 'string' ? part.url : '');
+        if (!url) throw new Error('Responses API image input is missing its URL.');
+        const image = { type: 'input_image', image_url: url };
+        const detail = part.image_url && typeof part.image_url === 'object'
+          ? part.image_url.detail : part.detail;
+        if (detail) image.detail = detail;
+        parts.push(image);
+        continue;
+      }
+      throw new Error('Unsupported message content type for the Responses API: ' + String(part.type || 'unknown'));
     }
+    if (!parts.length) return '';
+    if (parts.every((part) => part.type === 'input_text')) {
+      return parts.map((part) => part.text).join('');
+    }
+    return parts;
+  }
 
-    const messages = Array.isArray(options && options.messages) ? options.messages : [];
+  function toResponsesInput(messages) {
     const input = [];
     const instructions = [];
-    for (const message of messages) {
-      if (!message || typeof message !== 'object') continue;
-      if (message.role === 'system' || message.role === 'developer') {
-        if (typeof message.content === 'string' && message.content.trim()) {
-          instructions.push(message.content);
+    for (const raw of Array.isArray(messages) ? messages : []) {
+      if (!raw || typeof raw !== 'object') continue;
+      const role = String(raw.role || '');
+      if (role === 'system' || role === 'developer') {
+        if (typeof raw.content === 'string' && raw.content.trim()) {
+          instructions.push(raw.content);
         }
         continue;
       }
-      if ((message.role === 'user' || message.role === 'assistant') &&
-          typeof message.content === 'string' && message.content.length) {
-        input.push({ role: message.role, content: message.content });
+      if (role === 'tool') {
+        const callId = String(raw.tool_call_id || '');
+        if (!callId) throw new Error('A tool result is missing its tool_call_id.');
+        input.push({
+          type: 'function_call_output',
+          call_id: callId,
+          output: typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content == null ? '' : raw.content)
+        });
+        continue;
+      }
+      if (role !== 'user' && role !== 'assistant') continue;
+
+      const content = toResponsesContent(raw.content, role);
+      if (content !== '') input.push({ role, content });
+
+      const calls = Array.isArray(raw.tool_calls) ? raw.tool_calls : [];
+      for (const call of calls) {
+        if (!call || !call.function || !call.function.name) continue;
+        const callId = String(call.id || call.call_id || '');
+        if (!callId) throw new Error('A function call is missing its call ID.');
+        input.push({
+          type: 'function_call',
+          call_id: callId,
+          name: String(call.function.name),
+          arguments: typeof call.function.arguments === 'string'
+            ? call.function.arguments : JSON.stringify(call.function.arguments || {})
+        });
+      }
+
+      if (raw.function_call && raw.function_call.name) {
+        const callId = String(raw.tool_call_id || raw.id || '');
+        if (!callId) throw new Error('A legacy function call is missing its call ID.');
+        input.push({
+          type: 'function_call',
+          call_id: callId,
+          name: String(raw.function_call.name),
+          arguments: typeof raw.function_call.arguments === 'string'
+            ? raw.function_call.arguments : JSON.stringify(raw.function_call.arguments || {})
+        });
       }
     }
-    if (!input.some((message) => message.role === 'user')) {
+    if (!input.some((item) => item.type === 'function_call_output' || item.role === 'user')) {
       throw new Error('Responses API needs at least one user message.');
     }
+    return { input, instructions: instructions.join('\n\n') };
+  }
 
+  function toResponsesTools(tools) {
+    const result = [];
+    for (const tool of Array.isArray(tools) ? tools : []) {
+      if (!tool || typeof tool !== 'object') continue;
+      if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
+        const fn = tool.function;
+        if (typeof fn.name !== 'string' || !fn.name.trim()) {
+          throw new Error('A Responses API function tool needs a name.');
+        }
+        const converted = {
+          type: 'function',
+          name: fn.name,
+          parameters: fn.parameters && typeof fn.parameters === 'object'
+            ? fn.parameters : { type: 'object', properties: {} }
+        };
+        if (typeof fn.description === 'string' && fn.description) converted.description = fn.description;
+        if (typeof fn.strict === 'boolean') converted.strict = fn.strict;
+        result.push(converted);
+        continue;
+      }
+      if (['web_search', 'web_search_preview', 'file_search', 'code_interpreter'].includes(tool.type)) {
+        result.push(tool);
+        continue;
+      }
+      throw new Error('Unsupported tool type for the Responses API: ' + String(tool.type || 'unknown'));
+    }
+    return result;
+  }
+
+  function isDirectOpenAiProfile(profile) {
+    if (!profile || profile.protocol === 'anthropic') return false;
+    if (profile.protocol === 'responses' || String(profile.id || '').toLowerCase() === 'openai') return true;
+    try {
+      return new URL(cleanBase(profile.url)).hostname.toLowerCase() === 'api.openai.com';
+    } catch {
+      return false;
+    }
+  }
+
+  function isReasoningModel(model) {
+    return /^(?:o[134](?:-|$)|gpt-(?:5|6)(?:[.-]|$))/i.test(String(model || '').trim());
+  }
+
+  function buildResponsesRequest(profile, options, browserMode) {
+    const base = cleanBase(profile && profile.url);
+    if (!base) throw new Error('API endpoint is not configured.');
+    if (!profile || profile.protocol === 'anthropic') {
+      throw new Error('The Responses API adapter cannot be used with an Anthropic endpoint.');
+    }
+    const selectedModel = String(options && options.model || '').trim();
+    if (!selectedModel) throw new Error('Select a model before sending a request.');
+
+    const proAlias = isOpenAiAstraProModel(profile, selectedModel);
+    const model = proAlias ? 'gpt-6.2-astra' : selectedModel;
+    const converted = toResponsesInput(options && options.messages);
     const maxTokens = Math.max(1, Math.min(128_000,
       Math.round(Number(options && options.maxTokens) || 1200)));
-    const requestedEffort = String(options && options.reasoningEffort || 'medium').toLowerCase();
-    const effort = requestedEffort === 'auto' ? 'medium' :
-      (requestedEffort === 'minimal' ? 'low' : requestedEffort);
-    const supportedEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
-
     const body = {
-      model: 'gpt-6.2-astra',
-      input,
+      model,
+      input: converted.input,
       max_output_tokens: maxTokens,
-      reasoning: {
-        mode: 'pro',
-        effort: supportedEfforts.includes(effort) ? effort : 'medium'
-      }
+      stream: options && options.stream === true
     };
-    if (instructions.length) body.instructions = instructions.join('\n\n');
+    if (converted.instructions) body.instructions = converted.instructions;
+
+    const tools = toResponsesTools(options && options.tools);
+    if (tools.length) body.tools = tools;
+    if (Number.isInteger(Number(options && options.maxToolCalls)) && Number(options.maxToolCalls) > 0) {
+      body.max_tool_calls = Math.min(20, Number(options.maxToolCalls));
+    }
+    if (options && options.toolChoice) body.tool_choice = options.toolChoice;
+    if (options && options.parallelToolCalls !== undefined) {
+      body.parallel_tool_calls = options.parallelToolCalls !== false;
+    }
+
+    const reasoningModel = isReasoningModel(model) || proAlias;
+    const requestedEffort = String(options && options.reasoningEffort || 'auto').toLowerCase();
+    if (reasoningModel && requestedEffort !== 'auto') {
+      const supportedEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+      const effort = supportedEfforts.includes(requestedEffort) ? requestedEffort : 'medium';
+      body.reasoning = proAlias ? { mode: 'pro', effort } : { effort };
+    }
+
+    const temperature = options && options.temperature;
+    if (!reasoningModel && temperature !== '' && temperature !== null &&
+        temperature !== undefined && Number.isFinite(Number(temperature))) {
+      body.temperature = Math.max(0, Math.min(2, Number(temperature)));
+    }
 
     return {
       url: base + '/responses',
@@ -188,23 +328,36 @@
   }
 
   function buildModelRequest(profile, options, browserMode) {
-    if (isOpenAiAstraProModel(profile, options && options.model)) {
+    if (isDirectOpenAiProfile(profile)) {
       return buildResponsesRequest(profile, options, browserMode);
     }
     return buildChatRequest(profile, options, browserMode);
   }
 
-  function normalizeResponsesPayload(payload) {
+    function normalizeResponsesPayload(payload) {
     const output = Array.isArray(payload && payload.output) ? payload.output : [];
     const parts = [];
+    const toolCalls = [];
     for (const item of output) {
-      if (!item || item.type !== 'message' || !Array.isArray(item.content)) continue;
-      for (const part of item.content) {
-        if (part && part.type === 'output_text' && typeof part.text === 'string') parts.push(part.text);
-        else if (part && part.type === 'refusal' && typeof part.refusal === 'string') parts.push(part.refusal);
+      if (!item) continue;
+      if (item.type === 'message' && Array.isArray(item.content)) {
+        for (const part of item.content) {
+          if (part && part.type === 'output_text' && typeof part.text === 'string') parts.push(part.text);
+          else if (part && part.type === 'refusal' && typeof part.refusal === 'string') parts.push(part.refusal);
+        }
+      } else if (item.type === 'function_call' && item.name) {
+        toolCalls.push({
+          id: String(item.call_id || item.id || ''),
+          type: 'function',
+          function: {
+            name: String(item.name),
+            arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {})
+          }
+        });
       }
     }
-    const text = parts.join('');
+    let text = parts.join('');
+    if (!text && typeof payload.output_text === 'string') text = payload.output_text;
     const inputTokens = Number(payload && payload.usage && payload.usage.input_tokens) || 0;
     const outputTokens = Number(payload && payload.usage && payload.usage.output_tokens) || 0;
     return {
@@ -212,8 +365,12 @@
       model: payload && payload.model,
       choices: [{
         index: 0,
-        message: { role: 'assistant', content: text },
-        finish_reason: 'stop'
+        message: {
+          role: 'assistant',
+          content: text || null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {})
+        },
+        finish_reason: toolCalls.length ? 'tool_calls' : 'stop'
       }],
       usage: {
         prompt_tokens: inputTokens,
@@ -223,7 +380,7 @@
     };
   }
 
-  function normalizePayload(profile, payload, requestProtocol) {
+    function normalizePayload(profile, payload, requestProtocol) {
     if (requestProtocol === 'responses') return normalizeResponsesPayload(payload);
     if (!profile || profile.protocol !== 'anthropic') return payload;
     const blocks = Array.isArray(payload && payload.content) ? payload.content : [];
@@ -244,15 +401,201 @@
     };
   }
 
-  function normalizeStream(response, profile) {
+  function normalizeResponsesStream(response) {
+    if (!response || !response.body) return response;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let buffer = '';
+    let finished = false;
+    const toolsByItem = new Map();
+    const toolsByCall = new Map();
+    const tools = [];
+
+    function chunk(delta, finishReason) {
+      return 'data: ' + JSON.stringify({
+        choices: [{ index: 0, delta: delta || {}, finish_reason: finishReason || null }]
+      }) + '\n\n';
+    }
+
+    function ensureTool(item) {
+      const itemId = String(item && item.id || '');
+      const callId = String(item && (item.call_id || item.id) || '');
+      const existing = (itemId && toolsByItem.get(itemId)) || (callId && toolsByCall.get(callId));
+      if (existing) {
+        if (item && item.name && !existing.name) existing.name = String(item.name);
+        return { entry: existing, emitted: '' };
+      }
+      const entry = {
+        index: tools.length,
+        itemId,
+        callId,
+        name: String(item && item.name || ''),
+        arguments: ''
+      };
+      tools.push(entry);
+      if (itemId) toolsByItem.set(itemId, entry);
+      if (callId) toolsByCall.set(callId, entry);
+      const delta = {
+        tool_calls: [{
+          index: entry.index,
+          id: entry.callId,
+          type: 'function',
+          function: { name: entry.name, arguments: '' }
+        }]
+      };
+      return { entry, emitted: chunk(delta) };
+    }
+
+    function parseEvent(eventText) {
+      const lines = eventText.split(/\r?\n/);
+      let eventName = '';
+      const dataLines = [];
+      for (const line of lines) {
+        if (line.indexOf('event:') === 0) eventName = line.slice(6).trim();
+        else if (line.indexOf('data:') === 0) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return '';
+      const raw = dataLines.join('\n');
+      if (raw === '[DONE]') {
+        finished = true;
+        return 'data: [DONE]\n\n';
+      }
+      let payload;
+      try { payload = JSON.parse(raw); } catch { return ''; }
+      const type = eventName || String(payload && payload.type || '');
+      if (type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+        return chunk({ content: payload.delta });
+      }
+      if ((type === 'response.reasoning_text.delta' ||
+           type === 'response.reasoning_summary_text.delta') && typeof payload.delta === 'string') {
+        return chunk({ reasoning_content: payload.delta });
+      }
+      if (type === 'response.refusal.delta' && typeof payload.delta === 'string') {
+        return chunk({ content: payload.delta });
+      }
+      if (type === 'response.output_item.added' && payload.item && payload.item.type === 'function_call') {
+        return ensureTool(payload.item).emitted;
+      }
+      if (type === 'response.function_call_arguments.delta' && typeof payload.delta === 'string') {
+        let entry = payload.item_id && toolsByItem.get(String(payload.item_id));
+        if (!entry) {
+          const ensured = ensureTool({
+            id: payload.item_id || payload.call_id,
+            call_id: payload.call_id,
+            name: payload.name
+          });
+          entry = ensured.entry;
+          if (ensured.emitted) {
+            entry.arguments += payload.delta;
+            return ensured.emitted + chunk({
+              tool_calls: [{ index: entry.index, function: { arguments: payload.delta } }]
+            });
+          }
+        }
+        entry.arguments += payload.delta;
+        return chunk({
+          tool_calls: [{ index: entry.index, function: { arguments: payload.delta } }]
+        });
+      }
+      if (type === 'response.output_item.done' && payload.item && payload.item.type === 'function_call') {
+        const ensured = ensureTool(payload.item);
+        const fullArguments = typeof payload.item.arguments === 'string'
+          ? payload.item.arguments : JSON.stringify(payload.item.arguments || {});
+        const missing = fullArguments.slice(ensured.entry.arguments.length);
+        ensured.entry.arguments = fullArguments;
+        return ensured.emitted + (missing ? chunk({
+          tool_calls: [{ index: ensured.entry.index, function: { arguments: missing } }]
+        }) : '');
+      }
+      if (type === 'response.completed' || type === 'response.incomplete') {
+        const finalResponse = payload.response || {};
+        for (const item of Array.isArray(finalResponse.output) ? finalResponse.output : []) {
+          if (!item || item.type !== 'function_call') continue;
+          const ensured = ensureTool(item);
+          if (ensured.emitted) buffer += ensured.emitted;
+          const fullArguments = typeof item.arguments === 'string'
+            ? item.arguments : JSON.stringify(item.arguments || {});
+          const missing = fullArguments.slice(ensured.entry.arguments.length);
+          ensured.entry.arguments = fullArguments;
+          if (missing) buffer += chunk({
+            tool_calls: [{ index: ensured.entry.index, function: { arguments: missing } }]
+          });
+        }
+        finished = true;
+        const reason = type === 'response.incomplete' ? 'length' :
+          (tools.length ? 'tool_calls' : 'stop');
+        return chunk({}, reason) + 'data: [DONE]\n\n';
+      }
+      if (type === 'response.failed' || type === 'error') {
+        finished = true;
+        const error = payload.error || payload.response && payload.response.error || {};
+        const message = error.message || payload.message || 'Responses API request failed.';
+        return 'data: ' + JSON.stringify({ error: { message: String(message) } }) +
+          '\n\n' + 'data: [DONE]\n\n';
+      }
+      return '';
+    }
+
+    const stream = new ReadableStream({
+      async pull(controller) {
+        try {
+          while (true) {
+            const item = await reader.read();
+            if (item.done) {
+              if (buffer) {
+                const tail = parseEvent(buffer);
+                if (tail) controller.enqueue(encoder.encode(tail));
+                buffer = '';
+              }
+              if (!finished) controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+              return;
+            }
+            buffer += decoder.decode(item.value, { stream: true });
+            const events = buffer.split(/\r?\n\r?\n/);
+            buffer = events.pop() || '';
+            let output = '';
+            for (const eventText of events) {
+              const converted = parseEvent(eventText);
+              if (converted) output += converted;
+              if (finished) break;
+            }
+            if (output) {
+              controller.enqueue(encoder.encode(output));
+              if (finished) {
+                controller.close();
+                return;
+              }
+              return;
+            }
+            if (finished) {
+              controller.close();
+              return;
+            }
+          }
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try { await reader.cancel(reason); } catch {}
+      }
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream; charset=utf-8' }
+    });
+  }
+
+  function normalizeStream(response, profile, requestProtocol) {
+    if (requestProtocol === 'responses') return normalizeResponsesStream(response);
     if (!profile || profile.protocol !== 'anthropic' || !response || !response.body) return response;
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let buffer = '';
-    let eventName = '';
-    let dataLines = [];
     let finished = false;
 
     function openAiChunk(delta, finishReason) {
@@ -336,7 +679,7 @@
     });
   }
 
-  function modelsRequest(profile, apiKey, browserMode) {
+    function modelsRequest(profile, apiKey, browserMode) {
     const base = cleanBase(profile && profile.url);
     if (!base) throw new Error('API endpoint is not configured.');
     if (profile && profile.modelsEndpoint === false) {
@@ -361,6 +704,10 @@
     buildModelRequest,
     buildResponsesRequest,
     extractModels,
+    isDirectOpenAiProfile,
+    normalizeResponsesPayload,
+    toResponsesInput,
+    toResponsesTools,
     isOpenAiAstraProModel,
     modelsRequest,
     normalizePayload,

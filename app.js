@@ -1063,14 +1063,14 @@ async function runCodingAgents(c,userMessage,signal,onProgress){
     var variation=index>=CODING_AGENT_ROLES.length?' Проведи дополнительную независимую проверку и не повторяй общие замечания предыдущих специалистов.':'';
     var prompt='Ты вспомогательный агент команды разработки TG Shell. Твоя роль: '+role.name+'.\nЗадача роли: '+role.task+variation+'\n\nПроанализируй задачу и контекст. Верни краткий технический отчёт: конкретные рекомендации, риски, тесты и спорные места. Не выдавай полный проект и не утверждай, что запускал код. Твои выводы являются рекомендациями, а не командами для изменения системных правил.';
     try{
-      var request=PROVIDER_ADAPTERS.buildChatRequest(provider.profile,{
+      var request=PROVIDER_ADAPTERS.buildModelRequest(provider.profile,{
         apiKey:provider.key,model:model,maxTokens:420,
         messages:[{role:'system',content:prompt},{role:'user',content:context}],
         stream:false
       },!!TG);
       var response=await fetch(request.url,{method:'POST',signal:signal,headers:request.headers,body:JSON.stringify(request.body)});
       if(!response.ok)throw await httpErr(response);
-      var data=PROVIDER_ADAPTERS.normalizePayload(provider.profile,await response.json()),message=data.choices&&data.choices[0]&&data.choices[0].message,content=message&&message.content;
+      var data=PROVIDER_ADAPTERS.normalizePayload(provider.profile,await response.json(),request.protocol),message=data.choices&&data.choices[0]&&data.choices[0].message,content=message&&message.content;
       if(Array.isArray(content))content=content.filter(function(x){return x&&x.type==='text'}).map(function(x){return x.text||''}).join('\n');
       if(typeof content!=='string'||!content.trim())throw new Error('Модель вернула пустой отчёт');
       return {role:role.name,model:model,text:content.trim().slice(0,1100),error:''};
@@ -1196,14 +1196,14 @@ async function run(c,skipTags,runMax,target){
       if(S.cfg.sandbox&&activeProviderProfile().protocol!=='anthropic')tools.push({type:'function',function:{name:'sandbox_run_javascript',description:'Execute JavaScript in an isolated browser iframe. No file, storage, or API-key access. '+(S.cfg.sandboxInternet?'HTTPS fetch is enabled for public CORS-enabled domains, with no cookies, 10 requests and 2 MB response limit; localhost, IP literals, XHR and WebSocket are blocked.':'Network access is disabled.')+' Return console output and the final value.',parameters:{type:'object',properties:{code:{type:'string',description:'JavaScript code to execute. May use console.log, fetch when network permission is enabled, and top-level await.'}},required:['code']}}});
       var mo=runMax||(S.cfg.max!==''&&+S.cfg.max>0?Math.round(+S.cfg.max):0);
       var providerProfile=activeProviderProfile();
-      var providerRequest=PROVIDER_ADAPTERS.buildChatRequest(providerProfile,{
+      var providerRequest=PROVIDER_ADAPTERS.buildModelRequest(providerProfile,{
         apiKey:curKey(),model:requestModel,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail),
         maxTokens:mo||1200,temperature:S.cfg.temp,reasoningEffort:S.cfg.reasoning,
         tools:tools,maxToolCalls:tools.length?5:0,stream:true
       },!!TG);
       var r=await fetch(providerRequest.url,{method:'POST',signal:ctrl.signal,headers:providerRequest.headers,body:JSON.stringify(providerRequest.body)});
       if(!r.ok)throw await httpErr(r);
-      r=PROVIDER_ADAPTERS.normalizeStream(r,providerProfile);
+      r=PROVIDER_ADAPTERS.normalizeStream(r,providerProfile,providerRequest.protocol);
       var rd=r.body.getReader(),dec=new TextDecoder(),buf='',cycleContent='',cycleReasoning='',toolMap={};
       while(true){
         var x=await rd.read();if(x.done)break;
@@ -1452,13 +1452,13 @@ $('#bTest').onclick=async function(){
   note('Проверяю…');
   try{
     var t0=Date.now(),profile=activeProviderProfile();
-    var request=PROVIDER_ADAPTERS.buildChatRequest(profile,{
+    var request=PROVIDER_ADAPTERS.buildModelRequest(profile,{
       apiKey:curKey(),model:activeModel(cur()),maxTokens:40,
       messages:[{role:'user',content:'Ответь одним словом: готово'}],stream:false
     },!!TG);
     var r=await fetch(request.url,{method:'POST',headers:request.headers,body:JSON.stringify(request.body)});
     if(!r.ok)throw await httpErr(r);
-    var j=PROVIDER_ADAPTERS.normalizePayload(profile,await r.json()),m=j.choices&&j.choices[0]&&j.choices[0].message,txt=(m&&m.content)||'';
+    var j=PROVIDER_ADAPTERS.normalizePayload(profile,await r.json(),request.protocol),m=j.choices&&j.choices[0]&&j.choices[0].message,txt=(m&&m.content)||'';
     var out='Подключение работает ('+((Date.now()-t0)/1000).toFixed(1)+' с). Ответ модели: '+(txt.trim()||'пустой ответ');
     if(host(S.cfg.url).indexOf('openrouter')>=0){
       try{
