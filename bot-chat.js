@@ -862,8 +862,13 @@ function createBotChat(options = {}) {
     return Math.max(1, Math.min(32_000, Math.round(Number(user.settings && user.settings.maxTokens) || 1_200)));
   }
 
+  function currentRequestTimeout(user) {
+    return Math.max(10, Math.min(600, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
+  }
+
   function settingsMessageText(user, view = 'main') {
     if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
+    if (view === 'timeout') return 'Выберите время ожидания ответа провайдера. Текущее значение: ' + currentRequestTimeout(user) + ' секунд.';
     if (view === 'reasoning') {
       const current = user.settings && user.settings.reasoning || 'auto';
       return 'Выберите уровень рассуждений. Текущее значение: ' + (reasoningLabels[current] || 'Авто') + '.';
@@ -895,6 +900,7 @@ function createBotChat(options = {}) {
       'API: ' + apiBase,
       'Модель: ' + currentUserModel(user),
       'Лимит ответа: ' + maxTokens + ' токенов',
+      'Время ожидания ответа: ' + currentRequestTimeout(user) + ' секунд',
       'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто'),
       'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
@@ -905,6 +911,19 @@ function createBotChat(options = {}) {
   }
 
   function settingsKeyboard(user, view = 'main') {
+    if (view === 'timeout') {
+      const current = currentRequestTimeout(user);
+      const choices = [10, 30, 60, 120, 180, 300, 600];
+      const rows = [];
+      for (let i = 0; i < choices.length; i += 3) {
+        rows.push(choices.slice(i, i + 3).map((value) => ({
+          text: (value === current ? '✓ ' : '') + value + ' с',
+          callback_data: 'tn:timeout:' + value
+        })));
+      }
+      rows.push([{ text: '← Назад', callback_data: 'tn:back' }]);
+      return { inline_keyboard: rows };
+    }
     if (view === 'tokens') {
       const current = currentTokenLimit(user);
       const rows = [];
@@ -972,6 +991,7 @@ function createBotChat(options = {}) {
         { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
         { text: '🤖 Модель', callback_data: 'tn:model' }
       ],
+      [{ text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' }],
       [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
@@ -1062,6 +1082,9 @@ function createBotChat(options = {}) {
       } else if (data === 'tn:tokens') {
         view = 'tokens';
         notice = 'Выберите лимит ответа.';
+      } else if (data === 'tn:timeout') {
+        view = 'timeout';
+        notice = 'Выберите время ожидания ответа провайдера.';
       } else if (data === 'tn:model') {
         if (!user.apiKey) {
           await safeAnswerCallback(query.id, 'Ключ для Telegram-чата не настроен. Откройте полные настройки Mini App.');
@@ -1079,8 +1102,14 @@ function createBotChat(options = {}) {
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
         const tokenMatch = data.match(/^tn:t:(512|1200|2000|4000|8000|16000|32000)$/);
+        const timeoutMatch = data.match(/^tn:timeout:(10|30|60|120|180|300|600)$/);
         const modelMatch = data.match(/^tn:m:(\d{1,2})$/);
-        if (reasoningMatch) {
+        if (timeoutMatch) {
+          const previous = user.settings || {};
+          user.settings = { ...previous, requestTimeoutSeconds: Number(timeoutMatch[1]) };
+          try { store.save(); } catch (error) { user.settings = previous; throw error; }
+          notice = 'Тайм-аут ответа провайдера: ' + timeoutMatch[1] + ' секунд.';
+        } else if (reasoningMatch) {
           const previous = user.settings || {};
           user.settings = { ...previous, reasoning: reasoningMatch[1] };
           try { store.save(); } catch (error) { user.settings = previous; throw error; }
@@ -1452,7 +1481,7 @@ function createBotChat(options = {}) {
       method: 'POST',
       headers: request.headers,
       body: JSON.stringify(request.body),
-      signal: AbortSignal.timeout(120_000)
+      signal: AbortSignal.timeout(currentRequestTimeout(user) * 1000)
     });
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => ({}));
@@ -1486,7 +1515,7 @@ function createBotChat(options = {}) {
         method: 'POST',
         headers: request.headers,
         body: JSON.stringify(request.body),
-        signal: AbortSignal.timeout(30_000)
+        signal: AbortSignal.timeout(currentRequestTimeout(user) * 1000)
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -1879,6 +1908,7 @@ function createBotChat(options = {}) {
       });
       if (source.agentCount !== undefined && Number.isFinite(Number(source.agentCount))) next.agentCount = Math.max(1, Math.min(20, Math.round(Number(source.agentCount))));
       if (source.sandboxTimeout !== undefined && Number.isFinite(Number(source.sandboxTimeout))) next.sandboxTimeout = Math.max(1, Math.min(3600, Math.round(Number(source.sandboxTimeout))));
+      if (source.requestTimeoutSeconds !== undefined && Number.isFinite(Number(source.requestTimeoutSeconds))) next.requestTimeoutSeconds = Math.max(10, Math.min(600, Math.round(Number(source.requestTimeoutSeconds))));
       if (source.sumAt !== undefined && Number.isFinite(Number(source.sumAt))) next.sumAt = Math.max(2_000, Math.min(2_000_000, Math.round(Number(source.sumAt))));
       if (source.keep !== undefined && Number.isFinite(Number(source.keep))) next.keep = Math.max(2, Math.min(100, Math.round(Number(source.keep))));
       if (source.pinCap !== undefined && Number.isFinite(Number(source.pinCap))) next.pinCap = Math.max(300, Math.min(100_000, Math.round(Number(source.pinCap))));
