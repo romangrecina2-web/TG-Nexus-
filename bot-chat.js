@@ -1580,26 +1580,35 @@ function createBotChat(options = {}) {
 
   function applySyncState(userId, input = {}) {
     const user = store.getUser(userId);
+    let providerChanged = false;
     if (typeof input.apiBaseUrl === 'string') {
       const nextBase = normalizeApiBase(input.apiBaseUrl);
       if (!nextBase) throw new Error('Invalid API endpoint.');
       const previousBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
-      if (previousBase !== nextBase) user.apiKey = '';
+      if (previousBase !== nextBase) { user.apiKey = ''; providerChanged = true; }
       user.apiBaseUrl = nextBase;
       user.apiBaseUrlExplicit = true;
     }
     if (input.apiProtocol === 'openai' || input.apiProtocol === 'anthropic') {
-      if (user.apiProtocol !== input.apiProtocol) user.apiKey = '';
+      if (user.apiProtocol !== input.apiProtocol) { user.apiKey = ''; providerChanged = true; }
       user.apiProtocol = input.apiProtocol;
     }
     if (['bearer', 'key', 'api-key', 'x-api-key'].includes(input.apiAuthType)) {
-      if (user.apiAuthType !== input.apiAuthType) user.apiKey = '';
+      if (user.apiAuthType !== input.apiAuthType) { user.apiKey = ''; providerChanged = true; }
       user.apiAuthType = input.apiAuthType;
     }
     if (typeof input.modelsEndpoint === 'boolean') user.modelsEndpoint = input.modelsEndpoint;
-    if (typeof input.model === 'string' && input.model.trim() && input.model.length <= 256 && !/\s/.test(input.model)) {
-      user.model = input.model.trim();
-      user.modelExplicit = true;
+    if (typeof input.model === 'string' && input.model.length <= 256 && !/\s/.test(input.model)) {
+      if (input.model.trim()) {
+        user.model = input.model.trim();
+        user.modelExplicit = true;
+      } else if (providerChanged) {
+        user.model = '';
+        user.modelExplicit = true;
+        for (const chat of user.chats) {
+          if (chat && typeof chat === 'object') chat.model = '';
+        }
+      }
     }
     if (input.settings && typeof input.settings === 'object' && !Array.isArray(input.settings)) {
       const source = input.settings;
