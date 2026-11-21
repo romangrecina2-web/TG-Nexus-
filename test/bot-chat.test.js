@@ -69,6 +69,9 @@ function makeBot(options = {}) {
     if (String(url).endsWith('/chat/completions')) {
       const payload = JSON.parse(request.body);
       assert.equal(payload.messages.at(-1).role, 'user');
+      if (options.fetchDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.fetchDelayMs));
+      }
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: options.answer || 'Ответ ИИ' } }] }) };
     }
     throw new Error('Unexpected URL');
@@ -92,6 +95,7 @@ function makeBot(options = {}) {
         throw new Error("Bad Request: can't parse entities: Unsupported start tag");
       }
       sent.push(record);
+      return { message_id: attempts.length };
     },
     deleteTelegramMessage: async (chatId, messageId) => { actions.push({ type: 'delete', chatId, messageId }); events.push({ type: 'delete' }); },
     answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
@@ -414,8 +418,21 @@ test('normal messages create a chat automatically and send the AI response', asy
   assert.deepEqual(user.chats[0].messages.map((x) => x.role), ['user', 'assistant']);
   assert.equal(ctx.sent.at(-1).text, 'Ответ ИИ');
   assert.equal(ctx.sent.at(-1).options.parse_mode, 'HTML');
+  assert.ok(ctx.sent.some((item) => item.text === 'Генерируем ответ... (0 сек.)'));
+  const indicator = ctx.sent.find((item) => item.text === 'Генерируем ответ... (0 сек.)');
+  assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === indicator.message_id));
   const completion = JSON.parse(ctx.providerCalls.at(-1).request.body);
   assert.match(completion.messages[0].content, /Отвечай без таблиц и заголовков #/);
+});
+
+test('generation indicator updates its elapsed seconds and is removed after completion', async () => {
+  const ctx = makeBot({ fetchDelayMs: 2_300 });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Подожди пару секунд.'));
+  const progressEdits = ctx.editedMessages.filter((item) => /^Генерируем ответ\.\.\. \(\d+ сек\.\)$/.test(item.text));
+  assert.ok(progressEdits.length >= 1);
+  assert.ok(progressEdits.some((item) => Number(item.text.match(/\((\d+) сек\.\)/)[1]) >= 1));
+  assert.equal(ctx.sent.at(-1).text, 'Ответ ИИ');
 });
 
 test('Telegram send failures propagate instead of being silently swallowed', async () => {
