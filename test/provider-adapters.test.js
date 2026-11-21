@@ -380,3 +380,33 @@ test('custom OpenAI-compatible providers remain on Chat Completions', () => {
   assert.equal(request.protocol, 'openai');
   assert.equal(request.body.model, 'openai/gpt-5.4');
 });
+
+
+test('Responses stream emits final-only function calls without corrupting later input events', async () => {
+  const openai = catalog.find((item) => item.id === 'openai');
+  const encoder = new TextEncoder();
+  const source = new Response(new ReadableStream({
+    start(controller) {
+      const event = {
+        type: 'response.completed',
+        response: {
+          output: [{
+            id: 'fc_final',
+            type: 'function_call',
+            call_id: 'call_final',
+            name: 'sandbox_run_javascript',
+            arguments: '{"code":"40+2"}'
+          }]
+        }
+      };
+      controller.enqueue(encoder.encode('event: response.completed\ndata: ' + JSON.stringify(event) + '\n\n'));
+      controller.close();
+    }
+  }));
+  const text = await adapters.normalizeStream(source, openai, 'responses').text();
+  assert.match(text, /"id":"call_final"/);
+  assert.match(text, /"name":"sandbox_run_javascript"/);
+  assert.match(text, /"arguments":"\\{\\"code\\":\\"40\\+2\\"\\}"/);
+  assert.match(text, /"finish_reason":"tool_calls"/);
+  assert.match(text, /data: \[DONE\]/);
+});

@@ -510,22 +510,23 @@
       }
       if (type === 'response.completed' || type === 'response.incomplete') {
         const finalResponse = payload.response || {};
+        let finalOutput = '';
         for (const item of Array.isArray(finalResponse.output) ? finalResponse.output : []) {
           if (!item || item.type !== 'function_call') continue;
           const ensured = ensureTool(item);
-          if (ensured.emitted) buffer += ensured.emitted;
+          if (ensured.emitted) finalOutput += ensured.emitted;
           const fullArguments = typeof item.arguments === 'string'
             ? item.arguments : JSON.stringify(item.arguments || {});
           const missing = fullArguments.slice(ensured.entry.arguments.length);
           ensured.entry.arguments = fullArguments;
-          if (missing) buffer += chunk({
+          if (missing) finalOutput += chunk({
             tool_calls: [{ index: ensured.entry.index, function: { arguments: missing } }]
           });
         }
         finished = true;
         const reason = type === 'response.incomplete' ? 'length' :
           (tools.length ? 'tool_calls' : 'stop');
-        return chunk({}, reason) + 'data: [DONE]\n\n';
+        return finalOutput + chunk({}, reason) + 'data: [DONE]\n\n';
       }
       if (type === 'response.failed' || type === 'error') {
         finished = true;
