@@ -12,7 +12,7 @@ test('catalog contains 30 unique HTTPS provider profiles', () => {
   for (const provider of catalog) {
     assert.ok(provider.name);
     assert.ok(provider.url.startsWith('https://'), provider.id);
-    assert.ok(['openai', 'anthropic'].includes(provider.protocol));
+    assert.ok(['openai', 'anthropic', 'responses'].includes(provider.protocol));
     assert.ok(['bearer', 'key', 'api-key', 'x-api-key'].includes(provider.authType));
   }
 });
@@ -157,16 +157,18 @@ test('model extraction supports common OpenAI-compatible and Gemini model payloa
   );
 });
 
-test('providers without a model-list endpoint reject discovery but accept manual model IDs', () => {
+test('Perplexity uses the Agent Responses API and its /v1 models endpoint', () => {
   const profile = catalog.find((item) => item.id === 'perplexity');
-  assert.throws(() => adapters.modelsRequest(profile, 'test-key', false), /does not expose/);
-
-  const request = adapters.buildChatRequest(profile, {
+  const request = adapters.buildModelRequest(profile, {
     apiKey: 'test-key',
-    model: 'sonar',
+    model: 'openai/gpt-5.6-sol',
     messages: [{ role: 'user', content: 'Hello' }]
   }, false);
-  assert.equal(request.url, 'https://api.perplexity.ai/chat/completions');
+  const models = adapters.modelsRequest(profile, 'test-key', false);
+
+  assert.equal(request.url, 'https://api.perplexity.ai/v1/responses');
+  assert.equal(request.protocol, 'responses');
+  assert.equal(models.url, 'https://api.perplexity.ai/v1/models');
 });
 
 test('Anthropic SSE stream is converted to OpenAI-style chunks', async () => {
@@ -410,4 +412,97 @@ test('Responses stream emits final-only function calls without corrupting later 
   assert.ok(text.includes('"arguments":"{\\\"code\\":\\\"40+2\\\"}"'));
   assert.match(text, /"finish_reason":"tool_calls"/);
   assert.match(text, /data: \[DONE\]/);
+});
+
+
+test('xAI uses Responses by default and preserves its Chat Completions route', () => {
+  const profile = catalog.find((item) => item.id === 'xai');
+  const request = adapters.buildModelRequest(profile, {
+    apiKey: 'xai-test-key',
+    model: 'grok-4.7',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+  const chat = adapters.buildChatRequest(profile, {
+    apiKey: 'xai-test-key',
+    model: 'grok-4.7',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+
+  assert.equal(request.url, 'https://api.x.ai/v1/responses');
+  assert.equal(request.protocol, 'responses');
+  assert.equal(chat.url, 'https://api.x.ai/v1/chat/completions');
+});
+
+test('Upstage uses Responses only for listed Solar 4 models and falls back to chat for images', () => {
+  const profile = catalog.find((item) => item.id === 'upstage');
+  const solar = adapters.buildModelRequest(profile, {
+    apiKey: 'upstage-test-key',
+    model: 'solar-pro4',
+    messages: [{ role: 'user', content: 'Solve 2+2.' }],
+    reasoningEffort: 'medium'
+  }, false);
+  const older = adapters.buildModelRequest(profile, {
+    apiKey: 'upstage-test-key',
+    model: 'solar-pro2',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+  const image = adapters.buildModelRequest(profile, {
+    apiKey: 'upstage-test-key',
+    model: 'solar-pro4',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Describe' }, { type: 'image_url', image_url: { url: 'https://example.test/pic.png' } }] }]
+  }, false);
+
+  assert.equal(solar.url, 'https://api.upstage.ai/v1/responses');
+  assert.deepEqual(solar.body.reasoning, { effort: 'medium' });
+  assert.equal(older.url, 'https://api.upstage.ai/v1/chat/completions');
+  assert.equal(image.url, 'https://api.upstage.ai/v1/chat/completions');
+});
+
+test('catalog uses documented Cohere and regional DashScope API roots', () => {
+  const cohere = catalog.find((item) => item.id === 'cohere');
+  const qwen = catalog.find((item) => item.id === 'qwen');
+  const cohereRequest = adapters.buildModelRequest(cohere, {
+    apiKey: 'cohere-test-key',
+    model: 'command-a-plus',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+  const qwenRequest = adapters.buildModelRequest(qwen, {
+    apiKey: 'qwen-test-key',
+    model: 'qwen-max',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+
+  assert.equal(cohere.url, 'https://api.cohere.ai/compatibility/v1');
+  assert.equal(cohereRequest.url, 'https://api.cohere.ai/compatibility/v1/chat/completions');
+  assert.equal(qwenRequest.url, 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions');
+  assert.match(qwen.notice, /регион/i);
+});
+
+test('catalog specifies the wire route for every provider and Anthropic uses its models path', () => {
+  for (const provider of catalog) {
+    assert.ok(provider.url);
+    if (provider.protocol === 'anthropic') assert.ok(provider.messagesPath);
+    else if (provider.protocol === 'responses') assert.ok(provider.responsesPath);
+    else assert.ok(provider.chatPath);
+  }
+  const anthropic = catalog.find((item) => item.id === 'anthropic');
+  assert.equal(adapters.modelsRequest(anthropic, 'anthropic-key', false).url,
+    'https://api.anthropic.com/v1/models?limit=100');
+});
+
+test('DeepSeek keeps Chat Completions generally and uses Responses only for the listed model', () => {
+  const deepseek = catalog.find((item) => item.id === 'deepseek');
+  const standard = adapters.buildModelRequest(deepseek, {
+    apiKey: 'deepseek-key',
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+  const responseModel = adapters.buildModelRequest(deepseek, {
+    apiKey: 'deepseek-key',
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'Hello' }]
+  }, false);
+
+  assert.equal(standard.url, 'https://api.deepseek.com/v1/chat/completions');
+  assert.equal(responseModel.url, 'https://api.deepseek.com/v1/responses');
 });

@@ -832,10 +832,12 @@ function createBotChat(options = {}) {
     user.apiProtocol = provider.protocol || 'openai';
     user.apiAuthType = provider.authType || 'bearer';
     user.modelsEndpoint = provider.modelsEndpoint !== false;
-    user.apiKey = '';
-    user.model = provider.defaultModel || '';
-    user.modelExplicit = true;
-    for (const chat of user.chats) chat.model = user.model;
+    user.apiKey = normalizeApiBase(previous.apiBaseUrl || apiBaseUrl) === nextBase ? previous.apiKey : '';
+    if (normalizeApiBase(previous.apiBaseUrl || apiBaseUrl) !== nextBase) {
+      user.model = provider.defaultModel || '';
+      user.modelExplicit = true;
+      for (const chat of user.chats) chat.model = user.model;
+    }
     try {
       store.save();
     } catch (error) {
@@ -1190,15 +1192,23 @@ function createBotChat(options = {}) {
 
   function providerProfile(user, endpoint) {
     const base = normalizeApiBase(endpoint || user.apiBaseUrl || apiBaseUrl);
-    const catalog = findProviderByUrl(base);
+    const byId = findProviderById(user.apiProviderId);
+    const byUrl = findProviderByUrl(base);
+    const catalog = byId && normalizeApiBase(byId.url) === base ? byId : byUrl;
     return {
       id: catalog ? catalog.id : (user.apiProviderId || 'custom'),
       url: base,
-      protocol: user.apiProtocol === 'anthropic' ? 'anthropic' : (catalog && catalog.protocol === 'anthropic' ? 'anthropic' : 'openai'),
-      authType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType)
-        ? user.apiAuthType
-        : (catalog && catalog.authType || 'bearer'),
-      modelsEndpoint: user.modelsEndpoint !== false && (!catalog || catalog.modelsEndpoint !== false)
+      protocol: catalog ? (catalog.protocol || 'openai') :
+        (['anthropic', 'openai', 'responses'].includes(user.apiProtocol) ? user.apiProtocol : 'openai'),
+      authType: catalog ? (catalog.authType || 'bearer') :
+        (['bearer', 'key', 'api-key', 'x-api-key'].includes(user.apiAuthType) ? user.apiAuthType : 'bearer'),
+      modelsEndpoint: catalog ? catalog.modelsEndpoint !== false : user.modelsEndpoint !== false,
+      chatPath: catalog && catalog.chatPath,
+      responsesPath: catalog && catalog.responsesPath,
+      messagesPath: catalog && catalog.messagesPath,
+      modelsPath: catalog && catalog.modelsPath,
+      responsesModels: catalog && catalog.responsesModels,
+      notice: catalog && catalog.notice
     };
   }
 
@@ -1807,7 +1817,7 @@ function createBotChat(options = {}) {
       apiBaseUrl: (user.apiBaseUrlExplicit || user.apiKey) ? (user.apiBaseUrl || apiBaseUrl) : '',
       apiProviderId: findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || 'custom',
       apiProviderName: (findProviderByUrl(user.apiBaseUrl || apiBaseUrl) || {}).name || 'Пользовательский endpoint',
-      apiProtocol: user.apiProtocol || 'openai',
+      apiProtocol: (findProviderById(user.apiProviderId) || findProviderByUrl(user.apiBaseUrl || apiBaseUrl) || {}).protocol || user.apiProtocol || 'openai',
       apiAuthType: user.apiAuthType || 'bearer',
       modelsEndpoint: user.modelsEndpoint !== false,
       model: user.modelExplicit ? (user.model || '') : (user.model !== defaultModel ? (user.model || '') : ''),
@@ -1828,11 +1838,10 @@ function createBotChat(options = {}) {
       const previousBase = normalizeApiBase(user.apiBaseUrl || apiBaseUrl);
       if (previousBase !== nextBase) { user.apiKey = ''; providerChanged = true; }
       user.apiBaseUrl = nextBase;
-      user.apiProviderId = findProviderByUrl(nextBase)?.id || 'custom';
+      user.apiProviderId = findProviderByUrl(nextBase)?.id || input.apiProviderId || 'custom';
       user.apiBaseUrlExplicit = true;
     }
-    if (input.apiProtocol === 'openai' || input.apiProtocol === 'anthropic') {
-      if (user.apiProtocol !== input.apiProtocol) { user.apiKey = ''; providerChanged = true; }
+    if (input.apiProtocol === 'openai' || input.apiProtocol === 'anthropic' || input.apiProtocol === 'responses') {
       user.apiProtocol = input.apiProtocol;
     }
     if (['bearer', 'key', 'api-key', 'x-api-key'].includes(input.apiAuthType)) {
@@ -1913,7 +1922,7 @@ function createBotChat(options = {}) {
     if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
       user.activeChatId = input.activeChatId;
     }
-    user.apiProviderId = findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || 'custom';
+    user.apiProviderId = findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || user.apiProviderId || 'custom';
     user.syncInitialized = true;
     store.save();
     return getSyncState(userId);
@@ -1928,7 +1937,7 @@ function createBotChat(options = {}) {
     const candidate = {
       ...user,
       apiAuthType: ['bearer', 'key', 'api-key', 'x-api-key'].includes(apiAuthType) ? apiAuthType : user.apiAuthType,
-      apiProtocol: apiProtocol === 'anthropic' ? 'anthropic' : (apiProtocol === 'openai' ? 'openai' : user.apiProtocol),
+      apiProtocol: ['anthropic', 'openai', 'responses'].includes(apiProtocol) ? apiProtocol : user.apiProtocol,
       modelsEndpoint: typeof modelsEndpoint === 'boolean' ? modelsEndpoint : user.modelsEndpoint
     };
     user.apiBaseUrl = providerBase;

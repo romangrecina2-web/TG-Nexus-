@@ -449,6 +449,7 @@ async function handleSync(req, res, bot = botChat) {
     const before = bot.getSyncState(auth.id);
     const allowed = {
       apiBaseUrl: state.apiBaseUrl,
+      apiProviderId: state.apiProviderId,
       apiProtocol: state.apiProtocol,
       apiAuthType: state.apiAuthType,
       modelsEndpoint: state.modelsEndpoint,

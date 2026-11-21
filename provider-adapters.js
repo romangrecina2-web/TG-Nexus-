@@ -10,6 +10,31 @@
     return String(value || '').trim().replace(/\/+$/, '');
   }
 
+  function apiUrl(base, path, fallback) {
+    const suffix = String(path || fallback || '').trim();
+    if (!suffix) throw new Error('API route is not configured.');
+    return cleanBase(base) + (suffix.startsWith('/') ? suffix : '/' + suffix);
+  }
+
+  function hasImageInput(messages) {
+    return (Array.isArray(messages) ? messages : []).some((message) => {
+      if (!message || !Array.isArray(message.content)) return false;
+      return message.content.some((part) => part && (
+        part.type === 'image_url' || part.type === 'input_image'
+      ));
+    });
+  }
+
+  function supportsResponsesModel(profile, model) {
+    const patterns = Array.isArray(profile && profile.responsesModels) ? profile.responsesModels : [];
+    const id = String(model || '').trim();
+    return patterns.some((pattern) => {
+      const value = String(pattern || '').trim();
+      if (!value) return false;
+      return value.endsWith('*') ? id.startsWith(value.slice(0, -1)) : id === value;
+    });
+  }
+
   function authHeaders(profile, apiKey, browserMode) {
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
     const scheme = String(profile && profile.authType || 'bearer').toLowerCase();
@@ -101,7 +126,7 @@
       if (temperature !== '' && temperature !== null && temperature !== undefined && Number.isFinite(Number(temperature))) {
         body.temperature = Math.max(0, Math.min(1, Number(temperature)));
       }
-      return { url: base + '/messages', headers, body, protocol };
+      return { url: apiUrl(base, profile.messagesPath, '/messages'), headers, body, protocol };
     }
 
     const body = {
@@ -121,7 +146,7 @@
     if (Number.isInteger(Number(options && options.maxToolCalls)) && Number(options.maxToolCalls) > 0) {
       body.max_tool_calls = Math.min(20, Number(options.maxToolCalls));
     }
-    return { url: base + '/chat/completions', headers, body, protocol };
+    return { url: apiUrl(base, profile.chatPath, '/chat/completions'), headers, body, protocol };
   }
 
   function isOpenAiAstraProModel(profile, model) {
@@ -305,10 +330,11 @@
       body.parallel_tool_calls = options.parallelToolCalls !== false;
     }
 
-    const reasoningModel = isReasoningModel(model) || proAlias;
+    const solarReasoningModel = /^(?:solar-pro4|solar-mini4)(?:-|$)/i.test(model);
+    const reasoningModel = isReasoningModel(model) || proAlias || solarReasoningModel;
     const requestedEffort = String(options && options.reasoningEffort || 'auto').toLowerCase();
     if (proAlias || (reasoningModel && requestedEffort !== 'auto')) {
-      const supportedEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+      const supportedEfforts = solarReasoningModel ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] : ['minimal', 'low', 'medium', 'high', 'xhigh'];
       const defaultEffort = proAlias && requestedEffort === 'auto' ? 'medium' : requestedEffort;
       const effort = supportedEfforts.includes(defaultEffort) ? defaultEffort : 'medium';
       body.reasoning = proAlias ? { mode: 'pro', effort } : { effort };
@@ -321,7 +347,7 @@
     }
 
     return {
-      url: base + '/responses',
+      url: apiUrl(base, profile.responsesPath, '/responses'),
       headers: authHeaders(profile, options && options.apiKey || '', browserMode),
       body,
       protocol: 'responses'
@@ -329,7 +355,9 @@
   }
 
   function buildModelRequest(profile, options, browserMode) {
-    if (isDirectOpenAiProfile(profile)) {
+    const model = String(options && options.model || '').trim();
+    const useResponses = isDirectOpenAiProfile(profile) || supportsResponsesModel(profile, model);
+    if (useResponses && !hasImageInput(options && options.messages)) {
       return buildResponsesRequest(profile, options, browserMode);
     }
     return buildChatRequest(profile, options, browserMode);
@@ -687,8 +715,10 @@
     if (profile && profile.modelsEndpoint === false) {
       throw new Error('This provider does not expose a compatible model-list endpoint. Enter a model ID manually.');
     }
-    const suffix = profile && profile.protocol === 'anthropic' ? '/models?limit=100' : '/models';
-    return { url: base + suffix, headers: authHeaders(profile, apiKey, browserMode) };
+    const suffix = profile && profile.modelsPath
+      ? profile.modelsPath
+      : (profile && profile.protocol === 'anthropic' ? '/models?limit=100' : '/models');
+    return { url: apiUrl(base, suffix, '/models'), headers: authHeaders(profile, apiKey, browserMode) };
   }
 
   function extractModels(profile, payload) {

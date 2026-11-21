@@ -154,7 +154,23 @@ function norm(d){
     var model=String(p.model||'').trim().slice(0,256);
     var models=Array.isArray(p.models)?p.models.filter(function(x){return typeof x==='string'&&x.trim()&&!/\s/.test(x)}).slice(0,100):[];
     if(model&&models.indexOf(model)<0)models.unshift(model);
-    return {id:id,name:name||host(url),url:url,model:model,models:models,protocol:p.protocol==='anthropic'?'anthropic':'openai',authType:['bearer','key','api-key','x-api-key'].indexOf(p.authType)>=0?p.authType:'bearer',modelsEndpoint:p.modelsEndpoint!==false};
+    var catalogProfile=PROVIDER_CATALOG.find(function(item){return item.id===p.catalogId||item.url===url})||null;
+    var merged={id:id,name:name||host(url),url:url,model:model,models:models,
+      protocol:['anthropic','openai','responses'].indexOf(p.protocol)>=0?p.protocol:(catalogProfile?catalogProfile.protocol:'openai'),
+      authType:['bearer','key','api-key','x-api-key'].indexOf(p.authType)>=0?p.authType:(catalogProfile?catalogProfile.authType:'bearer'),
+      modelsEndpoint:typeof p.modelsEndpoint==='boolean'?p.modelsEndpoint:(!catalogProfile||catalogProfile.modelsEndpoint!==false)};
+    if(catalogProfile){
+      merged.catalogId=catalogProfile.id;
+      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+        if(p[key]===undefined&&catalogProfile[key]!==undefined)merged[key]=catalogProfile[key];
+      });
+      if(catalogProfile.protocol==='responses'&&p.protocol!=='anthropic')merged.protocol='responses';
+    }else{
+      ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+        if(p[key]!==undefined)merged[key]=p[key];
+      });
+    }
+    return merged;
   }).filter(Boolean);
   if(!d.cfg.providers.length)d.cfg.providers=[{
     id:'default',name:host(d.cfg.url)||'Основной API',url:d.cfg.url,model:d.cfg.model,models:d.cfg.models.slice(),protocol:d.cfg.protocol||'openai',authType:d.cfg.authType||'bearer',modelsEndpoint:d.cfg.modelsEndpoint!==false
@@ -220,7 +236,9 @@ function addCatalogProvider(){
     id:'provider_'+makeId(),catalogId:item.id,name:item.name,url:item.url,
     model:item.defaultModel||'',models:item.defaultModel?[item.defaultModel]:[],
     protocol:item.protocol||'openai',authType:item.authType||'bearer',
-    modelsEndpoint:item.modelsEndpoint!==false
+    modelsEndpoint:item.modelsEndpoint!==false,
+    chatPath:item.chatPath,responsesPath:item.responsesPath,messagesPath:item.messagesPath,
+    modelsPath:item.modelsPath,responsesModels:item.responsesModels,notice:item.notice
   };
   S.cfg.providers.push(profile);
   applyProviderProfile(profile);
@@ -233,6 +251,19 @@ function activeProviderProfile(){
   if(!profile){
     profile={id:'default',name:host(S.cfg.url)||'Основной API',url:S.cfg.url,model:S.cfg.model,models:(S.cfg.models||[]).slice()};
     profiles.unshift(profile);S.cfg.activeProviderId=profile.id;
+  }
+  var catalogProfile=PROVIDER_CATALOG.find(function(item){return item.id===profile.catalogId||item.url===profile.url})||null;
+  if(catalogProfile){
+    profile.catalogId=catalogProfile.id;
+    ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+      if(profile[key]===undefined&&catalogProfile[key]!==undefined)profile[key]=catalogProfile[key];
+    });
+    if(catalogProfile.protocol==='responses'&&profile.protocol!=='anthropic'){
+      profile.protocol='responses';
+      if(S.cfg.activeProviderId===profile.id)S.cfg.protocol='responses';
+    }
+    if(profile.authType===undefined)profile.authType=catalogProfile.authType;
+    if(profile.modelsEndpoint===undefined)profile.modelsEndpoint=catalogProfile.modelsEndpoint!==false;
   }
   return profile;
 }
@@ -370,7 +401,8 @@ function makeRemoteSyncState(includeApiKey,clearApiKey){
       });
     return {id:String(chat.id).slice(0,128),title:String(chat.title||'Чат').slice(0,100),model:String(chat.model||S.cfg.model||'').slice(0,256),createdAt:Number(chat.createdAt)||Number(chat.ts)||Date.now(),updatedAt:Number(chat.updatedAt)||Number(chat.ts)||Date.now(),messages:messages};
   });
-  var state={apiBaseUrl:S.cfg.url,apiProtocol:S.cfg.protocol||'openai',apiAuthType:S.cfg.authType||'bearer',modelsEndpoint:S.cfg.modelsEndpoint!==false,model:S.cfg.model,settings:syncSettingsPayload(),activeChatId:S.cur,chats:chats};
+  var activeProvider=activeProviderProfile();
+  var state={apiBaseUrl:S.cfg.url,apiProviderId:activeProvider.catalogId||activeProvider.id,apiProtocol:S.cfg.protocol||'openai',apiAuthType:S.cfg.authType||'bearer',modelsEndpoint:S.cfg.modelsEndpoint!==false,model:S.cfg.model,settings:syncSettingsPayload(),activeChatId:S.cur,chats:chats};
   if(includeApiKey&&ACTIVE_KEY)state.apiKey=ACTIVE_KEY;
   if(clearApiKey)state.clearApiKey=true;
   return state;
@@ -414,7 +446,7 @@ async function applyRemoteSyncState(state){
   var previousCatalog=PROVIDER_CATALOG.find(function(item){return item.url===previousBase})||null;
   var previousProviderId=previousCatalog?previousCatalog.id:null;
   var nextBase=typeof state.apiBaseUrl==='string'&&validApiBase(state.apiBaseUrl)?state.apiBaseUrl:previousBase;
-  var nextCatalog=PROVIDER_CATALOG.find(function(item){return item.url===nextBase})||null;
+  var nextCatalog=PROVIDER_CATALOG.find(function(item){return item.id===state.apiProviderId||item.url===nextBase})||null;
   var nextProviderId=state.apiProviderId|| (nextCatalog?nextCatalog.id:null);
   var providerChanged=previousBase!==nextBase || (!!previousProviderId&&!!nextProviderId&&previousProviderId!==nextProviderId);
   if(typeof state.apiBaseUrl==='string'&&validApiBase(state.apiBaseUrl)){
@@ -426,7 +458,7 @@ async function applyRemoteSyncState(state){
       if(nextCatalog){
         var activeProfile=(S.cfg.providers||[]).find(function(profile){return profile.url===S.cfg.url||profile.catalogId===nextCatalog.id});
         if(!activeProfile&&S.cfg.providers.length<30){
-          activeProfile={id:'catalog_'+nextCatalog.id,catalogId:nextCatalog.id,name:nextCatalog.name,url:nextCatalog.url,model:S.cfg.model,models:S.cfg.models.slice(),protocol:nextCatalog.protocol||'openai',authType:nextCatalog.authType||'bearer',modelsEndpoint:nextCatalog.modelsEndpoint!==false};
+          activeProfile={id:'catalog_'+nextCatalog.id,catalogId:nextCatalog.id,name:nextCatalog.name,url:nextBase,model:S.cfg.model,models:S.cfg.models.slice(),protocol:nextCatalog.protocol||'openai',authType:nextCatalog.authType||'bearer',modelsEndpoint:nextCatalog.modelsEndpoint!==false,chatPath:nextCatalog.chatPath,responsesPath:nextCatalog.responsesPath,messagesPath:nextCatalog.messagesPath,modelsPath:nextCatalog.modelsPath,responsesModels:nextCatalog.responsesModels,notice:nextCatalog.notice};
           S.cfg.providers.push(activeProfile);
         }
         if(!activeProfile){
@@ -435,8 +467,11 @@ async function applyRemoteSyncState(state){
           activeProfile.name=nextCatalog.name;
         }
         activeProfile.url=S.cfg.url;
-        activeProfile.protocol=state.apiProtocol||nextCatalog.protocol||'openai';
+        activeProfile.protocol=nextCatalog.protocol==='responses'?'responses':(state.apiProtocol||nextCatalog.protocol||'openai');
         activeProfile.authType=state.apiAuthType||nextCatalog.authType||'bearer';
+        ['chatPath','responsesPath','messagesPath','modelsPath','responsesModels','notice'].forEach(function(key){
+          if(activeProfile[key]===undefined&&nextCatalog[key]!==undefined)activeProfile[key]=nextCatalog[key];
+        });
         activeProfile.modelsEndpoint=typeof state.modelsEndpoint==='boolean'?state.modelsEndpoint:nextCatalog.modelsEndpoint!==false;
         activeProfile.model=S.cfg.model;
         activeProfile.models=S.cfg.models.slice();
@@ -454,7 +489,7 @@ async function applyRemoteSyncState(state){
       }
     }
   }
-  if(state.apiProtocol==='anthropic'||state.apiProtocol==='openai')S.cfg.protocol=state.apiProtocol;
+  if(state.apiProtocol==='anthropic'||state.apiProtocol==='openai'||state.apiProtocol==='responses')S.cfg.protocol=state.apiProtocol;
   if(['bearer','key','api-key','x-api-key'].indexOf(state.apiAuthType)>=0)S.cfg.authType=state.apiAuthType;
   if(typeof state.modelsEndpoint==='boolean')S.cfg.modelsEndpoint=state.modelsEndpoint;
   if(typeof state.model==='string'){
@@ -1334,10 +1369,14 @@ function applyPreset(p){
 }
 function hint(){
   var profile=activeProviderProfile(),el=$('#hintProv');
-  var mode=profile.protocol==='anthropic'?'Нативный Anthropic Messages API. ':'OpenAI Chat Completions API. ';
+  var mode=profile.protocol==='anthropic'?'Нативный Anthropic Messages API. ':
+    profile.protocol==='responses'?'Responses API. ':'OpenAI Chat Completions API. ';
   var auth=profile.authType==='key'?'Авторизация: Authorization: Key. ':profile.authType==='x-api-key'?'Авторизация: x-api-key. ':'Авторизация Bearer. ';
   var models=profile.modelsEndpoint===false?'Список моделей через API недоступен: добавьте ID модели вручную. ':'Список моделей можно запросить кнопкой ниже. ';
-  el.textContent=mode+auth+models+'Для браузерного подключения провайдер должен разрешать CORS. Расходы и лимиты определяются самим провайдером.';
+  var route=profile.protocol==='responses'?'Маршрут: '+(profile.responsesPath||'/responses')+'. ':
+    profile.protocol==='anthropic'?'Маршрут: '+(profile.messagesPath||'/messages')+'. ':
+    'Маршрут: '+(profile.chatPath||'/chat/completions')+'. ';
+  el.textContent=(profile.notice?String(profile.notice)+' ':'')+mode+route+auth+models+'Для браузерного подключения провайдер должен разрешать CORS. Расходы и лимиты определяет сам провайдер.';
 }
 function fillSet(){
   renderProviderCatalog();renderProviderProfiles();
