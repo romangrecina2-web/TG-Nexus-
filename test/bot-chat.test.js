@@ -50,6 +50,7 @@ function callbackQuery(data, userId = 123456, messageId = 500) {
 function makeBot(options = {}) {
   const dir = options.dir || tempDir();
   const sent = [];
+  const documents = [];
   const actions = [];
   const providerCalls = [];
   const events = [];
@@ -84,6 +85,11 @@ function makeBot(options = {}) {
     encryptionKey: 'ab'.repeat(32),
     dataDir: dir,
     fetchImpl,
+    sendTelegramDocument: async (chatId, document) => {
+      const record = { chatId, ...document, message_id: documents.length + 1 };
+      documents.push(record);
+      return record;
+    },
     sendTelegramMessage: async (chatId, text, sendOptions) => {
       const record = { chatId, text, options: sendOptions || {}, message_id: attempts.length + 1 };
       attempts.push(record);
@@ -103,7 +109,7 @@ function makeBot(options = {}) {
       editedMessages.push({ chatId, messageId, text, replyMarkup });
     }
   });
-  return { bot, dir, sent, attempts, actions, providerCalls, events, callbackAnswers, editedMessages };
+  return { bot, dir, sent, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages };
 }
 
 test('API endpoint must be HTTPS and cannot contain credentials or query parameters', () => {
@@ -367,6 +373,33 @@ test('Telegram bot uses native Anthropic Messages API with the provider authenti
   assert.equal(calls[0].request.headers['x-api-key'], 'anthropic-test-key');
   assert.equal(calls[0].request.headers['anthropic-version'], '2023-06-01');
   assert.equal(ctx.sent.at(-1).text, 'Ответ от Anthropic');
+});
+
+test('code generation requests send named source files as Telegram documents', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const answer = 'Готовый скрипт ниже.\n\n' + tick + 'python main.py\nprint("hello from file")\n' + tick + '\n\nЗапустите файл командой python main.py.';
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Создай Python-скрипт и сохрани код в файл.'));
+  assert.equal(ctx.documents.length, 1);
+  assert.equal(ctx.documents[0].fileName, 'main.py');
+  assert.match(Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8'), /print\("hello from file"\)/);
+  assert.equal(ctx.documents[0].caption, 'Файл с кодом: main.py');
+  assert.ok(ctx.sent.some((item) => item.text.includes('Готовый скрипт ниже.')));
+  assert.ok(ctx.sent.some((item) => item.text.includes('Запустите файл')));
+  assert.ok(!ctx.sent.some((item) => item.text.includes('print("hello from file")')));
+  const prompt = JSON.parse(ctx.providerCalls.at(-1).request.body).messages[0].content;
+  assert.match(prompt, /каждый готовый файл отдельным блоком кода/);
+});
+
+test('code examples in explanatory replies stay inline and do not become files', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const answer = 'Пример: ' + tick + 'js\nconsole.log(2)\n' + tick;
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Объясни, что делает пример кода.'));
+  assert.equal(ctx.documents.length, 0);
+  assert.ok(ctx.sent.some((item) => item.text.includes('console.log(2)')));
 });
 
 test('normal chat messages use Responses API for direct OpenAI Astra Pro', async () => {
