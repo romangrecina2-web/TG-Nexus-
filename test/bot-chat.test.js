@@ -138,27 +138,37 @@ test('encrypted storage survives reload and does not expose API keys in plaintex
   assert.equal(second.getUser(77).chats[0].title, 'Shared privately');
 });
 
-test('/KEY removes the message before validating and stores only a working key', async () => {
+test('/KEY deletes the credential message and stores the key without pretending it was verified', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/KEY sk-valid-key', 123456, 91));
   assert.deepEqual(ctx.actions, [{ type: 'delete', chatId: 123456, messageId: 91 }]);
-  assert.equal(ctx.providerCalls.length, 1);
-  assert.equal(ctx.providerCalls[0].url, 'https://provider.example/v1/models');
-  assert.deepEqual(ctx.events.slice(0, 3).map((event) => event.type), ['delete', 'provider', 'send']);
-  assert.deepEqual(ctx.sent.map((x) => x.text), ['Удачно изменено']);
+  assert.equal(ctx.providerCalls.length, 0);
+  assert.deepEqual(ctx.events.slice(0, 2).map((event) => event.type), ['delete', 'send']);
+  assert.match(ctx.sent[0].text, /Ключ сохранён для провайдера/);
+  assert.match(ctx.sent[0].text, /\/test/);
   assert.equal(ctx.bot.store.getUser(123456).apiKey, 'sk-valid-key');
   const stored = fs.readFileSync(ctx.bot.store.filePath, 'utf8');
   assert.equal(stored.includes('sk-valid-key'), false);
 });
 
-test('invalid /key reports the required error and does not replace the saved key', async () => {
-  const ctx = makeBot({ keyValid: false });
+test('/test performs a real completion request and reports upstream authentication failures', async () => {
+  const ctx = makeBot({
+    fetchImpl: async (url, request) => {
+      assert.equal(String(url), 'https://provider.example/v1/chat/completions');
+      const body = JSON.parse(request.body);
+      assert.equal(body.model, 'test/model-a');
+      return { ok: false, status: 401, json: async () => ({ error: { message: 'Invalid API key' } }) };
+    }
+  });
   const user = ctx.bot.store.getUser(123456);
-  user.apiKey = 'old-working-key';
+  user.apiKey = 'bad-key';
+  user.model = 'test/model-a';
+  user.modelExplicit = true;
   ctx.bot.store.save();
-  await ctx.bot.handleMessage(message('/key invalid-key', 123456, 92));
-  assert.deepEqual(ctx.sent.map((x) => x.text), ['Неудачно, проверьте ключ и повторите попытку']);
-  assert.equal(ctx.bot.store.getUser(123456).apiKey, 'old-working-key');
+  await ctx.bot.handleMessage(message('/test', 123456, 92));
+  assert.match(ctx.sent.at(-1).text, /HTTP 401/);
+  assert.match(ctx.sent.at(-1).text, /отклонил ключ/);
+  assert.equal(ctx.sent.at(-1).text.includes('bad-key'), false);
 });
 
 test('/add_chat creates numbered names and /CHAT_EQUIP switches chats case-insensitively', async () => {
@@ -239,11 +249,10 @@ test('Telegram bot uses native Anthropic Messages API with the provider authenti
 
   assert.equal(ctx.bot.store.getUser(123456).apiProtocol, 'anthropic');
   assert.equal(ctx.bot.store.getUser(123456).apiAuthType, 'x-api-key');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, 'https://api.anthropic.com/v1/models?limit=100');
-  assert.equal(calls[1].url, 'https://api.anthropic.com/v1/messages');
-  assert.equal(calls[1].request.headers['x-api-key'], 'anthropic-test-key');
-  assert.equal(calls[1].request.headers['anthropic-version'], '2023-06-01');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.anthropic.com/v1/messages');
+  assert.equal(calls[0].request.headers['x-api-key'], 'anthropic-test-key');
+  assert.equal(calls[0].request.headers['anthropic-version'], '2023-06-01');
   assert.equal(ctx.sent.at(-1).text, 'Ответ от Anthropic');
 });
 
@@ -535,6 +544,7 @@ test('Telegram settings command exposes interactive controls and the Mini App de
   assert.ok(callbacks.includes('tn:reason'));
   assert.ok(callbacks.includes('tn:tokens'));
   assert.ok(callbacks.includes('tn:model'));
+  assert.ok(callbacks.includes('tn:providers:0'));
   const webAppButton = rows.flat().find((button) => button.web_app);
   assert.equal(webAppButton.text, 'Открыть все настройки');
   assert.equal(webAppButton.web_app.url, 'https://example.com/app?open=settings');
@@ -568,6 +578,58 @@ test('Telegram model buttons fetch choices and save the selected model', async (
   assert.ok(modelButtons.some((button) => button.callback_data === 'tn:m:1'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:m:1', 123456, 502));
   assert.equal(ctx.bot.getSyncState(123456).model, 'test/model-b');
+});
+
+
+test('/provider switches endpoint and clears a key and model from the previous provider', async () => {
+  const ctx = makeBot();
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'old-provider-key';
+  user.model = 'old/model';
+  user.modelExplicit = true;
+  user.chats.push({ id: 'legacy-chat', title: 'Старый чат', model: 'old/model', messages: [] });
+  user.activeChatId = 'legacy-chat';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/provider groq'));
+  const updated = ctx.bot.store.getUser(123456);
+  assert.equal(updated.apiBaseUrl, 'https://api.groq.com/openai/v1');
+  assert.equal(updated.apiProviderId, 'groq');
+  assert.equal(updated.apiAuthType, 'bearer');
+  assert.equal(updated.apiProtocol, 'openai');
+  assert.equal(updated.apiKey, '');
+  assert.equal(updated.model, '');
+  assert.equal(updated.chats[0].model, '');
+  assert.match(ctx.sent.at(-1).text, /Старый ключ сброшен/);
+});
+
+test('provider settings keyboard pages through the catalog and changes endpoint', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:providers:0'));
+  assert.match(ctx.editedMessages.at(-1).text, /Выберите API-провайдера/);
+  const rows = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard;
+  assert.ok(rows.flat().some((button) => button.callback_data === 'tn:provider:openrouter'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:provider:groq', 123456, 501));
+  const user = ctx.bot.store.getUser(123456);
+  assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
+  assert.equal(user.apiKey, '');
+  assert.match(ctx.editedMessages.at(-1).text, /Провайдер: Groq/);
+});
+
+test('/test succeeds only after the selected provider returns an assistant completion', async () => {
+  const ctx = makeBot({ answer: 'TEST_OK' });
+  await ctx.bot.handleMessage(message('/provider groq'));
+  await ctx.bot.handleMessage(message('/key groq-test-key'));
+  await ctx.bot.handleMessage(message('/model'));
+  await ctx.bot.handleMessage(message('/model test/model-a'));
+  await ctx.bot.handleMessage(message('/test'));
+  const user = ctx.bot.store.getUser(123456);
+  assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
+  assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/models'));
+  assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/chat/completions'));
+  assert.match(ctx.sent.at(-1).text, /Подключение работает/);
+  assert.match(ctx.sent.at(-1).text, /TEST_OK/);
 });
 
 test('Telegram settings callbacks cannot be used from another user identity', async () => {
