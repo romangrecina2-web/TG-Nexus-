@@ -195,6 +195,58 @@ test('/model selects an available model and lists choices for a missing model', 
   assert.match(ctx.sent.at(-1).text, /test\/model-a/);
 });
 
+test('Telegram bot uses native Anthropic Messages API with the provider authentication header', async () => {
+  const calls = [];
+  const ctx = makeBot({
+    fetchImpl: async (url, request) => {
+      calls.push({ url, request });
+      if (String(url).includes('/models?limit=100')) {
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'claude-sonnet-test' }] }) };
+      }
+      if (String(url).endsWith('/messages')) {
+        const body = JSON.parse(request.body);
+        assert.equal(body.model, 'claude-sonnet-test');
+        assert.equal(body.system.includes('Отвечай без таблиц'), true);
+        assert.equal(body.messages.at(-1).role, 'user');
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'msg_test',
+            model: 'claude-sonnet-test',
+            stop_reason: 'end_turn',
+            content: [{ type: 'text', text: 'Ответ от Anthropic' }],
+            usage: { input_tokens: 10, output_tokens: 7 }
+          })
+        };
+      }
+      throw new Error('Unexpected URL: ' + url);
+    }
+  });
+
+  const user = ctx.bot.store.getUser(123456);
+  user.model = 'claude-sonnet-test';
+  user.modelExplicit = true;
+  await ctx.bot.setApiKey(
+    123456,
+    'anthropic-test-key',
+    'https://api.anthropic.com/v1',
+    'x-api-key',
+    'anthropic',
+    true
+  );
+  await ctx.bot.handleMessage(message('Привет, Anthropic!'));
+
+  assert.equal(ctx.bot.store.getUser(123456).apiProtocol, 'anthropic');
+  assert.equal(ctx.bot.store.getUser(123456).apiAuthType, 'x-api-key');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, 'https://api.anthropic.com/v1/models?limit=100');
+  assert.equal(calls[1].url, 'https://api.anthropic.com/v1/messages');
+  assert.equal(calls[1].request.headers['x-api-key'], 'anthropic-test-key');
+  assert.equal(calls[1].request.headers['anthropic-version'], '2023-06-01');
+  assert.equal(ctx.sent.at(-1).text, 'Ответ от Anthropic');
+});
+
 test('normal messages create a chat automatically and send the AI response', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/key valid-key'));
