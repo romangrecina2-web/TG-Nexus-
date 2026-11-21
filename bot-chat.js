@@ -1868,7 +1868,8 @@ function createBotChat(options = {}) {
         if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id || raw.id.length > 128) continue;
         const id = raw.id;
         const title = typeof raw.title === 'string' ? raw.title.replace(/\s+/g, ' ').trim().slice(0, 100) : 'Чат';
-        const model = typeof raw.model === 'string' && raw.model.length <= 256 && !/\s/.test(raw.model) ? raw.model : user.model;
+        const model = providerChanged ? (user.model || '') :
+          (typeof raw.model === 'string' && raw.model.length <= 256 && !/\s/.test(raw.model) ? raw.model : user.model);
         const createdAt = Math.max(0, Math.min(Date.now(), Number(raw.createdAt) || Date.now()));
         const updatedAt = Math.max(createdAt, Math.min(Date.now() + 60_000, Number(raw.updatedAt) || createdAt));
         const incomingMessages = Array.isArray(raw.messages) ? raw.messages.slice(-200) : [];
