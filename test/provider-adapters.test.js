@@ -245,6 +245,7 @@ test('Responses request converts image content and prior function call history',
       },
       { role: 'tool', tool_call_id: 'call_123', name: 'sandbox_run_javascript', content: '{"status":"ok"}' }
     ],
+    temperature: 0.4,
     tools: [{
       type: 'function',
       function: {
@@ -356,7 +357,7 @@ test('Responses SSE stream converts text, reasoning and function tool events to 
   const converted = adapters.normalizeStream(source, openai, 'responses');
   const text = await converted.text();
   assert.match(text, /"content":"Hello"/);
-  assert.match(text, /"reasoning_content":"Checking\\."/);
+  assert.ok(text.includes('"reasoning_content":"Checking."'));
   assert.match(text, /"id":"call_1"/);
   assert.match(text, /"name":"sandbox_run_javascript"/);
   assert.match(text, /"arguments":"\\{\\"code\\":\\"1\\+1\\"\\}"/);

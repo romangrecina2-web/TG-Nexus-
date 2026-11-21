@@ -307,9 +307,10 @@
 
     const reasoningModel = isReasoningModel(model) || proAlias;
     const requestedEffort = String(options && options.reasoningEffort || 'auto').toLowerCase();
-    if (reasoningModel && requestedEffort !== 'auto') {
+    if (proAlias || (reasoningModel && requestedEffort !== 'auto')) {
       const supportedEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-      const effort = supportedEfforts.includes(requestedEffort) ? requestedEffort : 'medium';
+      const defaultEffort = proAlias && requestedEffort === 'auto' ? 'medium' : requestedEffort;
+      const effort = supportedEfforts.includes(defaultEffort) ? defaultEffort : 'medium';
       body.reasoning = proAlias ? { mode: 'pro', effort } : { effort };
     }
 
