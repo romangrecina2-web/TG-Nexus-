@@ -649,7 +649,7 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   const state = ctx.bot.applySyncState(userId, {
     apiBaseUrl: 'https://provider.example/v1',
     model: 'test/model-b',
-    settings: { systemPrompt: 'Custom instructions', maxTokens: 777, temperature: 0.3, reasoning: 'high', balBase: 12.5, minBal: 25 },
+    settings: { systemPrompt: 'Custom instructions', maxTokens: 777, temperature: 0.3, reasoning: 'high', balBase: 12.5, minBal: 25, requestTimeoutSeconds: 240 },
     activeChatId: 'mini-app-chat',
     chats: [{
       id: 'mini-app-chat',
@@ -668,6 +668,7 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   assert.equal(state.settings.reasoning, 'high');
   assert.equal(state.settings.balBase, 12.5);
   assert.equal(state.settings.minBal, 25);
+  assert.equal(state.settings.requestTimeoutSeconds, 240);
   assert.equal(state.chats[0].messages[0].id, 'mini-user-message');
 
   await ctx.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
@@ -686,11 +687,13 @@ test('Telegram settings command exposes interactive controls and the Mini App de
   const sent = ctx.sent.at(-1);
   assert.match(sent.text, /Настройки TG Nexus/);
   assert.match(sent.text, /Лимит ответа: 1200 токенов/);
+  assert.match(sent.text, /Время ожидания ответа: 120 секунд/);
   const rows = sent.options.reply_markup.inline_keyboard;
   const callbacks = rows.flat().map((button) => button.callback_data).filter(Boolean);
   assert.ok(callbacks.includes('tn:search'));
   assert.ok(callbacks.includes('tn:reason'));
   assert.ok(callbacks.includes('tn:tokens'));
+  assert.ok(callbacks.includes('tn:timeout'));
   assert.ok(callbacks.includes('tn:model'));
   assert.ok(callbacks.includes('tn:providers:0'));
   const webAppButton = rows.flat().find((button) => button.web_app);
@@ -715,6 +718,17 @@ test('Telegram settings buttons change the token limit and reasoning level', asy
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.reasoning, 'high');
   assert.match(ctx.editedMessages.at(-1).text, /Рассуждения: Высокий/);
+});
+
+test('Telegram timeout setting selects and persists the provider response wait', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout'));
+  const timeoutButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
+  assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:300'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:300', 123456, 501));
+  assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 300);
+  assert.match(ctx.editedMessages.at(-1).text, /Время ожидания ответа: 300 секунд/);
 });
 
 test('Telegram model buttons fetch choices and save the selected model', async () => {
