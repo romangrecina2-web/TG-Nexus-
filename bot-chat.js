@@ -905,7 +905,7 @@ function createBotChat(options = {}) {
     const matches = [...source.matchAll(fencePattern)];
     if (!matches.length) return null;
     const shouldCreateFiles = isCodeArtifactRequest(requestText) || matches.some((match) =>
-      /(?:filename=)?[^\\s\\x60]+\\.[a-z0-9]{1,8}(?:\\s|$)/i.test(String(match[2] || ''))
+      /(?:filename=)?[^\s\x60]+\.[a-z0-9]{1,8}(?:\s|$)/i.test(String(match[2] || ''))
     );
     if (!shouldCreateFiles) return null;
 
@@ -917,19 +917,19 @@ function createBotChat(options = {}) {
       const end = match.index + match[0].length;
       const before = source.slice(lastIndex, start).trim();
       if (before) segments.push({ type: 'text', value: before });
-      const parts = String(match[2] || '').trim().split(/\\s+/).filter(Boolean);
+      const parts = String(match[2] || '').trim().split(/\s+/).filter(Boolean);
       let language = parts[0] || 'text';
       let candidateName = '';
-      if (/^[\\w.-]+\\.[a-z0-9]{1,8}$/i.test(language)) {
+      if (/^[\w.-]+\.[a-z0-9]{1,8}$/i.test(language)) {
         candidateName = language;
         language = 'text';
       } else {
-        const namePart = parts.slice(1).find((part) => /(?:filename=)?[^\\s]+\\.[a-z0-9]{1,8}$/i.test(part));
+        const namePart = parts.slice(1).find((part) => /(?:filename=)?[^\s]+\.[a-z0-9]{1,8}$/i.test(part));
         if (namePart) candidateName = namePart.replace(/^filename=/i, '');
       }
       fileIndex += 1;
       const name = safeGeneratedFileName(candidateName, language, fileIndex);
-      const content = String(match[3] || '').replace(/\\s+$/, '') + '\\n';
+      const content = String(match[3] || '').replace(/\s+$/, '') + '\n';
       segments.push({ type: 'file', name, language, content });
       lastIndex = end;
     }
