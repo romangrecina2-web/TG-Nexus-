@@ -684,8 +684,9 @@ function createBotChat(options = {}) {
       return rawSendTelegramMessage(chatId, text, sendOptions);
     }
     const queued = store.appendOutbox(context.updateId, { chatId, text, options: sendOptions });
+    let sent;
     try {
-      await rawSendTelegramMessage(chatId, text, sendOptions);
+      sent = await rawSendTelegramMessage(chatId, text, sendOptions);
     } catch (error) {
       // Telegram may reject malformed HTML. The formatter immediately retries as plain text;
       // discard the rejected variant so the worker does not retry invalid markup forever.
@@ -696,6 +697,7 @@ function createBotChat(options = {}) {
       throw error;
     }
     store.markOutboxDelivered(context.updateId, queued.index);
+    return sent;
   }
   const rateBuckets = new Map();
   const GLOBAL_AI_LIMIT_PER_MINUTE = Math.max(10, Number(options.globalAiLimitPerMinute) || 90);
@@ -759,6 +761,61 @@ function createBotChat(options = {}) {
         await sendTelegramMessage(chatId, chunk.text);
       }
     }
+  }
+
+  async function startGenerationIndicator(chatId) {
+    const startedAt = Date.now();
+    const sent = await sendTelegramMessage(chatId, 'Генерируем ответ... (0 сек.)');
+    const messageId = sent && Number.isSafeInteger(Number(sent.message_id))
+      ? Number(sent.message_id)
+      : null;
+    let stopped = false;
+    let editing = false;
+    let editInFlight = Promise.resolve();
+
+    const elapsedSeconds = () => Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const editStatus = async (text) => {
+      if (!messageId) return false;
+      try {
+        await editTelegramMessage(chatId, messageId, text);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const timer = setInterval(() => {
+      if (stopped || editing || !messageId) return;
+      editing = true;
+      const seconds = elapsedSeconds();
+      editInFlight = editStatus('Генерируем ответ... (' + seconds + ' сек.)')
+        .finally(() => { editing = false; });
+    }, 1_000);
+    if (typeof timer.unref === 'function') timer.unref();
+
+    return {
+      elapsedSeconds,
+      async finish(finalText) {
+        stopped = true;
+        clearInterval(timer);
+        await editInFlight;
+        const seconds = elapsedSeconds();
+        if (!messageId) {
+          if (finalText) await sendText(chatId, finalText);
+          return seconds;
+        }
+        if (finalText) {
+          if (!(await editStatus(finalText))) await sendText(chatId, finalText);
+        } else {
+          try {
+            await deleteTelegramMessage(chatId, messageId);
+          } catch {
+            await editStatus('Ответ готов за ' + seconds + ' сек.');
+          }
+        }
+        return seconds;
+      }
+    };
   }
 
   const modelChoiceCache = new Map();
@@ -1580,15 +1637,18 @@ function createBotChat(options = {}) {
     }
     store.save();
 
+    const indicator = await startGenerationIndicator(message.chat.id);
     let answer;
     try {
       answer = await requestAssistant(user, chat);
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
-      await sendText(message.chat.id, 'Не удалось получить ответ от ИИ.\nПричина: ' + reason);
+      const elapsed = indicator.elapsedSeconds();
+      await indicator.finish('Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason);
       return;
     }
 
+    await indicator.finish();
     chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'assistant', content: answer });
     chat.updatedAt = Date.now();
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
