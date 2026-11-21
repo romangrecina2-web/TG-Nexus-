@@ -473,7 +473,7 @@ async function handleSync(req, res, bot = botChat) {
         typeof state.apiProtocol === 'string' ? state.apiProtocol : afterApply.apiProtocol,
         typeof state.modelsEndpoint === 'boolean' ? state.modelsEndpoint : afterApply.modelsEndpoint
       );
-      if (!saved) return json(res, 400, { ok: false, error: 'Не удалось безопасно сохранить API-ключ.' });
+      if (!saved) return json(res, 400, { ok: false, error: 'API-ключ не прошёл проверку провайдера.' });
     }
 
     const updated = bot.getSyncState(auth.id);
