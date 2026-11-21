@@ -71,6 +71,11 @@
         <button data-p="or">OpenRouter, бесплатно</button>
         <button data-p="nv">NVIDIA</button>
       </div>
+      <label for="providerCatalog">Добавить провайдера из каталога (30 вариантов)</label>
+      <div class="r2">
+        <select id="providerCatalog" aria-label="Каталог API-провайдеров"></select>
+        <button class="sec" id="providerAdd" type="button">Добавить</button>
+      </div>
       <label for="providerProfile">Сохранённые профили API</label>
       <select id="providerProfile" aria-label="Выбрать профиль API"></select>
       <div class="r2">
@@ -78,7 +83,7 @@
         <button class="sec" id="providerSave" type="button">Сохранить профиль</button>
       </div>
       <div class="btns"><button class="sec danger" id="providerRemove" type="button" disabled>Удалить профиль</button></div>
-      <small>Можно сохранить до 12 адресов OpenAI-совместимых API. Поддерживаются GET /models и POST /chat/completions. Для прямой работы из браузера сервер также должен разрешать CORS. У каждого адреса свой ключ; ключи сохраняются отдельно в Telegram SecureStorage. Для API с другим форматом нужен отдельный адаптер.</small>
+      <small>В каталоге 30 популярных API. Большинство используют OpenAI Chat Completions; Anthropic подключается через собственный Messages API. Для прямого запроса из браузера сервер должен разрешать CORS. Доступность моделей и функций зависит от аккаунта, региона и тарифа. Можно сохранить до 30 профилей с отдельными ключами.</small>
       <label for="cUrl">Адрес API</label>
       <input id="cUrl" autocomplete="off" autocapitalize="off" spellcheck="false">
       <label for="cKey">Ключ API</label>
@@ -174,6 +179,8 @@
 <div id="toast"></div>
 
 <script src="./config.js"></script>
+<script src="./provider-catalog.js"></script>
+<script src="./provider-adapters.js"></script>
 <script src="./secure-key-storage.js"></script>
 <script src="./app.js"></script>
 </body>
