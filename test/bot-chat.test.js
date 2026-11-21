@@ -726,9 +726,21 @@ test('Telegram timeout setting selects and persists the provider response wait',
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout'));
   const timeoutButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
   assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:300'));
+  assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:7200'));
+  assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:custom'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:300', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 300);
   assert.match(ctx.editedMessages.at(-1).text, /Время ожидания ответа: 300 секунд/);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:custom', 123456, 502));
+  assert.match(ctx.editedMessages.at(-1).text, /от 10 до 7200/);
+  await ctx.bot.handleMessage(message('7201', 123456, 503));
+  assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 300);
+  assert.match(ctx.sent.at(-1).text, /от 10 до 7200 секунд/);
+  await ctx.bot.handleMessage(message('7200', 123456, 504));
+  assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 7200);
+  assert.ok(ctx.sent.some((item) => /Тайм-аут ответа провайдера установлен: 7200/.test(item.text)));
+  assert.match(ctx.sent.at(-1).text, /Время ожидания ответа: 7200 секунд/);
 });
 
 test('Telegram model buttons fetch choices and save the selected model', async () => {
