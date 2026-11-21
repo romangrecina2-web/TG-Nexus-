@@ -1,4 +1,8 @@
-/* AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.\n * Source: src/bot/*.js\n * Rebuild with: npm run build\n */\n\n'use strict';
+/* AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.
+ * Source: src/bot/*.js
+ * Rebuild with: npm run build
+ */
+'use strict';
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
