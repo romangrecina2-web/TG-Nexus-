@@ -1164,7 +1164,7 @@ async function run(c,skipTags,runMax,target){
       var providerRequest=PROVIDER_ADAPTERS.buildChatRequest(providerProfile,{
         apiKey:curKey(),model:requestModel,messages:[{role:'system',content:sys}].concat(hist,a.apiTrail),
         maxTokens:mo||1200,temperature:S.cfg.temp,reasoningEffort:S.cfg.reasoning,
-        tools:tools,stream:true
+        tools:tools,maxToolCalls:tools.length?5:0,stream:true
       },!!TG);
       var r=await fetch(providerRequest.url,{method:'POST',signal:ctrl.signal,headers:providerRequest.headers,body:JSON.stringify(providerRequest.body)});
       if(!r.ok)throw await httpErr(r);
