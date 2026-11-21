@@ -267,7 +267,7 @@ function applyProviderProfile(profile){
   S.cfg.model=profile.model||profile.models&&profile.models[0]||'';
   S.cfg.models=(Array.isArray(profile.models)?profile.models:[]).slice(0,100);
   if(S.cfg.model&&S.cfg.models.indexOf(S.cfg.model)<0)S.cfg.models.unshift(S.cfg.model);
-  var currentChat=cur();if(currentChat&&S.cfg.model&&S.cfg.models.indexOf(currentChat.model)<0)currentChat.model=S.cfg.model;
+  var currentChat=cur();if(currentChat&&(!S.cfg.model||S.cfg.models.indexOf(currentChat.model)<0))currentChat.model=S.cfg.model;
   if(host(S.cfg.url).indexOf('openrouter.ai')<0)S.cfg.internet=false;
   ACTIVE_KEY=providerKeyMemory[S.cfg.url]||'';
   keyInputTouched=false;
