@@ -628,6 +628,8 @@ test('/test succeeds only after the selected provider returns an assistant compl
   assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
   assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/models'));
   assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/chat/completions'));
+  const testRequest = ctx.providerCalls.filter((call) => call.url === 'https://api.groq.com/openai/v1/chat/completions').at(-1);
+  assert.equal(JSON.parse(testRequest.request.body).max_tokens, 512);
   assert.match(ctx.sent.at(-1).text, /Подключение работает/);
   assert.match(ctx.sent.at(-1).text, /TEST_OK/);
 });
