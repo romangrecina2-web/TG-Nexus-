@@ -449,6 +449,9 @@ async function handleSync(req, res, bot = botChat) {
     const before = bot.getSyncState(auth.id);
     const allowed = {
       apiBaseUrl: state.apiBaseUrl,
+      apiProtocol: state.apiProtocol,
+      apiAuthType: state.apiAuthType,
+      modelsEndpoint: state.modelsEndpoint,
       model: state.model,
       settings: state.settings,
       chats: state.chats,
@@ -462,7 +465,14 @@ async function handleSync(req, res, bot = botChat) {
     } else if (typeof state.apiKey === 'string' && state.apiKey.trim() &&
                state.apiKey !== afterApply.apiKey) {
       const providerBase = typeof state.apiBaseUrl === 'string' ? state.apiBaseUrl : before.apiBaseUrl;
-      const saved = await bot.setApiKey(auth.id, state.apiKey, providerBase);
+      const saved = await bot.setApiKey(
+        auth.id,
+        state.apiKey,
+        providerBase,
+        typeof state.apiAuthType === 'string' ? state.apiAuthType : afterApply.apiAuthType,
+        typeof state.apiProtocol === 'string' ? state.apiProtocol : afterApply.apiProtocol,
+        typeof state.modelsEndpoint === 'boolean' ? state.modelsEndpoint : afterApply.modelsEndpoint
+      );
       if (!saved) return json(res, 400, { ok: false, error: 'API-ключ не прошёл проверку провайдера.' });
     }
 
