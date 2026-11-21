@@ -1,4 +1,4 @@
-'use strict';
+/* AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.\n * Source: src/bot/*.js\n * Rebuild with: npm run build\n */\n\n'use strict';
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -428,6 +428,7 @@ function createEncryptedStore(options = {}) {
     retryUpdate,
     getQueueStats
   };
+
 }function normalizeApiBase(value) {
   try {
     const url = new URL(String(value || DEFAULT_API_BASE_URL));

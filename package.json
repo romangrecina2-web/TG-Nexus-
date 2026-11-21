@@ -5,8 +5,10 @@
   "description": "Telegram Mini App backend with security hardening",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test"
+    "start": "npm run build && node server.js",
+    "test": "node --test && npm run build:check",
+    "build": "node scripts/build.js",
+    "build:check": "node scripts/build.js --check"
   },
   "engines": {
     "node": ">=20"

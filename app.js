@@ -1,4 +1,4 @@
-(function(){
+/* AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.\n * Source: src/client/*.js\n * Rebuild with: npm run build\n */\n\n(function(){
 'use strict';
 var $=function(s){return document.querySelector(s)};
 
@@ -216,6 +216,7 @@ function saveNow(){
   catch(e){if(!warned){warned=true;toast('Не хватает места в памяти браузера. Скачайте копию и удалите старые чаты.')}}
   if(!syncApplying)queueRemoteSync(false,false);
 }
+
 function renderProviderCatalog(){
   var select=$('#providerCatalog');if(!select)return;
   select.innerHTML='';
@@ -345,6 +346,7 @@ function switchProviderProfile(id){
   if(!profile)return;
   applyProviderProfile(profile);
 }
+
 function syncStatus(message,cls){
   var el=$('#syncStatus');if(!el)return;
   el.textContent='Синхронизация: '+message;
@@ -578,6 +580,7 @@ async function flushRemoteSync(){
     if(syncAgain){syncAgain=false;queueRemoteSync(false,false)}
   }
 }
+
 function shouldOpenSettings(){
   try{return new URL(window.location.href).searchParams.get('open')==='settings'}catch(error){return false}
 }
@@ -827,6 +830,7 @@ function copyText(t){
   if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t).then(function(){return true},function(){return fb()});
   return Promise.resolve(fb());
 }
+
 async function sendCodeToBot(fileName, code, language){
   var apiBase=String((window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl)||'').trim().replace(/\/+$/,'');
   if(!TG||!TG.initData){toast('Откройте мини-приложение из чата с ботом Telegram');return}
@@ -929,6 +933,7 @@ function niceErr(e){
 /* ---------- вложения ---------- */
 var TEXT_EXTS='txt md csv tsv json xml html htm css js mjs cjs ts tsx jsx py java c h cpp hpp cs go rs php rb swift kt sql sh bat ps1 yaml yml toml ini conf cfg log env properties diff patch vue svelte ipynb gradle'.split(' ');
 function extOf(n){var m=String(n||'').toLowerCase().match(/\.([a-z0-9]+)$/);return m?m[1]:''}
+
 function renderPending(){
   var box=$('#attachList');box.innerHTML='';
   pendingFiles.forEach(function(f,i){var d=document.createElement('div');d.className='attachitem';var sp=document.createElement('span');sp.textContent=(f.dataUrl?'🖼 ':'📄 ')+f.name;var b=document.createElement('button');b.type='button';b.textContent='×';b.setAttribute('aria-label','Убрать файл');b.onclick=function(){pendingFiles.splice(i,1);var c=cur();if(c){c.draftAttachments=pendingFiles.map(function(x){return Object.assign({},x)});save()}renderPending()};d.appendChild(sp);d.appendChild(b);box.appendChild(d)});
