@@ -357,7 +357,9 @@
   function buildModelRequest(profile, options, browserMode) {
     const model = String(options && options.model || '').trim();
     const useResponses = isDirectOpenAiProfile(profile) || supportsResponsesModel(profile, model);
-    if (useResponses && !hasImageInput(options && options.messages)) {
+    const images = hasImageInput(options && options.messages);
+    const responseImagesUnsupported = profile && profile.responsesImages === false;
+    if (useResponses && (!images || !responseImagesUnsupported)) {
       return buildResponsesRequest(profile, options, browserMode);
     }
     return buildChatRequest(profile, options, browserMode);
