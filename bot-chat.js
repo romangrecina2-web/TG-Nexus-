@@ -1,3 +1,7 @@
+/* AUTO-GENERATED FILE. DO NOT EDIT DIRECTLY.
+ * Source: src/bot/*.js
+ * Rebuild with: npm run build
+ */
 'use strict';
 
 const crypto = require('node:crypto');
@@ -428,6 +432,7 @@ function createEncryptedStore(options = {}) {
     retryUpdate,
     getQueueStats
   };
+
 }function normalizeApiBase(value) {
   try {
     const url = new URL(String(value || DEFAULT_API_BASE_URL));
