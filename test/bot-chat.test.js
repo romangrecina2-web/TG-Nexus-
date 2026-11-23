@@ -776,7 +776,7 @@ test('Telegram settings can edit, apply and reset the AI system prompt', async (
   assert.match(request.messages[0].content, /Показывай короткие примеры/);
 
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt:reset', userId, 504));
-  assert.equal(ctx.bot.getSyncState(userId).settings.systemPrompt, '');
+  assert.equal(ctx.bot.getSyncState(userId).settings.systemPrompt, 'Ты полезный и дружелюбный ИИ-ассистент. Отвечай ясно и по делу, на языке пользователя.\n\nОтвечай без таблиц и заголовков #. Используй короткие абзацы, простые списки и жирный шрифт только для важного.');
   assert.match(ctx.editedMessages.at(-1).text, /стандартная инструкция/i);
 
   await ctx.bot.handleMessage(message('Проверь стандартную инструкцию', userId, 505));

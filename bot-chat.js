@@ -1085,7 +1085,7 @@ function createBotChat(options = {}) {
   function settingsMessageText(user, view = 'main') {
     if (view === 'system-prompt') {
       const prompt = String(user.settings && user.settings.systemPrompt || '').trim();
-      if (!prompt) return 'Инструкция ИИ\n\nСейчас используется стандартная инструкция, заданная на сервере.\nВы можете задать собственную или оставить стандартную.';
+      if (!prompt || prompt === systemPrompt) return 'Инструкция ИИ\n\nСейчас используется стандартная инструкция, заданная на сервере.\nВы можете задать собственную или оставить стандартную.';
       return 'Инструкция ИИ\n\nПользовательская инструкция активна (' + prompt.length + ' символов).\n\n' +
         prompt.slice(0, 600) + (prompt.length > 600 ? '…' : '') + '\n\nДля изменения нажмите кнопку ниже.';
     }
@@ -1130,7 +1130,7 @@ function createBotChat(options = {}) {
       'Лимит ответа: ' + maxTokens + ' токенов',
       'Время ожидания ответа: ' + currentRequestTimeout(user) + ' секунд',
       'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто'),
-      'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() ? 'пользовательская' : 'по умолчанию'),
+      'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt ? 'пользовательская' : 'по умолчанию'),
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
       'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
       'История синхронизируется с Mini App при открытии и сохранении.',
@@ -1326,7 +1326,7 @@ function createBotChat(options = {}) {
         notice = 'Отправьте новую инструкцию одним сообщением.';
       } else if (data === 'tn:prompt:reset') {
         const previous = user.settings || {};
-        user.settings = { ...previous, systemPrompt: '' };
+        user.settings = { ...previous, systemPrompt };
         try { store.save(); } catch (error) { user.settings = previous; throw error; }
         pendingSystemPromptInput.delete(String(userId));
         pendingTimeoutInput.delete(String(userId));
