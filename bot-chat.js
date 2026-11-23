@@ -890,10 +890,10 @@ function createBotChat(options = {}) {
     const value = String(text || '').normalize('NFKC').replace(/ё/gi, 'е');
     const formats = '(?:html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)';
     const patterns = [
-      new RegExp('(?:расширени[а-яё]*|розширен[а-яё]*|extension)\\\\s+(?:с\\\\s+)?\\\\.?(' + formats + ')(?=$|[\\\\s.,!?;:])', 'i'),
-      new RegExp('(?:формат|format)\\\\s+(?:файла\\\\s+)?\\\\.?(' + formats + ')(?=$|[\\\\s.,!?;:])', 'i'),
-      new RegExp('(?:^|\\\\s)(?:в|во|у|into|to)\\\\s+(?:(?:расширени|розширен)[а-яё]*\\\\s+)?\\\\.?(' + formats + ')(?=$|[\\\\s.,!?;:])', 'i'),
-      new RegExp('(?:^|\\\\s)\\\\.(' + formats + ')(?=$|[\\\\s.,!?;:])', 'i')
+      new RegExp('(?:расширени[а-яё]*|розширен[а-яё]*|extension)\\s+(?:с\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
+      new RegExp('(?:формат|format)\\s+(?:файла\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
+      new RegExp('(?:^|\\s)(?:в|во|у|into|to)\\s+(?:(?:расширени|розширен)[а-яё]*\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
+      new RegExp('(?:^|\\s)\\.(' + formats + ')(?=$|[\\s.,!?;:])', 'i')
     ];
     for (const pattern of patterns) {
       const match = value.match(pattern);
@@ -971,11 +971,11 @@ function createBotChat(options = {}) {
   function splitAssistantFiles(answer, requestText) {
     const source = String(answer || '');
     const tick = String.fromCharCode(96).repeat(3);
-    const fencePattern = new RegExp('(^|\\\\n)[ \\\\t]*' + tick + '([^\\\\n\\\\x60]*?)\\\\n([\\\\s\\\\S]*?)\\\\n?[ \\\\t]*' + tick, 'g');
+    const fencePattern = new RegExp('(^|\\n)[ \\t]*' + tick + '([^\\n\\x60]*?)\\n([\\s\\S]*?)\\n?[ \\t]*' + tick, 'g');
     const matches = [...source.matchAll(fencePattern)];
     if (!matches.length) return null;
     const shouldCreateFiles = isCodeArtifactRequest(requestText) || matches.some((match) =>
-      /(?:filename=)?[^\\s\\x60]+\\.[a-z0-9]{1,8}(?:\\s|$)/i.test(String(match[2] || ''))
+      /(?:filename=)?[^\s\x60]+\.[a-z0-9]{1,8}(?:\s|$)/i.test(String(match[2] || ''))
     );
     if (!shouldCreateFiles) return null;
 
@@ -988,22 +988,22 @@ function createBotChat(options = {}) {
       const end = match.index + match[0].length;
       const before = source.slice(lastIndex, start).trim();
       if (before) segments.push({ type: 'text', value: before });
-      const parts = String(match[2] || '').trim().split(/\\s+/).filter(Boolean);
+      const parts = String(match[2] || '').trim().split(/\s+/).filter(Boolean);
       let declaredLanguage = parts[0] || 'text';
       let candidateName = '';
-      if (/^[\\w.-]+\\.[a-z0-9]{1,8}$/i.test(declaredLanguage)) {
+      if (/^[\w.-]+\.[a-z0-9]{1,8}$/i.test(declaredLanguage)) {
         candidateName = declaredLanguage;
         declaredLanguage = 'text';
       } else {
-        const namePart = parts.slice(1).find((part) => /(?:filename=)?[^\\s]+\\.[a-z0-9]{1,8}$/i.test(part));
+        const namePart = parts.slice(1).find((part) => /(?:filename=)?[^\s]+\.[a-z0-9]{1,8}$/i.test(part));
         if (namePart) candidateName = namePart.replace(/^filename=/i, '');
       }
 
-      const content = String(match[3] || '').replace(/\\s+$/, '') + '\\n';
+      const content = String(match[3] || '').replace(/\s+$/, '') + '\n';
       const language = inferCodeLanguage(content, declaredLanguage, requestText);
       if (candidateName && requestedLanguage) {
         const requestedExtension = codeFileExtension(requestedLanguage);
-        candidateName = candidateName.replace(/\\.[^.]+$/, '.' + requestedExtension);
+        candidateName = candidateName.replace(/\.[^.]+$/, '.' + requestedExtension);
       }
       fileIndex += 1;
       const name = safeGeneratedFileName(candidateName, language, fileIndex);
