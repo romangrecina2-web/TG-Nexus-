@@ -975,6 +975,8 @@ function createBotChat(options = {}) {
 
   const modelChoiceCache = new Map();
   const pendingTimeoutInput = new Map();
+  const pendingSystemPromptInput = new Map();
+  const MAX_SYSTEM_PROMPT_LENGTH = 3_900;
   const tokenPresets = [512, 1200, 2000, 4000, 8000, 16000, 32000];
   const reasoningChoices = ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'];
   const reasoningLabels = {
@@ -1081,6 +1083,17 @@ function createBotChat(options = {}) {
   }
 
   function settingsMessageText(user, view = 'main') {
+    if (view === 'system-prompt') {
+      const prompt = String(user.settings && user.settings.systemPrompt || '').trim();
+      if (!prompt) return 'Инструкция ИИ\n\nСейчас используется стандартная инструкция, заданная на сервере.\nВы можете задать собственную или оставить стандартную.';
+      return 'Инструкция ИИ\n\nПользовательская инструкция активна (' + prompt.length + ' символов).\n\n' +
+        prompt.slice(0, 600) + (prompt.length > 600 ? '…' : '') + '\n\nДля изменения нажмите кнопку ниже.';
+    }
+    if (view === 'system-prompt-input') {
+      return 'Отправьте одним сообщением новую инструкцию для ИИ. Можно использовать несколько строк.\n\n' +
+        'Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH + ' символов. Это значение будет применяться ко всем новым запросам в Telegram и синхронизироваться с Mini App.\n\n' +
+        'Для отмены отправьте /cancel. Чтобы вернуть стандартную инструкцию, используйте кнопку «Сбросить» в предыдущем меню.';
+    }
     if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
     if (view === 'timeout') return 'Выберите время ожидания ответа провайдера. Текущее значение: ' + currentRequestTimeout(user) + ' секунд.';
     if (view === 'timeout-input') return 'Отправьте одним сообщением целое число секунд от 10 до 7200. Максимум — 2 часа. Для отмены отправьте /cancel.';
@@ -1117,7 +1130,7 @@ function createBotChat(options = {}) {
       'Лимит ответа: ' + maxTokens + ' токенов',
       'Время ожидания ответа: ' + currentRequestTimeout(user) + ' секунд',
       'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто'),
-      'Инструкция: ' + (settings.systemPrompt ? 'пользовательская' : 'по умолчанию'),
+      'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() ? 'пользовательская' : 'по умолчанию'),
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
       'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
       'История синхронизируется с Mini App при открытии и сохранении.',
@@ -1126,6 +1139,18 @@ function createBotChat(options = {}) {
   }
 
   function settingsKeyboard(user, view = 'main') {
+    if (view === 'system-prompt') {
+      return {
+        inline_keyboard: [
+          [{ text: '✍️ Изменить инструкцию', callback_data: 'tn:prompt:edit' }],
+          [{ text: '♻️ Сбросить к стандартной', callback_data: 'tn:prompt:reset' }],
+          [{ text: '← Назад', callback_data: 'tn:back' }]
+        ]
+      };
+    }
+    if (view === 'system-prompt-input') {
+      return { inline_keyboard: [[{ text: '← Назад', callback_data: 'tn:back' }]] };
+    }
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
       const choices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
@@ -1208,6 +1233,7 @@ function createBotChat(options = {}) {
         { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
         { text: '🤖 Модель', callback_data: 'tn:model' }
       ],
+      [{ text: '📝 Инструкция ИИ', callback_data: 'tn:prompt' }],
       [{ text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' }],
       [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
@@ -1288,6 +1314,24 @@ function createBotChat(options = {}) {
         notice = result.changed
           ? 'Провайдер изменён на ' + result.provider.name + '. Добавьте API-ключ и выберите модель.'
           : result.provider.name + ' уже выбран.';
+      } else if (data === 'tn:prompt') {
+        pendingTimeoutInput.delete(String(userId));
+        pendingSystemPromptInput.delete(String(userId));
+        view = 'system-prompt';
+        notice = 'Настройки инструкции ИИ.';
+      } else if (data === 'tn:prompt:edit') {
+        pendingTimeoutInput.delete(String(userId));
+        pendingSystemPromptInput.set(String(userId), { createdAt: Date.now() });
+        view = 'system-prompt-input';
+        notice = 'Отправьте новую инструкцию одним сообщением.';
+      } else if (data === 'tn:prompt:reset') {
+        const previous = user.settings || {};
+        user.settings = { ...previous, systemPrompt: '' };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        pendingSystemPromptInput.delete(String(userId));
+        pendingTimeoutInput.delete(String(userId));
+        view = 'system-prompt';
+        notice = 'Стандартная инструкция восстановлена.';
       } else if (data === 'tn:search') {
         const previous = user.settings || {};
         user.settings = { ...previous, internetSearch: previous.internetSearch !== true };
@@ -1321,6 +1365,7 @@ function createBotChat(options = {}) {
         notice = 'Выберите модель.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
         pendingTimeoutInput.delete(String(userId));
+        pendingSystemPromptInput.delete(String(userId));
         view = 'main';
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
@@ -1820,8 +1865,11 @@ function createBotChat(options = {}) {
 
     if (command === 'start' || command === 'help') return false;
     if (command === 'cancel') {
-      pendingTimeoutInput.delete(String(message.from.id));
-      await sendText(chatId, 'Ввод тайм-аута отменён.');
+      const inputKey = String(message.from.id);
+      const promptPending = pendingSystemPromptInput.has(inputKey);
+      pendingTimeoutInput.delete(inputKey);
+      pendingSystemPromptInput.delete(inputKey);
+      await sendText(chatId, promptPending ? 'Ввод инструкции ИИ отменён.' : 'Ввод тайм-аута отменён.');
       return true;
     }
     if (command === 'version') {
@@ -1869,6 +1917,27 @@ function createBotChat(options = {}) {
 
     try {
       const timeoutInputKey = String(message.from.id);
+      const pendingPrompt = pendingSystemPromptInput.get(timeoutInputKey);
+      if (pendingPrompt && !command) {
+        if (Date.now() - pendingPrompt.createdAt > 10 * 60_000) {
+          pendingSystemPromptInput.delete(timeoutInputKey);
+          await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
+          return true;
+        }
+        if (text.length > MAX_SYSTEM_PROMPT_LENGTH) {
+          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH +
+            ' символов. Отправьте сокращённый вариант или /cancel.');
+          return true;
+        }
+        const previous = user.settings || {};
+        user.settings = { ...previous, systemPrompt: text };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        pendingSystemPromptInput.delete(timeoutInputKey);
+        await sendText(chatId, 'Инструкция ИИ сохранена (' + text.length + ' символов).');
+        await sendSettings(chatId, user);
+        return true;
+      }
+      if (pendingPrompt && command) pendingSystemPromptInput.delete(timeoutInputKey);
       const pendingTimeout = pendingTimeoutInput.get(timeoutInputKey);
       if (pendingTimeout && !command) {
         if (Date.now() - pendingTimeout.createdAt > 10 * 60_000) {

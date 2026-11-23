@@ -744,11 +744,62 @@ test('Telegram settings command exposes interactive controls and the Mini App de
   assert.ok(callbacks.includes('tn:reason'));
   assert.ok(callbacks.includes('tn:tokens'));
   assert.ok(callbacks.includes('tn:timeout'));
+  assert.ok(callbacks.includes('tn:prompt'));
   assert.ok(callbacks.includes('tn:model'));
   assert.ok(callbacks.includes('tn:providers:0'));
   const webAppButton = rows.flat().find((button) => button.web_app);
   assert.equal(webAppButton.text, 'Открыть все настройки');
   assert.equal(webAppButton.web_app.url, 'https://example.com/app?open=settings');
+});
+
+test('Telegram settings can edit, apply and reset the AI system prompt', async () => {
+  const ctx = makeBot();
+  const userId = 123456;
+  const prompt = 'Отвечай как наставник по программированию.\\nПоказывай короткие примеры.';
+  await ctx.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt'));
+
+  let promptButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
+  assert.ok(promptButtons.some((button) => button.callback_data === 'tn:prompt:edit'));
+  assert.ok(promptButtons.some((button) => button.callback_data === 'tn:prompt:reset'));
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt:edit', userId, 501));
+  assert.match(ctx.editedMessages.at(-1).text, /3900 символов/);
+  await ctx.bot.handleMessage(message(prompt, userId, 502));
+  assert.equal(ctx.bot.getSyncState(userId).settings.systemPrompt, prompt);
+  assert.match(ctx.sent.at(-1).text, /Инструкция: пользовательская/);
+
+  await ctx.bot.handleMessage(message('Проверь пользовательскую инструкцию', userId, 503));
+  let request = JSON.parse(ctx.providerCalls.at(-1).request.body);
+  assert.match(request.messages[0].content, /Отвечай как наставник по программированию/);
+  assert.match(request.messages[0].content, /Показывай короткие примеры/);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt:reset', userId, 504));
+  assert.equal(ctx.bot.getSyncState(userId).settings.systemPrompt, '');
+  assert.match(ctx.editedMessages.at(-1).text, /стандартная инструкция/i);
+
+  await ctx.bot.handleMessage(message('Проверь стандартную инструкцию', userId, 505));
+  request = JSON.parse(ctx.providerCalls.at(-1).request.body);
+  assert.doesNotMatch(request.messages[0].content, /Отвечай как наставник по программированию/);
+  assert.match(request.messages[0].content, /Ты полезный и дружелюбный ИИ-ассистент/);
+});
+
+test('Telegram system prompt input supports cancellation and rejects oversized text', async () => {
+  const ctx = makeBot();
+  const userId = 123456;
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:prompt:edit', userId, 501));
+
+  await ctx.bot.handleMessage(message('x'.repeat(3_901), userId, 502));
+  assert.equal(ctx.bot.getSyncState(userId).settings.systemPrompt, undefined);
+  assert.match(ctx.sent.at(-1).text, /Инструкция слишком длинная/);
+
+  await ctx.bot.handleMessage(message('/cancel', userId, 503));
+  assert.match(ctx.sent.at(-1).text, /Ввод инструкции ИИ отменён/);
+  await ctx.bot.handleMessage(message('Обычное сообщение после отмены', userId, 504));
+  assert.notEqual(ctx.bot.getSyncState(userId).settings.systemPrompt, 'Обычное сообщение после отмены');
 });
 
 test('Telegram settings buttons toggle internet search and save the state', async () => {

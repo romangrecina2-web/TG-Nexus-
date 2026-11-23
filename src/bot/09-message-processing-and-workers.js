@@ -45,8 +45,11 @@
 
     if (command === 'start' || command === 'help') return false;
     if (command === 'cancel') {
-      pendingTimeoutInput.delete(String(message.from.id));
-      await sendText(chatId, 'Ввод тайм-аута отменён.');
+      const inputKey = String(message.from.id);
+      const promptPending = pendingSystemPromptInput.has(inputKey);
+      pendingTimeoutInput.delete(inputKey);
+      pendingSystemPromptInput.delete(inputKey);
+      await sendText(chatId, promptPending ? 'Ввод инструкции ИИ отменён.' : 'Ввод тайм-аута отменён.');
       return true;
     }
     if (command === 'version') {
@@ -94,6 +97,27 @@
 
     try {
       const timeoutInputKey = String(message.from.id);
+      const pendingPrompt = pendingSystemPromptInput.get(timeoutInputKey);
+      if (pendingPrompt && !command) {
+        if (Date.now() - pendingPrompt.createdAt > 10 * 60_000) {
+          pendingSystemPromptInput.delete(timeoutInputKey);
+          await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
+          return true;
+        }
+        if (text.length > MAX_SYSTEM_PROMPT_LENGTH) {
+          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH +
+            ' символов. Отправьте сокращённый вариант или /cancel.');
+          return true;
+        }
+        const previous = user.settings || {};
+        user.settings = { ...previous, systemPrompt: text };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        pendingSystemPromptInput.delete(timeoutInputKey);
+        await sendText(chatId, 'Инструкция ИИ сохранена (' + text.length + ' символов).');
+        await sendSettings(chatId, user);
+        return true;
+      }
+      if (pendingPrompt && command) pendingSystemPromptInput.delete(timeoutInputKey);
       const pendingTimeout = pendingTimeoutInput.get(timeoutInputKey);
       if (pendingTimeout && !command) {
         if (Date.now() - pendingTimeout.createdAt > 10 * 60_000) {
