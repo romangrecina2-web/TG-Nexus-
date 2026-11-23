@@ -711,7 +711,7 @@
     });
   }
 
-    function modelsRequest(profile, apiKey, browserMode) {
+    function modelsRequest(profile, apiKey, browserMode, catalogOptions = {}) {
     const base = cleanBase(profile && profile.url);
     if (!base) throw new Error('API endpoint is not configured.');
     if (profile && profile.modelsEndpoint === false) {
@@ -720,16 +720,58 @@
     const suffix = profile && profile.modelsPath
       ? profile.modelsPath
       : (profile && profile.protocol === 'anthropic' ? '/models?limit=100' : '/models');
-    return { url: apiUrl(base, suffix, '/models'), headers: authHeaders(profile, apiKey, browserMode) };
+    const url = new URL(apiUrl(base, suffix, '/models'));
+    if (profile && profile.id === 'openrouter' && catalogOptions && typeof catalogOptions === 'object') {
+      if (catalogOptions.query) url.searchParams.set('q', String(catalogOptions.query).slice(0, 100));
+      if (catalogOptions.sort && ['most-popular', 'pricing-low-to-high', 'context-high-to-low',
+        'throughput-high-to-low', 'latency-low-to-high', 'newest'].includes(catalogOptions.sort)) {
+        url.searchParams.set('sort', catalogOptions.sort);
+      }
+    }
+    return { url: url.toString(), headers: authHeaders(profile, apiKey, browserMode) };
   }
 
-  function extractModels(profile, payload) {
+  function extractModelRecords(profile, payload) {
     const source = Array.isArray(payload) ? payload :
       (Array.isArray(payload && payload.data) ? payload.data :
       (Array.isArray(payload && payload.models) ? payload.models : []));
-    return [...new Set(source.map((item) => typeof item === 'string' ? item : item && (item.id || item.name))
-      .filter((id) => typeof id === 'string' && id.trim())
-      .map((id) => profile && profile.id === 'gemini' ? id.replace(/^models\//, '') : id.trim()))];
+    const records = [];
+    const seen = new Set();
+    for (const raw of source) {
+      const rawId = typeof raw === 'string' ? raw : raw && (raw.id || raw.name || raw.model);
+      if (typeof rawId !== 'string' || !rawId.trim()) continue;
+      const id = profile && profile.id === 'gemini'
+        ? rawId.trim().replace(/^models\//, '')
+        : rawId.trim();
+      if (!id || id.length > 256 || seen.has(id)) continue;
+      seen.add(id);
+      if (typeof raw === 'string') records.push({ id });
+      else records.push({ ...raw, id });
+    }
+    return records;
+  }
+
+  function extractModels(profile, payload) {
+    return extractModelRecords(profile, payload).map((item) => item.id);
+  }
+
+  function modelDetailsRequest(profile, apiKey, model, browserMode) {
+    if (!profile || profile.id !== 'openrouter') {
+      throw new Error('This provider has no standard single-model details endpoint.');
+    }
+    const id = String(model || '').trim();
+    const slash = id.indexOf('/');
+    if (slash <= 0 || slash === id.length - 1 || id.indexOf('/', slash + 1) !== -1) {
+      throw new Error('The model ID cannot be used for a details lookup.');
+    }
+    const author = id.slice(0, slash);
+    const slug = id.slice(slash + 1);
+    if (!/^[a-z0-9._-]{1,80}$/i.test(author) || !/^[a-z0-9._:-]{1,180}$/i.test(slug)) {
+      throw new Error('The model ID contains unsupported characters.');
+    }
+    const base = cleanBase(profile.url);
+    const url = apiUrl(base, '/model/' + encodeURIComponent(author) + '/' + encodeURIComponent(slug));
+    return { url, headers: authHeaders(profile, apiKey, browserMode) };
   }
 
   return {
@@ -738,6 +780,8 @@
     buildModelRequest,
     buildResponsesRequest,
     extractModels,
+    extractModelRecords,
+    modelDetailsRequest,
     isDirectOpenAiProfile,
     normalizeResponsesPayload,
     toResponsesInput,

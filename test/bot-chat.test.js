@@ -57,6 +57,7 @@ function makeBot(options = {}) {
   const attempts = [];
   const callbackAnswers = [];
   const editedMessages = [];
+  const editedRichMessages = [];
   const fetchImpl = options.fetchImpl || (async (url, request) => {
     providerCalls.push({ url, request });
     events.push({ type: 'provider' });
@@ -107,9 +108,12 @@ function makeBot(options = {}) {
     answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
     editTelegramMessage: async (chatId, messageId, text, replyMarkup) => {
       editedMessages.push({ chatId, messageId, text, replyMarkup });
+    },
+    editTelegramRichMessage: async (chatId, messageId, richMessage, replyMarkup) => {
+      editedRichMessages.push({ chatId, messageId, richMessage, replyMarkup });
     }
   });
-  return { bot, dir, sent, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages };
+  return { bot, dir, sent, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages, editedRichMessages };
 }
 
 test('API endpoint must be HTTPS and cannot contain credentials or query parameters', () => {
@@ -1014,4 +1018,80 @@ test('per-user system prompt, token limit, temperature, and OpenRouter web searc
   assert.match(request.messages[0].content, /Use the custom test instruction/);
   assert.deepEqual(request.tools, [{ type: 'openrouter:web_search', parameters: { max_uses: 3, max_results: 5 } }]);
   assert.equal(request.max_tool_calls, 5);
+});
+
+
+test('model selector opens a rich catalogue and selects a model into the active settings', async () => {
+  const ctx = makeBot({
+    fetchImpl: async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          { id: 'test/model-a', name: 'Model A', context_length: 128000,
+            pricing: { prompt: '0', completion: '0' },
+            architecture: { input_modalities: ['text'] } },
+          { id: 'test/model-b', name: 'Model B', context_length: 256000,
+            pricing: { prompt: '0.000001', completion: '0.000002' },
+            architecture: { input_modalities: ['text', 'image'] } }
+        ]
+      })
+    })
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'valid-test-key';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model'));
+  assert.ok(ctx.editedRichMessages.length >= 1);
+  const home = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(home.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.callback_data === 'mc:model:0')));
+  assert.deepEqual(ctx.editedRichMessages.at(-1).replyMarkup, { inline_keyboard: [] });
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:model:0'));
+  const card = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(card.blocks.some((block) => block.type === 'table'));
+  assert.ok(card.blocks.some((block) => block.type === 'heading' && block.text === 'Model A'));
+  assert.ok(card.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.callback_data === 'mc:choose')));
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:choose'));
+  assert.equal(ctx.bot.store.getUser(123456).model, 'test/model-a');
+  assert.ok(ctx.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
+    block.type === 'paragraph' && block.text.includes('установлена')));
+});
+
+test('model catalogue search uses ForceReply and does not forward the search phrase to the AI chat', async () => {
+  const ctx = makeBot({
+    fetchImpl: async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          { id: 'test/model-a', name: 'Model A' },
+          { id: 'test/model-b', name: 'Model B' }
+        ]
+      })
+    })
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'valid-test-key';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:search'));
+  const prompt = ctx.sent.at(-1);
+  assert.equal(prompt.options.reply_markup.force_reply, true);
+
+  const reply = message('Model B', 123456, 91);
+  reply.reply_to_message = { message_id: prompt.message_id };
+  await ctx.bot.handleMessage(reply);
+
+  const result = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(result.blocks.some((block) => block.type === 'heading' && block.text === 'Модели'));
+  assert.ok(result.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.text.includes('Model B'))));
+  assert.equal(ctx.bot.store.getUser(123456).chats.length, 0);
+  assert.equal(ctx.providerCalls.some((call) => String(call.url).endsWith('/chat/completions')), false);
 });

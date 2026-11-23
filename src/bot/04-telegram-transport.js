@@ -109,6 +109,13 @@ function createBotChat(options = {}) {
       text,
       reply_markup: replyMarkup
     }));
+  const editTelegramRichMessage = options.editTelegramRichMessage || ((chatId, messageId, richMessage, replyMarkup) =>
+    telegramRequest('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      rich_message: richMessage,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+    }));
 
   async function sendTelegramDocument(chatId, document) {
     const packet = {

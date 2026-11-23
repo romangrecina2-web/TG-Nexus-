@@ -297,7 +297,7 @@
 
   async function handleCallbackQuery(query) {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
-        !query.data.startsWith('tn:')) return false;
+        (!query.data.startsWith('tn:') && !query.data.startsWith('mc:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -324,6 +324,12 @@
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('mc:')) {
+        return await handleModelCatalogCallback(query, user, data);
+      }
+      if (data === 'tn:model') {
+        return await openModelCatalog(query, user);
+      }
       const providersPageMatch = data.match(/^tn:providers:(\d)$/);
       const providerSelectMatch = data.match(/^tn:provider:([a-z0-9_-]{1,40})$/i);
       if (providersPageMatch) {
@@ -383,18 +389,6 @@
         pendingTimeoutInput.set(String(userId), { createdAt: Date.now() });
         view = 'timeout-input';
         notice = 'Жду ваше значение в секундах.';
-      } else if (data === 'tn:model') {
-        if (!user.apiKey) {
-          await safeAnswerCallback(query.id, 'Ключ для Telegram-чата не настроен. Откройте полные настройки Mini App.');
-          return true;
-        }
-        const models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl, user);
-        const current = currentUserModel(user);
-        const choices = [current, ...models.filter((model) => model !== current)].slice(0, 20);
-        modelChoiceCache.set(String(userId), { models: choices, expiresAt: Date.now() + 10 * 60_000 });
-        while (modelChoiceCache.size > 100) modelChoiceCache.delete(modelChoiceCache.keys().next().value);
-        view = 'models';
-        notice = 'Выберите модель.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
         pendingTimeoutInput.delete(String(userId));
         if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {

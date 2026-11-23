@@ -6,6 +6,7 @@ const path = require('node:path');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const PROVIDER_ADAPTERS = require('./provider-adapters');
 const PROVIDER_CATALOG = require('./provider-catalog');
+const MODEL_CATALOG = require('./model-catalog');
 
 const DEFAULT_API_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';

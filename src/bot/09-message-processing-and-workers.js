@@ -52,6 +52,8 @@
       }
       const promptPending = !!(user && user.pendingSystemPromptInput);
       const timeoutPending = pendingTimeoutInput.has(inputKey);
+      const modelSearchPending = pendingModelCatalogSearches.has(inputKey);
+      pendingModelCatalogSearches.delete(inputKey);
       if (promptPending) {
         const previousPending = user.pendingSystemPromptInput;
         delete user.pendingSystemPromptInput;
@@ -65,7 +67,9 @@
         ? 'Ввод инструкции ИИ отменён.'
         : timeoutPending
           ? 'Ввод тайм-аута отменён.'
-          : 'Сейчас нет активного ввода настройки.';
+          : modelSearchPending
+            ? 'Поиск модели отменён.'
+            : 'Сейчас нет активного ввода настройки.';
       await sendText(chatId, notice);
       return true;
     }
@@ -113,6 +117,7 @@
     }
 
     try {
+      if (!command && await handlePendingModelCatalogReply(message, user, text)) return true;
       const timeoutInputKey = String(message.from.id);
       const pendingPrompt = user.pendingSystemPromptInput;
       if (pendingPrompt && !command) {

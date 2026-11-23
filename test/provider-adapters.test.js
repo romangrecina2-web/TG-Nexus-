@@ -506,3 +506,33 @@ test('DeepSeek keeps Chat Completions generally and uses Responses only for the 
   assert.equal(standard.url, 'https://api.deepseek.com/v1/chat/completions');
   assert.equal(responseModel.url, 'https://api.deepseek.com/v1/responses');
 });
+
+
+test('model metadata extraction preserves provider descriptions and capability fields', () => {
+  const openrouter = catalog.find((item) => item.id === 'openrouter');
+  const records = adapters.extractModelRecords(openrouter, {
+    data: [{
+      id: 'nvidia/nemotron-example',
+      name: 'Nemotron Example',
+      description: 'Official catalogue description',
+      context_length: 1_000_000,
+      pricing: { prompt: '0', completion: '0' },
+      architecture: { input_modalities: ['text', 'image'] },
+      supported_parameters: ['tools', 'reasoning']
+    }]
+  });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].description, 'Official catalogue description');
+  assert.equal(records[0].context_length, 1_000_000);
+  assert.equal(records[0].pricing.prompt, '0');
+});
+
+test('OpenRouter single-model detail requests encode the author and slug safely', () => {
+  const openrouter = catalog.find((item) => item.id === 'openrouter');
+  const request = adapters.modelDetailsRequest(openrouter, 'test-key', 'nvidia/nemotron-3-ultra:free', false);
+  assert.equal(request.url,
+    'https://openrouter.ai/api/v1/model/nvidia/nemotron-3-ultra%3Afree');
+  assert.equal(request.headers.Authorization, 'Bearer test-key');
+  assert.throws(() => adapters.modelDetailsRequest(openrouter, 'test-key', 'bad/id/with/extra', false),
+    /model ID/i);
+});
