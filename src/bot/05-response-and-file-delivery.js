@@ -97,7 +97,6 @@
 
   const modelChoiceCache = new Map();
   const pendingTimeoutInput = new Map();
-  const pendingSystemPromptInput = new Map();
   const MAX_SYSTEM_PROMPT_LENGTH = 3_900;
   const tokenPresets = [512, 1200, 2000, 4000, 8000, 16000, 32000];
   const reasoningChoices = ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'];

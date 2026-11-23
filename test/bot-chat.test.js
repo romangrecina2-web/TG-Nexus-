@@ -802,6 +802,34 @@ test('Telegram system prompt input supports cancellation and rejects oversized t
   assert.notEqual(ctx.bot.getSyncState(userId).settings.systemPrompt, 'Обычное сообщение после отмены');
 });
 
+
+test('pending AI instruction survives a server restart and /cancel only reports real pending input', async () => {
+  const first = makeBot();
+  const userId = 654321;
+
+  await first.bot.handleMessage(message('/settings', userId, 601));
+  await first.bot.handleCallbackQuery(callbackQuery('tn:prompt', userId, 602));
+  await first.bot.handleCallbackQuery(callbackQuery('tn:prompt:edit', userId, 603));
+  assert.ok(first.bot.store.getUser(userId).pendingSystemPromptInput);
+
+  const restarted = makeBot({ dir: first.dir });
+  await restarted.bot.handleMessage(message('Instruction submitted after restart', userId, 604));
+  assert.equal(restarted.bot.getSyncState(userId).settings.systemPrompt, 'Instruction submitted after restart');
+  assert.equal(restarted.bot.store.getUser(userId).pendingSystemPromptInput, undefined);
+
+  const secondUser = 654322;
+  await restarted.bot.handleMessage(message('/settings', secondUser, 605));
+  await restarted.bot.handleCallbackQuery(callbackQuery('tn:prompt', secondUser, 606));
+  await restarted.bot.handleCallbackQuery(callbackQuery('tn:prompt:edit', secondUser, 607));
+  const restartedAgain = makeBot({ dir: first.dir });
+  await restartedAgain.bot.handleMessage(message('/cancel', secondUser, 608));
+  assert.match(restartedAgain.sent.at(-1).text, /Ввод инструкции ИИ отменён/);
+  assert.equal(restartedAgain.bot.store.getUser(secondUser).pendingSystemPromptInput, undefined);
+
+  await restartedAgain.bot.handleMessage(message('/cancel', secondUser, 609));
+  assert.match(restartedAgain.sent.at(-1).text, /Сейчас нет активного ввода настройки/);
+});
+
 test('Telegram settings buttons toggle internet search and save the state', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/settings'));

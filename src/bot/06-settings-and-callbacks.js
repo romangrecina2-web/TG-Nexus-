@@ -92,6 +92,20 @@
     return Math.max(10, Math.min(7200, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
   }
 
+  function updatePendingSystemPromptInput(user, pending) {
+    const existed = Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput');
+    const previous = user.pendingSystemPromptInput;
+    if (pending) user.pendingSystemPromptInput = { createdAt: Date.now() };
+    else delete user.pendingSystemPromptInput;
+    try {
+      store.save();
+    } catch (error) {
+      if (existed) user.pendingSystemPromptInput = previous;
+      else delete user.pendingSystemPromptInput;
+      throw error;
+    }
+  }
+
   function settingsMessageText(user, view = 'main') {
     if (view === 'system-prompt') {
       const prompt = String(user.settings && user.settings.systemPrompt || '').trim();
@@ -326,19 +340,27 @@
           : result.provider.name + ' уже выбран.';
       } else if (data === 'tn:prompt') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.delete(String(userId));
+        if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {
+          updatePendingSystemPromptInput(user, false);
+        }
         view = 'system-prompt';
         notice = 'Настройки инструкции ИИ.';
       } else if (data === 'tn:prompt:edit') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.set(String(userId), { createdAt: Date.now() });
+        updatePendingSystemPromptInput(user, true);
         view = 'system-prompt-input';
         notice = 'Отправьте новую инструкцию одним сообщением.';
       } else if (data === 'tn:prompt:reset') {
         const previous = user.settings || {};
+        const hadPending = Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput');
+        const previousPending = user.pendingSystemPromptInput;
         user.settings = { ...previous, systemPrompt };
-        try { store.save(); } catch (error) { user.settings = previous; throw error; }
-        pendingSystemPromptInput.delete(String(userId));
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.settings = previous;
+          if (hadPending) user.pendingSystemPromptInput = previousPending;
+          throw error;
+        }
         pendingTimeoutInput.delete(String(userId));
         view = 'system-prompt';
         notice = 'Стандартная инструкция восстановлена.';
@@ -375,7 +397,9 @@
         notice = 'Выберите модель.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.delete(String(userId));
+        if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {
+          updatePendingSystemPromptInput(user, false);
+        }
         view = 'main';
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);

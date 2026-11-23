@@ -975,7 +975,6 @@ function createBotChat(options = {}) {
 
   const modelChoiceCache = new Map();
   const pendingTimeoutInput = new Map();
-  const pendingSystemPromptInput = new Map();
   const MAX_SYSTEM_PROMPT_LENGTH = 3_900;
   const tokenPresets = [512, 1200, 2000, 4000, 8000, 16000, 32000];
   const reasoningChoices = ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -1080,6 +1079,20 @@ function createBotChat(options = {}) {
 
   function currentRequestTimeout(user) {
     return Math.max(10, Math.min(7200, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
+  }
+
+  function updatePendingSystemPromptInput(user, pending) {
+    const existed = Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput');
+    const previous = user.pendingSystemPromptInput;
+    if (pending) user.pendingSystemPromptInput = { createdAt: Date.now() };
+    else delete user.pendingSystemPromptInput;
+    try {
+      store.save();
+    } catch (error) {
+      if (existed) user.pendingSystemPromptInput = previous;
+      else delete user.pendingSystemPromptInput;
+      throw error;
+    }
   }
 
   function settingsMessageText(user, view = 'main') {
@@ -1316,19 +1329,27 @@ function createBotChat(options = {}) {
           : result.provider.name + ' уже выбран.';
       } else if (data === 'tn:prompt') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.delete(String(userId));
+        if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {
+          updatePendingSystemPromptInput(user, false);
+        }
         view = 'system-prompt';
         notice = 'Настройки инструкции ИИ.';
       } else if (data === 'tn:prompt:edit') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.set(String(userId), { createdAt: Date.now() });
+        updatePendingSystemPromptInput(user, true);
         view = 'system-prompt-input';
         notice = 'Отправьте новую инструкцию одним сообщением.';
       } else if (data === 'tn:prompt:reset') {
         const previous = user.settings || {};
+        const hadPending = Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput');
+        const previousPending = user.pendingSystemPromptInput;
         user.settings = { ...previous, systemPrompt };
-        try { store.save(); } catch (error) { user.settings = previous; throw error; }
-        pendingSystemPromptInput.delete(String(userId));
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.settings = previous;
+          if (hadPending) user.pendingSystemPromptInput = previousPending;
+          throw error;
+        }
         pendingTimeoutInput.delete(String(userId));
         view = 'system-prompt';
         notice = 'Стандартная инструкция восстановлена.';
@@ -1365,7 +1386,9 @@ function createBotChat(options = {}) {
         notice = 'Выберите модель.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
         pendingTimeoutInput.delete(String(userId));
-        pendingSystemPromptInput.delete(String(userId));
+        if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {
+          updatePendingSystemPromptInput(user, false);
+        }
         view = 'main';
       } else {
         const reasoningMatch = data.match(/^tn:r:(auto|minimal|low|medium|high|xhigh)$/);
@@ -1866,10 +1889,27 @@ function createBotChat(options = {}) {
     if (command === 'start' || command === 'help') return false;
     if (command === 'cancel') {
       const inputKey = String(message.from.id);
-      const promptPending = pendingSystemPromptInput.has(inputKey);
+      let user = null;
+      if (store.enabled) {
+        try { user = store.getUser(message.from.id); } catch {}
+      }
+      const promptPending = !!(user && user.pendingSystemPromptInput);
+      const timeoutPending = pendingTimeoutInput.has(inputKey);
+      if (promptPending) {
+        const previousPending = user.pendingSystemPromptInput;
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.pendingSystemPromptInput = previousPending;
+          throw error;
+        }
+      }
       pendingTimeoutInput.delete(inputKey);
-      pendingSystemPromptInput.delete(inputKey);
-      await sendText(chatId, promptPending ? 'Ввод инструкции ИИ отменён.' : 'Ввод тайм-аута отменён.');
+      const notice = promptPending
+        ? 'Ввод инструкции ИИ отменён.'
+        : timeoutPending
+          ? 'Ввод тайм-аута отменён.'
+          : 'Сейчас нет активного ввода настройки.';
+      await sendText(chatId, notice);
       return true;
     }
     if (command === 'version') {
@@ -1917,10 +1957,15 @@ function createBotChat(options = {}) {
 
     try {
       const timeoutInputKey = String(message.from.id);
-      const pendingPrompt = pendingSystemPromptInput.get(timeoutInputKey);
+      const pendingPrompt = user.pendingSystemPromptInput;
       if (pendingPrompt && !command) {
-        if (Date.now() - pendingPrompt.createdAt > 10 * 60_000) {
-          pendingSystemPromptInput.delete(timeoutInputKey);
+        const createdAt = Number(pendingPrompt.createdAt);
+        if (!Number.isFinite(createdAt) || createdAt <= 0 || Date.now() - createdAt > 10 * 60_000) {
+          delete user.pendingSystemPromptInput;
+          try { store.save(); } catch (error) {
+            user.pendingSystemPromptInput = pendingPrompt;
+            throw error;
+          }
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
           return true;
         }
@@ -1931,13 +1976,23 @@ function createBotChat(options = {}) {
         }
         const previous = user.settings || {};
         user.settings = { ...previous, systemPrompt: text };
-        try { store.save(); } catch (error) { user.settings = previous; throw error; }
-        pendingSystemPromptInput.delete(timeoutInputKey);
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.settings = previous;
+          user.pendingSystemPromptInput = pendingPrompt;
+          throw error;
+        }
         await sendText(chatId, 'Инструкция ИИ сохранена (' + text.length + ' символов).');
         await sendSettings(chatId, user);
         return true;
       }
-      if (pendingPrompt && command) pendingSystemPromptInput.delete(timeoutInputKey);
+      if (pendingPrompt && command) {
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.pendingSystemPromptInput = pendingPrompt;
+          throw error;
+        }
+      }
       const pendingTimeout = pendingTimeoutInput.get(timeoutInputKey);
       if (pendingTimeout && !command) {
         if (Date.now() - pendingTimeout.createdAt > 10 * 60_000) {

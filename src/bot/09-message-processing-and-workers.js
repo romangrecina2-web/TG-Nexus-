@@ -46,10 +46,27 @@
     if (command === 'start' || command === 'help') return false;
     if (command === 'cancel') {
       const inputKey = String(message.from.id);
-      const promptPending = pendingSystemPromptInput.has(inputKey);
+      let user = null;
+      if (store.enabled) {
+        try { user = store.getUser(message.from.id); } catch {}
+      }
+      const promptPending = !!(user && user.pendingSystemPromptInput);
+      const timeoutPending = pendingTimeoutInput.has(inputKey);
+      if (promptPending) {
+        const previousPending = user.pendingSystemPromptInput;
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.pendingSystemPromptInput = previousPending;
+          throw error;
+        }
+      }
       pendingTimeoutInput.delete(inputKey);
-      pendingSystemPromptInput.delete(inputKey);
-      await sendText(chatId, promptPending ? 'Ввод инструкции ИИ отменён.' : 'Ввод тайм-аута отменён.');
+      const notice = promptPending
+        ? 'Ввод инструкции ИИ отменён.'
+        : timeoutPending
+          ? 'Ввод тайм-аута отменён.'
+          : 'Сейчас нет активного ввода настройки.';
+      await sendText(chatId, notice);
       return true;
     }
     if (command === 'version') {
@@ -97,10 +114,15 @@
 
     try {
       const timeoutInputKey = String(message.from.id);
-      const pendingPrompt = pendingSystemPromptInput.get(timeoutInputKey);
+      const pendingPrompt = user.pendingSystemPromptInput;
       if (pendingPrompt && !command) {
-        if (Date.now() - pendingPrompt.createdAt > 10 * 60_000) {
-          pendingSystemPromptInput.delete(timeoutInputKey);
+        const createdAt = Number(pendingPrompt.createdAt);
+        if (!Number.isFinite(createdAt) || createdAt <= 0 || Date.now() - createdAt > 10 * 60_000) {
+          delete user.pendingSystemPromptInput;
+          try { store.save(); } catch (error) {
+            user.pendingSystemPromptInput = pendingPrompt;
+            throw error;
+          }
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
           return true;
         }
@@ -111,13 +133,23 @@
         }
         const previous = user.settings || {};
         user.settings = { ...previous, systemPrompt: text };
-        try { store.save(); } catch (error) { user.settings = previous; throw error; }
-        pendingSystemPromptInput.delete(timeoutInputKey);
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.settings = previous;
+          user.pendingSystemPromptInput = pendingPrompt;
+          throw error;
+        }
         await sendText(chatId, 'Инструкция ИИ сохранена (' + text.length + ' символов).');
         await sendSettings(chatId, user);
         return true;
       }
-      if (pendingPrompt && command) pendingSystemPromptInput.delete(timeoutInputKey);
+      if (pendingPrompt && command) {
+        delete user.pendingSystemPromptInput;
+        try { store.save(); } catch (error) {
+          user.pendingSystemPromptInput = pendingPrompt;
+          throw error;
+        }
+      }
       const pendingTimeout = pendingTimeoutInput.get(timeoutInputKey);
       if (pendingTimeout && !command) {
         if (Date.now() - pendingTimeout.createdAt > 10 * 60_000) {
