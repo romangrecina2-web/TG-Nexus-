@@ -73,6 +73,22 @@
     return name;
   }
 
+  function languageFromFileExtension(fileName) {
+    const extension = String(fileName || '').split('.').pop().toLowerCase();
+    const languages = {
+      htm: 'html', html: 'html', css: 'css',
+      js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+      ts: 'typescript', tsx: 'tsx', jsx: 'jsx',
+      py: 'python', json: 'json', xml: 'xml', sql: 'sql',
+      sh: 'bash', bash: 'bash', yaml: 'yaml', yml: 'yaml',
+      toml: 'toml', md: 'markdown', markdown: 'markdown', txt: 'text',
+      java: 'java', c: 'c', h: 'h', cpp: 'cpp', hpp: 'hpp',
+      cs: 'csharp', go: 'go', rs: 'rust', php: 'php', rb: 'ruby',
+      swift: 'swift', kt: 'kotlin', ps1: 'powershell', vue: 'vue', svelte: 'svelte'
+    };
+    return languages[extension] || '';
+  }
+
   function inferCodeLanguage(content, declaredLanguage, requestText) {
     const requestedLanguage = requestedCodeLanguage(requestText);
     if (requestedLanguage) return requestedLanguage;
@@ -122,9 +138,12 @@
 
       const content = String(match[3] || '').replace(/\s+$/, '') + '\n';
       const language = inferCodeLanguage(content, declaredLanguage, requestText);
-      if (candidateName && requestedLanguage) {
-        const requestedExtension = codeFileExtension(requestedLanguage);
-        candidateName = candidateName.replace(/\.[^.]+$/, '.' + requestedExtension);
+      if (candidateName) {
+        const fileLanguage = languageFromFileExtension(candidateName);
+        const desiredLanguage = requestedLanguage || language;
+        if (desiredLanguage && fileLanguage && fileLanguage !== desiredLanguage) {
+          candidateName = candidateName.replace(/\.[^.]+$/, '.' + codeFileExtension(desiredLanguage));
+        }
       }
       fileIndex += 1;
       const name = safeGeneratedFileName(candidateName, language, fileIndex);
