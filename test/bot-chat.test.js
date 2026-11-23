@@ -422,6 +422,19 @@ test('an explicit target extension replaces a conflicting generated filename ext
   assert.match(fileContent, /Converted/);
 });
 
+test('HTML content corrects a model-provided CSS filename even without an explicit conversion request', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const answer = 'Файл готов.\\n\\n' + tick + 'css app.css\\n<!doctype html>\\n<html><body><h1>HTML_CONTENT</h1></body></html>\\n' + tick;
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Создай простую HTML-страницу и отправь файлом.'));
+
+  assert.equal(ctx.documents.length, 1);
+  assert.equal(ctx.documents[0].fileName, 'app.html');
+  assert.equal(ctx.documents[0].mimeType, 'text/html; charset=utf-8');
+  assert.match(Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8'), /HTML_CONTENT/);
+});
+
 test('code examples in explanatory replies stay inline and do not become files', async () => {
   const tick = String.fromCharCode(96).repeat(3);
   const answer = 'Пример: ' + tick + 'js\nconsole.log(2)\n' + tick;
