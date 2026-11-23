@@ -977,17 +977,22 @@ test('provider settings keyboard pages through the catalog and changes endpoint'
   assert.match(ctx.editedMessages.at(-1).text, /Провайдер: Groq/);
 });
 
-test('/test succeeds only after the selected provider returns an assistant completion', async () => {
+test('/test succeeds after manual model selection while /model opens the shared catalogue', async () => {
   const ctx = makeBot({ answer: 'TEST_OK' });
   await ctx.bot.handleMessage(message('/provider groq'));
   await ctx.bot.handleMessage(message('/key groq-test-key'));
   await ctx.bot.handleMessage(message('/model'));
+  const modelMenu = ctx.sent.at(-1);
+  assert.equal(modelMenu.options.reply_markup.inline_keyboard[0][0].callback_data, 'tn:model');
+  assert.equal(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/models'), false);
+
   await ctx.bot.handleMessage(message('/model test/model-a'));
   await ctx.bot.handleMessage(message('/test'));
   const user = ctx.bot.store.getUser(123456);
   assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
-  assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/models'));
+  assert.equal(user.model, 'test/model-a');
   assert.ok(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/chat/completions'));
+  assert.equal(ctx.providerCalls.some((call) => call.url === 'https://api.groq.com/openai/v1/models'), false);
   const testRequest = ctx.providerCalls.filter((call) => call.url === 'https://api.groq.com/openai/v1/chat/completions').at(-1);
   assert.equal(JSON.parse(testRequest.request.body).max_tokens, 512);
   assert.match(ctx.sent.at(-1).text, /Подключение работает/);
