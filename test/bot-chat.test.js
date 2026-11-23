@@ -392,6 +392,49 @@ test('code generation requests send named source files as Telegram documents', a
   assert.match(prompt, /каждый готовый файл отдельным блоком кода/);
 });
 
+test('format conversion requests deliver HTML documents even when the model labels the code fence as CSS', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const answer = 'Готово.\n\n' + tick + 'css\n<!doctype html>\n<html lang="ru"><head><meta charset="utf-8"></head><body><h1>HTML_OK</h1></body></html>\n' + tick;
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Теперь в розширение HTML'));
+
+  assert.equal(ctx.documents.length, 1);
+  assert.equal(ctx.documents[0].fileName, 'index.html');
+  assert.equal(ctx.documents[0].mimeType, 'text/html; charset=utf-8');
+  const fileContent = Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8');
+  assert.match(fileContent, /<!doctype html>/i);
+  assert.match(fileContent, /HTML_OK/);
+  assert.equal(ctx.sent.some((item) => item.text.includes('<!doctype html>')), false);
+});
+
+test('an explicit target extension replaces a conflicting generated filename extension', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const html = '<!doctype html>\n<html><body><h1>Converted</h1></body></html>';
+  const answer = 'Файл подготовлен.\n\n' + tick + 'css app.css\n' + html + '\n' + tick;
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Сделаешь файл с расширением .html?'));
+
+  assert.equal(ctx.documents.length, 1);
+  assert.equal(ctx.documents[0].fileName, 'app.html');
+  const fileContent = Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8');
+  assert.match(fileContent, /Converted/);
+});
+
+test('HTML content corrects a model-provided CSS filename even without an explicit conversion request', async () => {
+  const tick = String.fromCharCode(96).repeat(3);
+  const answer = 'Файл готов.\n\n' + tick + 'css app.css\n<!doctype html>\n<html><body><h1>HTML_CONTENT</h1></body></html>\n' + tick;
+  const ctx = makeBot({ answer });
+  await ctx.bot.handleMessage(message('/key valid-key'));
+  await ctx.bot.handleMessage(message('Создай простую HTML-страницу и отправь файлом.'));
+
+  assert.equal(ctx.documents.length, 1);
+  assert.equal(ctx.documents[0].fileName, 'app.html');
+  assert.equal(ctx.documents[0].mimeType, 'text/html; charset=utf-8');
+  assert.match(Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8'), /HTML_CONTENT/);
+});
+
 test('code examples in explanatory replies stay inline and do not become files', async () => {
   const tick = String.fromCharCode(96).repeat(3);
   const answer = 'Пример: ' + tick + 'js\nconsole.log(2)\n' + tick;
