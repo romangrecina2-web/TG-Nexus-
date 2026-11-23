@@ -394,7 +394,7 @@ test('code generation requests send named source files as Telegram documents', a
 
 test('format conversion requests deliver HTML documents even when the model labels the code fence as CSS', async () => {
   const tick = String.fromCharCode(96).repeat(3);
-  const answer = 'Готово.\\n\\n' + tick + 'css\\n<!doctype html>\\n<html lang="ru"><head><meta charset="utf-8"></head><body><h1>HTML_OK</h1></body></html>\\n' + tick;
+  const answer = 'Готово.\n\n' + tick + 'css\n<!doctype html>\n<html lang="ru"><head><meta charset="utf-8"></head><body><h1>HTML_OK</h1></body></html>\n' + tick;
   const ctx = makeBot({ answer });
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Теперь в розширение HTML'));
@@ -410,8 +410,8 @@ test('format conversion requests deliver HTML documents even when the model labe
 
 test('an explicit target extension replaces a conflicting generated filename extension', async () => {
   const tick = String.fromCharCode(96).repeat(3);
-  const html = '<!doctype html>\\n<html><body><h1>Converted</h1></body></html>';
-  const answer = 'Файл подготовлен.\\n\\n' + tick + 'css app.css\\n' + html + '\\n' + tick;
+  const html = '<!doctype html>\n<html><body><h1>Converted</h1></body></html>';
+  const answer = 'Файл подготовлен.\n\n' + tick + 'css app.css\n' + html + '\n' + tick;
   const ctx = makeBot({ answer });
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Сделаешь файл с расширением .html?'));
