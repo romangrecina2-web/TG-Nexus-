@@ -806,6 +806,8 @@ test('Telegram settings command renders a compact rich panel with interactive co
   }
   const modelButton = rows.flat().find((button) => button.callback_data === 'tn:model');
   assert.equal(modelButton.text, '🤖 Модель');
+  assert.equal(rows.flat().find((button) => button.callback_data === 'tn:search').style, 'danger');
+  assert.equal(rows.flat().find((button) => button.callback_data === 'tn:sandbox').style, 'danger');
   const webAppButton = rows.flat().find((button) => button.web_app);
   assert.equal(webAppButton.text, 'Открыть все настройки');
   assert.equal(webAppButton.web_app.url, 'https://example.com/app?open=settings');
@@ -828,6 +830,9 @@ test('Telegram settings command renders a compact rich panel with interactive co
   assert.ok(richCallbacks.includes('tn:model'));
   assert.ok(richCallbacks.includes('tn:search'));
   assert.ok(richCallbacks.includes('tn:sandbox'));
+  const initialToggles = blocks.filter((block) => block.type === 'buttons').flatMap((block) => block.buttons);
+  assert.equal(initialToggles.find((button) => button.callback_data === 'tn:search').style, 'danger');
+  assert.equal(initialToggles.find((button) => button.callback_data === 'tn:sandbox').style, 'danger');
   assert.equal(richCallbacks.includes('tn:refresh'), false);
 });
 
@@ -917,7 +922,16 @@ test('Telegram settings buttons toggle internet search and save the state', asyn
   const searchPanel = ctx.editedRichMessages.at(-1).richMessage;
   assert.ok(searchPanel.blocks.some((block) =>
     block.type === 'paragraph' && /Интернет-поиск: включён/.test(block.text)));
+  let searchButton = searchPanel.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons).find((button) => button.callback_data === 'tn:search');
+  assert.equal(searchButton.style, 'success');
   assert.equal(ctx.callbackAnswers.at(-1).text, 'Поиск в интернете включён.');
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:search'));
+  const disabledSearchPanel = ctx.editedRichMessages.at(-1).richMessage;
+  searchButton = disabledSearchPanel.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons).find((button) => button.callback_data === 'tn:search');
+  assert.equal(searchButton.style, 'danger');
 });
 
 
@@ -929,6 +943,10 @@ test('Telegram sandbox switch requires consent, stays offline by default, persis
   ctx.bot.store.save();
 
   await ctx.bot.handleMessage(message('/settings'));
+  const initialSandbox = ctx.editedRichMessages.at(-1).richMessage.blocks
+    .filter((block) => block.type === 'buttons').flatMap((block) => block.buttons)
+    .find((button) => button.callback_data === 'tn:sandbox');
+  assert.equal(initialSandbox.style, 'danger');
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox', userId, 500));
 
   assert.match(ctx.editedMessages.at(-1).text, /изолированном iframe/);
@@ -951,6 +969,7 @@ test('Telegram sandbox switch requires consent, stays offline by default, persis
     .flatMap((block) => block.buttons)
     .find((button) => button.callback_data === 'tn:sandbox');
   assert.match(sandboxButton.text, /Песочница: ВКЛ/);
+  assert.equal(sandboxButton.style, 'success');
 
   const restarted = makeBot({ dir: ctx.dir });
   settings = restarted.bot.getSyncState(userId).settings;
@@ -968,6 +987,7 @@ test('Telegram sandbox switch requires consent, stays offline by default, persis
     .flatMap((block) => block.buttons)
     .find((button) => button.callback_data === 'tn:sandbox');
   assert.match(offButton.text, /Песочница: ВЫКЛ/);
+  assert.equal(offButton.style, 'danger');
 });
 
 test('Telegram settings buttons change the token limit and reasoning level', async () => {

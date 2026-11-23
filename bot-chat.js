@@ -1309,8 +1309,8 @@ function createBotChat(options = {}) {
         modelCatalogButton('📝 Инструкция', 'tn:prompt')
       ]),
       modelCatalogBlocksButtons([
-        modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search'),
-        modelCatalogButton('🧪 Песочница: ' + (sandboxEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:sandbox', sandboxEnabled ? 'success' : undefined)
+        modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search', searchEnabled ? 'success' : 'danger'),
+        modelCatalogButton('🧪 Песочница: ' + (sandboxEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:sandbox', sandboxEnabled ? 'success' : 'danger')
       ])
     ]);
   }
@@ -1423,8 +1423,8 @@ function createBotChat(options = {}) {
         { text: '📝 Инструкция', callback_data: 'tn:prompt' }
       ],
       [
-        { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
-        { text: '🧪 Песочница: ' + (settings.sandbox === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:sandbox' }
+        { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search', style: settings.internetSearch === true ? 'success' : 'danger' },
+        { text: '🧪 Песочница: ' + (settings.sandbox === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:sandbox', style: settings.sandbox === true ? 'success' : 'danger' }
       ],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
