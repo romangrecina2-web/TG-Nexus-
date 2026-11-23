@@ -106,6 +106,16 @@
     }
   }
 
+  function settingsApiEndpointLabel(user) {
+    try {
+      const endpoint = new URL(user.apiBaseUrl || apiBaseUrl);
+      const value = endpoint.host + endpoint.pathname.replace(/\/+$/, '');
+      return value.length > 76 ? value.slice(0, 73) + '…' : value;
+    } catch {
+      return 'не задан';
+    }
+  }
+
   function settingsMessageText(user, view = 'main') {
     if (view === 'system-prompt') {
       const prompt = String(user.settings && user.settings.systemPrompt || '').trim();
@@ -150,6 +160,7 @@
       '',
       'Подключение',
       'Провайдер: ' + currentProviderName(user),
+      'API: ' + settingsApiEndpointLabel(user),
       'Модель: ' + currentUserModel(user),
       'API-ключ: ' + (user.apiKey ? 'сохранён' : 'не добавлен'),
       '',
@@ -177,6 +188,7 @@
       modelCatalogBlocksHeading('Настройки TG Nexus', 1),
       modelCatalogBlocksHeading('Подключение', 2),
       modelCatalogBlocksParagraph('Провайдер: ' + currentProviderName(user)),
+      modelCatalogBlocksParagraph('API: ' + settingsApiEndpointLabel(user)),
       modelCatalogBlocksParagraph('Модель: ' + modelLabel),
       modelCatalogBlocksParagraph('API-ключ: ' + (user.apiKey ? 'сохранён' : 'не добавлен')),
       modelCatalogBlocksHeading('Параметры ответа', 2),

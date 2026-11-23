@@ -795,6 +795,7 @@ test('Telegram settings command renders a compact rich panel with interactive co
   assert.match(sent.text, /Настройки TG Nexus/);
   assert.match(sent.text, /Лимит ответа: 1200 токенов/);
   assert.match(sent.text, /Время ожидания ответа: 120 секунд/);
+  assert.match(sent.text, /API: provider\.example\/v1/);
   assert.match(sent.text, /API-ключ: не добавлен/);
   assert.doesNotMatch(sent.text, /https:\/\//);
 
@@ -815,6 +816,7 @@ test('Telegram settings command renders a compact rich panel with interactive co
   const blocks = edited.richMessage.blocks;
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Настройки TG Nexus'));
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Подключение'));
+  assert.ok(blocks.some((block) => block.type === 'paragraph' && block.text === 'API: provider.example/v1'));
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Параметры ответа'));
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Инструменты'));
   const richCallbacks = blocks.filter((block) => block.type === 'buttons')
