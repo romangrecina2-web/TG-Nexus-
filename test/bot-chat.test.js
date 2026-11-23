@@ -801,7 +801,7 @@ test('Telegram settings command renders a compact rich panel with interactive co
 
   const rows = sent.options.reply_markup.inline_keyboard;
   const callbacks = rows.flat().map((button) => button.callback_data).filter(Boolean);
-  for (const callback of ['tn:search', 'tn:reason', 'tn:tokens', 'tn:timeout', 'tn:prompt', 'tn:model', 'tn:providers:0']) {
+  for (const callback of ['tn:search', 'tn:sandbox', 'tn:reason', 'tn:tokens', 'tn:timeout', 'tn:prompt', 'tn:model', 'tn:providers:0', 'tn:refresh']) {
     assert.ok(callbacks.includes(callback), 'missing settings callback: ' + callback);
   }
   const modelButton = rows.flat().find((button) => button.callback_data === 'tn:model');
@@ -812,7 +812,11 @@ test('Telegram settings command renders a compact rich panel with interactive co
 
   const edited = ctx.editedRichMessages.at(-1);
   assert.ok(edited, 'settings should be upgraded to a rich message');
-  assert.deepEqual(edited.replyMarkup.inline_keyboard[0][0].web_app, webAppButton.web_app);
+  assert.equal(edited.replyMarkup.inline_keyboard[0].length, 1);
+  assert.equal(edited.replyMarkup.inline_keyboard[0][0].text, '↻ Обновить');
+  assert.equal(edited.replyMarkup.inline_keyboard[0][0].callback_data, 'tn:refresh');
+  assert.equal(edited.replyMarkup.inline_keyboard[1].length, 1);
+  assert.deepEqual(edited.replyMarkup.inline_keyboard[1][0].web_app, webAppButton.web_app);
   const blocks = edited.richMessage.blocks;
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Настройки TG Nexus'));
   assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Подключение'));
@@ -823,6 +827,8 @@ test('Telegram settings command renders a compact rich panel with interactive co
     .flatMap((block) => block.buttons.map((button) => button.callback_data).filter(Boolean));
   assert.ok(richCallbacks.includes('tn:model'));
   assert.ok(richCallbacks.includes('tn:search'));
+  assert.ok(richCallbacks.includes('tn:sandbox'));
+  assert.equal(richCallbacks.includes('tn:refresh'), false);
 });
 
 test('Telegram settings can edit, apply and reset the AI system prompt', async () => {
@@ -912,6 +918,56 @@ test('Telegram settings buttons toggle internet search and save the state', asyn
   assert.ok(searchPanel.blocks.some((block) =>
     block.type === 'paragraph' && /Интернет-поиск: включён/.test(block.text)));
   assert.equal(ctx.callbackAnswers.at(-1).text, 'Поиск в интернете включён.');
+});
+
+
+test('Telegram sandbox switch requires consent, stays offline by default, persists, and clears network access when disabled', async () => {
+  const ctx = makeBot();
+  const userId = 123456;
+  const seeded = ctx.bot.store.getUser(userId);
+  seeded.settings = { sandboxInternet: true };
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox', userId, 500));
+
+  assert.match(ctx.editedMessages.at(-1).text, /изолированном iframe/);
+  const confirmationButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
+  assert.ok(confirmationButtons.some((button) => button.callback_data === 'tn:sandbox:confirm'));
+  assert.ok(confirmationButtons.some((button) => button.callback_data === 'tn:sandbox:cancel'));
+  assert.notEqual(ctx.bot.getSyncState(userId).settings.sandbox, true);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox:cancel', userId, 500));
+  assert.notEqual(ctx.bot.getSyncState(userId).settings.sandbox, true);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox', userId, 500));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox:confirm', userId, 500));
+  let settings = ctx.bot.getSyncState(userId).settings;
+  assert.equal(settings.sandbox, true);
+  assert.equal(settings.sandboxInternet, false);
+
+  const mainPanel = ctx.editedRichMessages.at(-1).richMessage;
+  const sandboxButton = mainPanel.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons)
+    .find((button) => button.callback_data === 'tn:sandbox');
+  assert.match(sandboxButton.text, /Песочница: ВКЛ/);
+
+  const restarted = makeBot({ dir: ctx.dir });
+  settings = restarted.bot.getSyncState(userId).settings;
+  assert.equal(settings.sandbox, true);
+  assert.equal(settings.sandboxInternet, false);
+
+  await restarted.bot.handleCallbackQuery(callbackQuery('tn:sandbox', userId, 500));
+  settings = restarted.bot.getSyncState(userId).settings;
+  assert.equal(settings.sandbox, false);
+  assert.equal(settings.sandboxInternet, false);
+  assert.match(restarted.callbackAnswers.at(-1).text, /Песочница отключена/);
+
+  const offButton = restarted.editedRichMessages.at(-1).richMessage.blocks
+    .filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons)
+    .find((button) => button.callback_data === 'tn:sandbox');
+  assert.match(offButton.text, /Песочница: ВЫКЛ/);
 });
 
 test('Telegram settings buttons change the token limit and reasoning level', async () => {

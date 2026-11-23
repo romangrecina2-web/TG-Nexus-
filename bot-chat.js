@@ -1215,6 +1215,12 @@ function createBotChat(options = {}) {
         'Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH + ' символов. Это значение будет применяться ко всем новым запросам в Telegram и синхронизироваться с Mini App.\n\n' +
         'Для отмены отправьте /cancel. Чтобы вернуть стандартную инструкцию, используйте кнопку «Сбросить» в предыдущем меню.';
     }
+    if (view === 'sandbox-confirm') {
+      return 'Включить JavaScript-песочницу в Mini App?\n\n' +
+        'ИИ сможет запускать JavaScript в изолированном iframe браузера. Код не получает доступ к файлам, хранилищу или API-ключу.\n\n' +
+        'Сетевой доступ останется выключенным и включается отдельно. Выполнение кода может расходовать ресурсы устройства.\n\n' +
+        'Разрешить запуск?';
+    }
     if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
     if (view === 'timeout') return 'Выберите время ожидания ответа провайдера. Текущее значение: ' + currentRequestTimeout(user) + ' секунд.';
     if (view === 'timeout-input') return 'Отправьте одним сообщением целое число секунд от 10 до 7200. Максимум — 2 часа. Для отмены отправьте /cancel.';
@@ -1304,7 +1310,7 @@ function createBotChat(options = {}) {
       ]),
       modelCatalogBlocksButtons([
         modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search'),
-        modelCatalogButton('↻ Обновить', 'tn:refresh')
+        modelCatalogButton('🧪 Песочница: ' + (sandboxEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:sandbox', sandboxEnabled ? 'success' : undefined)
       ])
     ]);
   }
@@ -1321,6 +1327,14 @@ function createBotChat(options = {}) {
     }
     if (view === 'system-prompt-input') {
       return { inline_keyboard: [[{ text: '← Назад', callback_data: 'tn:back' }]] };
+    }
+    if (view === 'sandbox-confirm') {
+      return {
+        inline_keyboard: [
+          [{ text: '✅ Разрешить песочницу', callback_data: 'tn:sandbox:confirm' }],
+          [{ text: 'Отмена', callback_data: 'tn:sandbox:cancel' }]
+        ]
+      };
     }
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
@@ -1410,8 +1424,9 @@ function createBotChat(options = {}) {
       ],
       [
         { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
-        { text: '↻ Обновить', callback_data: 'tn:refresh' }
-      ]
+        { text: '🧪 Песочница: ' + (settings.sandbox === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:sandbox' }
+      ],
+      [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
     const url = getSettingsUrl();
     if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
@@ -1419,10 +1434,10 @@ function createBotChat(options = {}) {
   }
 
   function settingsMainReplyMarkup() {
+    const rows = [[{ text: '↻ Обновить', callback_data: 'tn:refresh' }]];
     const url = getSettingsUrl();
-    return {
-      inline_keyboard: url ? [[{ text: 'Открыть все настройки', web_app: { url } }]] : []
-    };
+    if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
+    return { inline_keyboard: rows };
   }
 
   async function safeAnswerCallback(queryId, text = '') {
@@ -1538,6 +1553,24 @@ function createBotChat(options = {}) {
         pendingTimeoutInput.delete(String(userId));
         view = 'system-prompt';
         notice = 'Стандартная инструкция восстановлена.';
+      } else if (data === 'tn:sandbox') {
+        if (user.settings && user.settings.sandbox === true) {
+          const previous = user.settings;
+          user.settings = { ...previous, sandbox: false, sandboxInternet: false };
+          try { store.save(); } catch (error) { user.settings = previous; throw error; }
+          notice = 'Песочница отключена. Сетевой доступ также выключен.';
+        } else {
+          view = 'sandbox-confirm';
+          notice = 'Подтвердите включение JavaScript-песочницы.';
+        }
+      } else if (data === 'tn:sandbox:confirm') {
+        const previous = user.settings || {};
+        user.settings = { ...previous, sandbox: true, sandboxInternet: false };
+        try { store.save(); } catch (error) { user.settings = previous; throw error; }
+        notice = 'Песочница разрешена в Mini App. Сетевой доступ остаётся выключенным.';
+      } else if (data === 'tn:sandbox:cancel') {
+        view = 'main';
+        notice = 'Включение песочницы отменено.';
       } else if (data === 'tn:search') {
         const previous = user.settings || {};
         user.settings = { ...previous, internetSearch: previous.internetSearch !== true };
