@@ -219,11 +219,6 @@
       return;
     }
 
-    if (!user.apiKey) {
-      await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key, затем откройте каталог моделей.');
-      return;
-    }
-
     await sendTelegramMessage(message.chat.id,
       'Выбор модели теперь находится в общем каталоге. Откройте его кнопкой ниже. ' +
       'Для ручного выбора по ID используйте /model [ID модели].',

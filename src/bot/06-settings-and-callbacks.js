@@ -157,6 +157,7 @@
       'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt ? 'пользовательская' : 'по умолчанию'),
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
       'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
+      'Каталог моделей: поиск, популярные модели, фильтры и карточки характеристик.',
       'История синхронизируется с Mini App при открытии и сохранении.',
       'Часть параметров можно менять кнопками ниже; полный набор доступен в Mini App.'
     ].join('\n');
@@ -253,10 +254,8 @@
         { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
         { text: '🧠 Рассуждения', callback_data: 'tn:reason' }
       ],
-      [
-        { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
-        { text: '🤖 Модель', callback_data: 'tn:model' }
-      ],
+      [{ text: '🎛 Лимит ответа', callback_data: 'tn:tokens' }],
+      [{ text: '🤖 Каталог моделей', callback_data: 'tn:model' }],
       [{ text: '📝 Инструкция ИИ', callback_data: 'tn:prompt' }],
       [{ text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' }],
       [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],

@@ -1244,6 +1244,7 @@ function createBotChat(options = {}) {
       'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt ? 'пользовательская' : 'по умолчанию'),
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
       'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
+      'Каталог моделей: поиск, популярные модели, фильтры и карточки характеристик.',
       'История синхронизируется с Mini App при открытии и сохранении.',
       'Часть параметров можно менять кнопками ниже; полный набор доступен в Mini App.'
     ].join('\n');
@@ -1340,10 +1341,8 @@ function createBotChat(options = {}) {
         { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
         { text: '🧠 Рассуждения', callback_data: 'tn:reason' }
       ],
-      [
-        { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' },
-        { text: '🤖 Модель', callback_data: 'tn:model' }
-      ],
+      [{ text: '🎛 Лимит ответа', callback_data: 'tn:tokens' }],
+      [{ text: '🤖 Каталог моделей', callback_data: 'tn:model' }],
       [{ text: '📝 Инструкция ИИ', callback_data: 'tn:prompt' }],
       [{ text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' }],
       [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],
@@ -1766,11 +1765,6 @@ function createBotChat(options = {}) {
       return;
     }
 
-    if (!user.apiKey) {
-      await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key, затем откройте каталог моделей.');
-      return;
-    }
-
     await sendTelegramMessage(message.chat.id,
       'Выбор модели теперь находится в общем каталоге. Откройте его кнопкой ниже. ' +
       'Для ручного выбора по ID используйте /model [ID модели].',
@@ -2024,7 +2018,7 @@ function createBotChat(options = {}) {
         '/info — список команд\n' +
         '/provider [ID] — выбрать API-провайдера\n' +
         '/key [ключ провайдера] — сохранить API-ключ\n' +
-        '/model [название модели] — выбрать модель или показать доступные\n' +
+        '/model [ID модели] — выбрать вручную; без аргумента открыть каталог\n' +
         '/test — проверить реальный запрос к API\n' +
         '/version — показать версию backend\n' +
         '/settings — показать настройки ИИ и открыть Mini App\n' +
@@ -2438,7 +2432,7 @@ function clearModelCatalogState(user, clearPending = true, userId = user.id) {
   return true;
 }
 
-async function restoreModelCatalogSession(user, message, userId = user.id) {
+async function restoreModelCatalogSession(user, message, userId = user.id, options = {}) {
   const saved = user && user.modelCatalogState;
   if (!saved || typeof saved !== 'object' || Number(saved.expiresAt) <= Date.now()) {
     if (saved) clearModelCatalogState(user, false, userId);
@@ -2456,7 +2450,8 @@ async function restoreModelCatalogSession(user, message, userId = user.id) {
   const filters = normalizeSavedModelCatalogFilters(saved.filters);
   const manualOnly = saved.manualOnly === true || profile.modelsEndpoint === false;
   let models = [];
-  if (!manualOnly) {
+  const skipFetch = options && options.skipFetch === true;
+  if (!manualOnly && !skipFetch) {
     const result = await fetchModelCatalogForUser(user, String(saved.query || '').slice(0, 100), filters.sort);
     models = result.models;
   }
@@ -2474,7 +2469,7 @@ async function restoreModelCatalogSession(user, message, userId = user.id) {
     manualOnly,
     expiresAt: Date.now() + MODEL_CATALOG_SESSION_TTL
   };
-  if (saved.selectedModelId && typeof saved.selectedModelId === 'string') {
+  if (!skipFetch && saved.selectedModelId && typeof saved.selectedModelId === 'string') {
     const fallback = models.find((item) => item.id === saved.selectedModelId) ||
       MODEL_CATALOG.normalizeModel({ id: saved.selectedModelId }, profile.id);
     session.selected = await fetchModelDetailsForUser(user, saved.selectedModelId, fallback);
@@ -2845,13 +2840,13 @@ async function openModelCatalog(query, user) {
   await safeAnswerCallback(query.id, 'Загружаю модели…');
   const message = query && query.message;
   if (!message || !message.chat) return false;
-  if (!user.apiKey) {
+  const profile = providerProfile(user, user.apiBaseUrl || apiBaseUrl);
+  if (!profile) {
     await editTelegramMessage(message.chat.id, message.message_id,
-      'Для загрузки моделей сначала настройте API-ключ выбранного провайдера в Mini App.',
+      'Не удалось определить API-провайдера. Откройте настройки и выберите его ещё раз.',
       { inline_keyboard: [[{ text: '← Назад', callback_data: 'tn:back' }]] });
     return true;
   }
-  const profile = providerProfile(user, user.apiBaseUrl || apiBaseUrl);
   if (profile.modelsEndpoint === false) {
     const session = newModelCatalogSession(user, message.chat.id, Number(message.message_id), [], '');
     session.manualOnly = true;
@@ -2863,6 +2858,18 @@ async function openModelCatalog(query, user) {
       modelCatalogBlocksButtons([modelCatalogButton('← Назад', 'tn:back')])
     ]);
     await editModelCatalogMessage(session, rich);
+    return true;
+  }
+  if (!user.apiKey) {
+    const session = newModelCatalogSession(user, message.chat.id, Number(message.message_id), [], '');
+    saveModelCatalogState(user, session);
+    await editModelCatalogMessage(session, modelCatalogRich([
+      modelCatalogBlocksHeading('Выбор ИИ', 1),
+      modelCatalogBlocksParagraph('Для загрузки списка моделей нужен API-ключ провайдера. Его можно безопасно добавить прямо здесь.'),
+      modelCatalogBlocksButtons([modelCatalogButton('Добавить API-ключ', 'mc:key', 'primary')]),
+      modelCatalogBlocksButtons([modelCatalogButton('Ввести ID модели вручную', 'mc:manual')]),
+      modelCatalogBlocksButtons([modelCatalogButton('← Назад к настройкам', 'tn:back')])
+    ]));
     return true;
   }
   try {
@@ -2884,8 +2891,10 @@ async function requestModelCatalogSearch(message, user, session, mode = 'search'
   const prompt = await sendTelegramMessage(message.chat.id,
     mode === 'manual'
       ? 'Отправьте ID модели одним сообщением. Для отмены используйте /cancel.'
-      : 'Отправьте название или ID модели для поиска. Для отмены используйте /cancel.',
-    { reply_markup: { force_reply: true, input_field_placeholder: 'Название или ID модели' } });
+      : mode === 'key'
+        ? 'Отправьте API-ключ выбранного провайдера ответом на это сообщение. Ключ будет удалён после получения. Для отмены используйте /cancel.'
+        : 'Отправьте название или ID модели для поиска. Для отмены используйте /cancel.',
+    { reply_markup: { force_reply: true, input_field_placeholder: mode === 'key' ? 'API-ключ' : 'Название или ID модели' } });
   const pending = {
     mode,
     chatId: Number(message.chat.id),
@@ -2959,11 +2968,70 @@ async function handlePendingModelCatalogReply(message, user, text) {
     session = await restoreModelCatalogSession(user, {
       message_id: Number(pending.menuMessageId),
       chat: { id: Number(pending.chatId) }
-    }, userId);
+    }, userId, { skipFetch: pending.mode === 'key' });
   }
   if (!session || Number(session.messageId) !== Number(pending.menuMessageId) ||
       !modelProviderFromSession(user, session)) {
     await sendText(message.chat.id, 'Каталог устарел. Откройте выбор модели заново.');
+    return true;
+  }
+
+  if (pending.mode === 'key') {
+    try {
+      await deleteTelegramMessage(message.chat.id, message.message_id);
+    } catch {
+      await sendText(message.chat.id,
+        'Telegram не подтвердил удаление сообщения с ключом. Я не сохраняю его. Добавьте ключ через Mini App и повторите открытие каталога.');
+      return true;
+    }
+
+    const apiKey = String(text || '').trim();
+    if (!apiKey || apiKey.length > 2_048 || /\s/.test(apiKey)) {
+      await sendText(message.chat.id, 'Ключ должен быть одной строкой длиной до 2048 символов. Нажмите «Добавить ключ» и повторите ввод.');
+      await editModelCatalogMessage(session, modelCatalogRich([
+        modelCatalogBlocksHeading('Нужен API-ключ', 1),
+        modelCatalogBlocksParagraph('Без ключа провайдер не разрешает загружать каталог. Введите ключ через кнопку ниже.'),
+        modelCatalogBlocksButtons([modelCatalogButton('Добавить ключ', 'mc:key', 'primary')]),
+        modelCatalogBlocksButtons([modelCatalogButton('← Назад', 'tn:back')])
+      ]));
+      return true;
+    }
+
+    const previousKey = user.apiKey;
+    user.apiKey = apiKey;
+    try {
+      store.save();
+    } catch (error) {
+      user.apiKey = previousKey;
+      await sendText(message.chat.id, 'Не удалось безопасно сохранить ключ. Повторите ввод.');
+      return true;
+    }
+
+    let result;
+    try {
+      result = await fetchModelCatalogForUser(user, '', session.filters.sort);
+    } catch (error) {
+      user.apiKey = previousKey;
+      try { store.save(); } catch {}
+      const reason = sanitizeProviderError(error && error.message || 'ошибка API');
+      await editModelCatalogMessage(session, modelCatalogRich([
+        modelCatalogBlocksHeading('Не удалось проверить ключ', 1),
+        modelCatalogBlocksParagraph(reason),
+        modelCatalogBlocksParagraph('Проверьте ключ и повторите ввод. Сообщение с ключом уже удалено.'),
+        modelCatalogBlocksButtons([modelCatalogButton('Добавить ключ ещё раз', 'mc:key', 'primary')]),
+        modelCatalogBlocksButtons([modelCatalogButton('← Назад', 'tn:back')])
+      ]));
+      return true;
+    }
+
+    session.models = result.models;
+    session.query = '';
+    session.page = 0;
+    session.selected = null;
+    session.manualOnly = false;
+    prepareModelCatalogView(session);
+    saveModelCatalogState(user, session);
+    await editModelCatalogMessage(session, modelCatalogHomeRich(session, user));
     return true;
   }
 
@@ -3019,7 +3087,9 @@ async function handleModelCatalogCallback(query, user, data) {
   if (!session || Number(session.messageId) !== Number(message.message_id) ||
       Number(session.chatId) !== Number(message.chat.id) || !modelProviderFromSession(user, session)) {
     try {
-      session = await restoreModelCatalogSession(user, message, user.id);
+      session = await restoreModelCatalogSession(user, message, user.id, {
+        skipFetch: data === 'mc:key'
+      });
     } catch (error) {
       await showModelCatalogError(query, error, user);
       return true;
@@ -3034,8 +3104,9 @@ async function handleModelCatalogCallback(query, user, data) {
   }
 
   try {
-    if (data === 'mc:search' || data === 'mc:manual') {
-      await requestModelCatalogSearch(message, user, session, data === 'mc:manual' ? 'manual' : 'search');
+    if (data === 'mc:search' || data === 'mc:manual' || data === 'mc:key') {
+      const mode = data === 'mc:key' ? 'key' : (data === 'mc:manual' ? 'manual' : 'search');
+      await requestModelCatalogSearch(message, user, session, mode);
       return true;
     }
     if (data === 'mc:filters') {

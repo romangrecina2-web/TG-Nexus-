@@ -104,7 +104,11 @@ function makeBot(options = {}) {
       sent.push(record);
       return { message_id: attempts.length };
     },
-    deleteTelegramMessage: async (chatId, messageId) => { actions.push({ type: 'delete', chatId, messageId }); events.push({ type: 'delete' }); },
+    deleteTelegramMessage: async (chatId, messageId) => {
+      actions.push({ type: 'delete', chatId, messageId });
+      events.push({ type: 'delete' });
+      if (options.deleteTelegramMessageError) throw new Error('Telegram delete failed');
+    },
     answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
     editTelegramMessage: async (chatId, messageId, text, replyMarkup) => {
       editedMessages.push({ chatId, messageId, text, replyMarkup });
@@ -799,6 +803,9 @@ test('Telegram settings command exposes interactive controls and the Mini App de
   assert.ok(callbacks.includes('tn:timeout'));
   assert.ok(callbacks.includes('tn:prompt'));
   assert.ok(callbacks.includes('tn:model'));
+  const modelButton = rows.flat().find((button) => button.callback_data === 'tn:model');
+  assert.equal(modelButton.text, '🤖 Каталог моделей');
+  assert.match(sent.text, /Каталог моделей: поиск, популярные модели, фильтры и карточки характеристик/);
   assert.ok(callbacks.includes('tn:providers:0'));
   const webAppButton = rows.flat().find((button) => button.web_app);
   assert.equal(webAppButton.text, 'Открыть все настройки');
@@ -923,6 +930,125 @@ test('Telegram timeout setting selects and persists the provider response wait',
   assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 7200);
   assert.ok(ctx.sent.some((item) => /Тайм-аут ответа провайдера установлен: 7200/.test(item.text)));
   assert.match(ctx.sent.at(-1).text, /Время ожидания ответа: 7200 секунд/);
+});
+
+test('model catalogue offers safe key entry when the encrypted store has no provider key', async () => {
+  const first = makeBot();
+  const userId = 777123;
+  await first.bot.handleMessage(message('/settings', userId, 870));
+  await first.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 871));
+
+  let view = first.editedRichMessages.at(-1).richMessage;
+  assert.ok(view.blocks.some((block) => block.type === 'heading' && block.text === 'Выбор ИИ'));
+  assert.ok(view.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.callback_data === 'mc:key')));
+  assert.equal(first.providerCalls.length, 0);
+
+  await first.bot.handleCallbackQuery(callbackQuery('mc:key', userId, 871));
+  const prompt = first.sent.at(-1);
+  assert.equal(prompt.options.reply_markup.force_reply, true);
+  assert.equal(prompt.options.reply_markup.input_field_placeholder, 'API-ключ');
+
+  const restarted = makeBot({ dir: first.dir });
+  const reply = message('valid-provider-key', userId, 872);
+  reply.reply_to_message = { message_id: prompt.message_id };
+  await restarted.bot.handleMessage(reply);
+
+  const stored = restarted.bot.store.getUser(userId);
+  assert.equal(stored.apiKey, 'valid-provider-key');
+  assert.equal(stored.pendingModelCatalogSearch, undefined);
+  assert.ok(restarted.actions.some((item) => item.type === 'delete' && item.messageId === 872));
+  assert.equal(restarted.providerCalls.length, 1);
+  assert.ok(restarted.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
+    block.type === 'buttons' && block.buttons.some((button) => button.callback_data === 'mc:model:0')));
+  assert.equal(stored.chats.length, 0);
+});
+
+test('invalid provider key is removed from the user record after catalog authentication fails', async () => {
+  const ctx = makeBot({ keyValid: false });
+  const userId = 777124;
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 881));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:key', userId, 881));
+  const prompt = ctx.sent.at(-1);
+  const reply = message('invalid-provider-key', userId, 882);
+  reply.reply_to_message = { message_id: prompt.message_id };
+  await ctx.bot.handleMessage(reply);
+
+  assert.equal(ctx.bot.store.getUser(userId).apiKey, '');
+  assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === 882));
+  assert.ok(ctx.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Не удалось проверить ключ'));
+});
+
+test('model catalogue refuses to store a key when Telegram cannot delete its message', async () => {
+  const ctx = makeBot({ deleteTelegramMessageError: true });
+  const userId = 777125;
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 891));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:key', userId, 891));
+  const prompt = ctx.sent.at(-1);
+  const reply = message('secret-provider-key', userId, 892);
+  reply.reply_to_message = { message_id: prompt.message_id };
+  await ctx.bot.handleMessage(reply);
+
+  assert.equal(ctx.bot.store.getUser(userId).apiKey, '');
+  assert.match(ctx.sent.at(-1).text, /не сохраняю его/);
+  assert.equal(ctx.providerCalls.length, 0);
+});
+
+test('/model opens the catalogue prompt even when the provider key is missing', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/model'));
+  const sent = ctx.sent.at(-1);
+  assert.match(sent.text, /общем каталоге/);
+  assert.equal(sent.options.reply_markup.inline_keyboard[0][0].callback_data, 'tn:model');
+  assert.equal(ctx.providerCalls.length, 0);
+});
+
+
+test('model catalogue sends valid Bot API 10.3 rich-message blocks and in-message callback buttons', async () => {
+  const dir = tempDir();
+  const telegramCalls = [];
+  const bot = createBotChat({
+    botToken: 'test-bot-token',
+    apiBaseUrl: 'https://provider.example/v1',
+    defaultModel: 'test/model-a',
+    encryptionKey: 'ab'.repeat(32),
+    dataDir: dir,
+    fetchImpl: async (url, request) => {
+      const address = String(url);
+      if (address.startsWith('https://api.telegram.org/')) {
+        const method = address.slice(address.lastIndexOf('/') + 1);
+        const payload = JSON.parse(request.body);
+        telegramCalls.push({ method, payload });
+        return new Response(JSON.stringify({
+          ok: true,
+          result: method === 'answerCallbackQuery' ? true : { message_id: 500 }
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (address === 'https://provider.example/v1/models') {
+        return new Response(JSON.stringify({
+          data: [
+            { id: 'test/model-a', name: 'Model A', context_length: 128000 },
+            { id: 'test/model-b', name: 'Model B', context_length: 256000 }
+          ]
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error('Unexpected request: ' + address);
+    }
+  });
+  await bot.setApiKey(123456, 'valid-provider-key', 'https://provider.example/v1');
+  await bot.handleCallbackQuery(callbackQuery('tn:model', 123456, 500));
+
+  const edit = telegramCalls.find((item) =>
+    item.method === 'editMessageText' && item.payload.rich_message);
+  assert.ok(edit, 'catalogue should be sent through editMessageText.rich_message');
+  assert.ok(edit.payload.rich_message.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Выбор ИИ'));
+  const buttonRows = edit.payload.rich_message.blocks.filter((block) => block.type === 'buttons');
+  assert.ok(buttonRows.length >= 2);
+  assert.ok(buttonRows.some((block) =>
+    block.buttons.some((button) => button.callback_data === 'mc:model:0')));
+  assert.deepEqual(edit.payload.reply_markup, { inline_keyboard: [] });
 });
 
 test('Telegram model catalogue shows rich model buttons and saves the selected model', async () => {
