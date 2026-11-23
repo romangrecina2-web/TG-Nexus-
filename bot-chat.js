@@ -1230,24 +1230,71 @@ function createBotChat(options = {}) {
     }
 
     const settings = user.settings || {};
-    const apiBase = user.apiBaseUrl || apiBaseUrl || 'не задан';
-    const currentChat = activeChat(user);
-    const maxTokens = currentTokenLimit(user);
+    const customPrompt = typeof settings.systemPrompt === 'string' &&
+      settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt;
     return [
-      'Настройки TG Nexus',
+      '⚙️ Настройки TG Nexus',
+      '',
+      'Подключение',
       'Провайдер: ' + currentProviderName(user),
-      'API: ' + apiBase,
       'Модель: ' + currentUserModel(user),
-      'Лимит ответа: ' + maxTokens + ' токенов',
-      'Время ожидания ответа: ' + currentRequestTimeout(user) + ' секунд',
+      'API-ключ: ' + (user.apiKey ? 'сохранён' : 'не добавлен'),
+      '',
+      'Параметры ответа',
       'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто'),
-      'Инструкция: ' + (typeof settings.systemPrompt === 'string' && settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt ? 'пользовательская' : 'по умолчанию'),
+      'Лимит ответа: ' + currentTokenLimit(user) + ' токенов',
+      'Время ожидания ответа: ' + currentRequestTimeout(user) + ' секунд',
+      'Инструкция: ' + (customPrompt ? 'пользовательская' : 'по умолчанию'),
+      '',
+      'Инструменты',
       'Интернет-поиск: ' + (settings.internetSearch === true ? 'включён' : 'выключен'),
-      'Песочница: ' + (settings.sandbox === true ? 'разрешена в Mini App' : 'выключена'),
-      'Каталог моделей: поиск, популярные модели, фильтры и карточки характеристик.',
-      'История синхронизируется с Mini App при открытии и сохранении.',
-      'Часть параметров можно менять кнопками ниже; полный набор доступен в Mini App.'
+      'Песочница: ' + (settings.sandbox === true ? 'включена в Mini App' : 'выключена')
     ].join('\n');
+  }
+
+  function settingsRichMessage(user) {
+    const settings = user.settings || {};
+    const customPrompt = typeof settings.systemPrompt === 'string' &&
+      settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt;
+    const model = currentUserModel(user);
+    const modelLabel = model.length > 76 ? model.slice(0, 73) + '…' : model;
+    const searchEnabled = settings.internetSearch === true;
+    const sandboxEnabled = settings.sandbox === true;
+    return modelCatalogRich([
+      modelCatalogBlocksHeading('Настройки TG Nexus', 1),
+      modelCatalogBlocksHeading('Подключение', 2),
+      modelCatalogBlocksParagraph('Провайдер: ' + currentProviderName(user)),
+      modelCatalogBlocksParagraph('Модель: ' + modelLabel),
+      modelCatalogBlocksParagraph('API-ключ: ' + (user.apiKey ? 'сохранён' : 'не добавлен')),
+      modelCatalogBlocksHeading('Параметры ответа', 2),
+      modelCatalogBlocksParagraph(
+        'Рассуждения: ' + (reasoningLabels[settings.reasoning || 'auto'] || 'Авто') +
+        ' · Лимит: ' + currentTokenLimit(user).toLocaleString('ru-RU') +
+        ' токенов · Тайм-аут: ' + currentRequestTimeout(user) + ' с'
+      ),
+      modelCatalogBlocksParagraph('Инструкция: ' + (customPrompt ? 'пользовательская' : 'по умолчанию')),
+      modelCatalogBlocksHeading('Инструменты', 2),
+      modelCatalogBlocksParagraph(
+        'Интернет-поиск: ' + (searchEnabled ? 'включён' : 'выключен') +
+        ' · Песочница: ' + (sandboxEnabled ? 'включена' : 'выключена')
+      ),
+      modelCatalogBlocksButtons([
+        modelCatalogButton('🤖 Модель', 'tn:model', 'primary'),
+        modelCatalogButton('🔌 Провайдер', 'tn:providers:0')
+      ]),
+      modelCatalogBlocksButtons([
+        modelCatalogButton('🧠 Рассуждения', 'tn:reason'),
+        modelCatalogButton('🎛 Лимит ответа', 'tn:tokens')
+      ]),
+      modelCatalogBlocksButtons([
+        modelCatalogButton('⏱ Тайм-аут', 'tn:timeout'),
+        modelCatalogButton('📝 Инструкция', 'tn:prompt')
+      ]),
+      modelCatalogBlocksButtons([
+        modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search'),
+        modelCatalogButton('↻ Обновить', 'tn:refresh')
+      ])
+    ]);
   }
 
   function settingsKeyboard(user, view = 'main') {
@@ -1338,19 +1385,32 @@ function createBotChat(options = {}) {
     const settings = user.settings || {};
     const rows = [
       [
-        { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
-        { text: '🧠 Рассуждения', callback_data: 'tn:reason' }
+        { text: '🤖 Модель', callback_data: 'tn:model' },
+        { text: '🔌 Провайдер', callback_data: 'tn:providers:0' }
       ],
-      [{ text: '🎛 Лимит ответа', callback_data: 'tn:tokens' }],
-      [{ text: '🤖 Каталог моделей', callback_data: 'tn:model' }],
-      [{ text: '📝 Инструкция ИИ', callback_data: 'tn:prompt' }],
-      [{ text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' }],
-      [{ text: '🔌 API-провайдер', callback_data: 'tn:providers:0' }],
-      [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
+      [
+        { text: '🧠 Рассуждения', callback_data: 'tn:reason' },
+        { text: '🎛 Лимит ответа', callback_data: 'tn:tokens' }
+      ],
+      [
+        { text: '⏱ Тайм-аут: ' + currentRequestTimeout(user) + ' с', callback_data: 'tn:timeout' },
+        { text: '📝 Инструкция', callback_data: 'tn:prompt' }
+      ],
+      [
+        { text: '🌐 Поиск: ' + (settings.internetSearch === true ? 'ВКЛ' : 'ВЫКЛ'), callback_data: 'tn:search' },
+        { text: '↻ Обновить', callback_data: 'tn:refresh' }
+      ]
     ];
     const url = getSettingsUrl();
     if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
     return { inline_keyboard: rows };
+  }
+
+  function settingsMainReplyMarkup() {
+    const url = getSettingsUrl();
+    return {
+      inline_keyboard: url ? [[{ text: 'Открыть все настройки', web_app: { url } }]] : []
+    };
   }
 
   async function safeAnswerCallback(queryId, text = '') {
@@ -1364,12 +1424,21 @@ function createBotChat(options = {}) {
       return false;
     }
     try {
-      await editTelegramMessage(
-        message.chat.id,
-        message.message_id,
-        settingsMessageText(user, view),
-        settingsKeyboard(user, view)
-      );
+      if (view === 'main') {
+        await editTelegramRichMessage(
+          message.chat.id,
+          message.message_id,
+          settingsRichMessage(user),
+          settingsMainReplyMarkup()
+        );
+      } else {
+        await editTelegramMessage(
+          message.chat.id,
+          message.message_id,
+          settingsMessageText(user, view),
+          settingsKeyboard(user, view)
+        );
+      }
     } catch (error) {
       const description = String(error && (error.telegramDescription || error.message) || '');
       if (!/message is not modified/i.test(description)) {
@@ -1539,9 +1608,22 @@ function createBotChat(options = {}) {
 
   async function sendSettings(chatId, user) {
     user.id = String(user.id || '');
-    await sendTelegramMessage(chatId, settingsMessageText(user), {
+    const sent = await sendTelegramMessage(chatId, settingsMessageText(user), {
       reply_markup: settingsKeyboard(user)
     });
+    const messageId = sent && Number(sent.message_id);
+    if (Number.isSafeInteger(messageId)) {
+      try {
+        await editTelegramRichMessage(
+          chatId,
+          messageId,
+          settingsRichMessage(user),
+          settingsMainReplyMarkup()
+        );
+      } catch {
+        // Keep the compact text version and its keyboard if rich messages are unavailable.
+      }
+    }
   }
 
   function isPrivateUserMessage(message) {

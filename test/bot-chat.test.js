@@ -788,28 +788,39 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   assert.ok(chat.messages.some((item) => item.role === 'assistant' && item.content === 'Ответ ИИ'));
 });
 
-test('Telegram settings command exposes interactive controls and the Mini App deep link', async () => {
+test('Telegram settings command renders a compact rich panel with interactive controls and the Mini App deep link', async () => {
   const ctx = makeBot({ webAppUrl: 'https://example.com/app' });
   await ctx.bot.handleMessage(message('/settings'));
   const sent = ctx.sent.at(-1);
   assert.match(sent.text, /Настройки TG Nexus/);
   assert.match(sent.text, /Лимит ответа: 1200 токенов/);
   assert.match(sent.text, /Время ожидания ответа: 120 секунд/);
+  assert.match(sent.text, /API-ключ: не добавлен/);
+  assert.doesNotMatch(sent.text, /https:\/\//);
+
   const rows = sent.options.reply_markup.inline_keyboard;
   const callbacks = rows.flat().map((button) => button.callback_data).filter(Boolean);
-  assert.ok(callbacks.includes('tn:search'));
-  assert.ok(callbacks.includes('tn:reason'));
-  assert.ok(callbacks.includes('tn:tokens'));
-  assert.ok(callbacks.includes('tn:timeout'));
-  assert.ok(callbacks.includes('tn:prompt'));
-  assert.ok(callbacks.includes('tn:model'));
+  for (const callback of ['tn:search', 'tn:reason', 'tn:tokens', 'tn:timeout', 'tn:prompt', 'tn:model', 'tn:providers:0']) {
+    assert.ok(callbacks.includes(callback), 'missing settings callback: ' + callback);
+  }
   const modelButton = rows.flat().find((button) => button.callback_data === 'tn:model');
-  assert.equal(modelButton.text, '🤖 Каталог моделей');
-  assert.match(sent.text, /Каталог моделей: поиск, популярные модели, фильтры и карточки характеристик/);
-  assert.ok(callbacks.includes('tn:providers:0'));
+  assert.equal(modelButton.text, '🤖 Модель');
   const webAppButton = rows.flat().find((button) => button.web_app);
   assert.equal(webAppButton.text, 'Открыть все настройки');
   assert.equal(webAppButton.web_app.url, 'https://example.com/app?open=settings');
+
+  const edited = ctx.editedRichMessages.at(-1);
+  assert.ok(edited, 'settings should be upgraded to a rich message');
+  assert.deepEqual(edited.replyMarkup.inline_keyboard[0][0].web_app, webAppButton.web_app);
+  const blocks = edited.richMessage.blocks;
+  assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Настройки TG Nexus'));
+  assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Подключение'));
+  assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Параметры ответа'));
+  assert.ok(blocks.some((block) => block.type === 'heading' && block.text === 'Инструменты'));
+  const richCallbacks = blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons.map((button) => button.callback_data).filter(Boolean));
+  assert.ok(richCallbacks.includes('tn:model'));
+  assert.ok(richCallbacks.includes('tn:search'));
 });
 
 test('Telegram settings can edit, apply and reset the AI system prompt', async () => {
@@ -895,7 +906,9 @@ test('Telegram settings buttons toggle internet search and save the state', asyn
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:search'));
   assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, true);
-  assert.match(ctx.editedMessages.at(-1).text, /Интернет-поиск: включён/);
+  const searchPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(searchPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Интернет-поиск: включён/.test(block.text)));
   assert.equal(ctx.callbackAnswers.at(-1).text, 'Поиск в интернете включён.');
 });
 
@@ -906,7 +919,9 @@ test('Telegram settings buttons change the token limit and reasoning level', asy
   assert.equal(ctx.bot.getSyncState(123456).settings.maxTokens, 4000);
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.reasoning, 'high');
-  assert.match(ctx.editedMessages.at(-1).text, /Рассуждения: Высокий/);
+  const reasoningPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(reasoningPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Рассуждения: Высокий/.test(block.text)));
 });
 
 test('Telegram timeout setting selects and persists the provider response wait', async () => {
@@ -919,7 +934,9 @@ test('Telegram timeout setting selects and persists the provider response wait',
   assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:custom'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:300', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 300);
-  assert.match(ctx.editedMessages.at(-1).text, /Время ожидания ответа: 300 секунд/);
+  const timeoutPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(timeoutPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Тайм-аут: 300 с/.test(block.text)));
 
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:custom', 123456, 502));
   assert.match(ctx.editedMessages.at(-1).text, /от 10 до 7200/);
@@ -1100,7 +1117,9 @@ test('provider settings keyboard pages through the catalog and changes endpoint'
   const user = ctx.bot.store.getUser(123456);
   assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
   assert.equal(user.apiKey, '');
-  assert.match(ctx.editedMessages.at(-1).text, /Провайдер: Groq/);
+  const providerPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(providerPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Провайдер: Groq/.test(block.text)));
 });
 
 test('/test succeeds after manual model selection while /model opens the shared catalogue', async () => {
