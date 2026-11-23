@@ -281,7 +281,7 @@ test('/version identifies the deployed Telegram backend build', async () => {
   assert.equal(ctx.sent.at(-1).text, 'В1 Release');
 });
 
-test('/model accepts a manual model ID without depending on the provider catalogue', async () => {
+test('/model keeps manual ID selection and opens the shared model catalogue without dumping the ID list', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('/model openai/gpt-6.2-astra-pro'));
@@ -293,8 +293,14 @@ test('/model accepts a manual model ID without depending on the provider catalog
   assert.match(ctx.sent.at(-1).text, /Модель выбрана вручную/);
 
   await ctx.bot.handleMessage(message('/model'));
-  assert.equal(ctx.providerCalls.length, 1);
-  assert.match(ctx.sent.at(-1).text, /test\/model-a/);
+  const prompt = ctx.sent.at(-1);
+  assert.equal(ctx.providerCalls.length, 0);
+  assert.match(prompt.text, /общем каталоге/);
+  assert.equal(prompt.options.reply_markup.inline_keyboard[0][0].callback_data, 'tn:model');
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', 123456, prompt.message_id));
+  assert.ok(ctx.editedRichMessages.some((item) =>
+    item.richMessage.blocks.some((block) => block.type === 'heading' && block.text === 'Выбор ИИ')));
 });
 
 test('/model can be selected when the model catalogue is unavailable, and /test checks the selected ID', async () => {

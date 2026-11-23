@@ -204,6 +204,7 @@
         return;
       }
 
+      clearModelCatalogState(user, true);
       user.model = manualModel;
       user.modelExplicit = true;
       const manualChat = activeChat(user);
@@ -218,25 +219,19 @@
       return;
     }
 
-    if (!user.modelsEndpoint) {
-      await sendText(message.chat.id, 'Этот провайдер не публикует совместимый список моделей. Укажите ID вручную: /model [ID модели].');
-      return;
-    }
     if (!user.apiKey) {
-      await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key.');
+      await sendText(message.chat.id, 'Сначала добавьте API-ключ командой /key, затем откройте каталог моделей.');
       return;
     }
 
-    let models;
-    try {
-      models = await getModels(user.apiKey, user.apiBaseUrl || apiBaseUrl, user);
-    } catch (error) {
-      const reason = sanitizeProviderError(error && error.message || '');
-      await sendText(message.chat.id,
-        'Не удалось получить список моделей. Можно указать ID вручную: /model [ID модели].' +
-        (reason ? '\nПричина: ' + reason : ''));
-      return;
-    }
-
-    await sendModelList(message.chat.id, models, (activeChat(user) || {}).model || user.model);
+    await sendTelegramMessage(message.chat.id,
+      'Выбор модели теперь находится в общем каталоге. Откройте его кнопкой ниже. ' +
+      'Для ручного выбора по ID используйте /model [ID модели].',
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: 'Открыть каталог моделей', callback_data: 'tn:model' }
+          ]]
+        }
+      });
   }
