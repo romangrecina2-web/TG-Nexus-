@@ -919,14 +919,18 @@ test('Telegram timeout setting selects and persists the provider response wait',
   assert.match(ctx.sent.at(-1).text, /Время ожидания ответа: 7200 секунд/);
 });
 
-test('Telegram model buttons fetch choices and save the selected model', async () => {
+test('Telegram model catalogue shows rich model buttons and saves the selected model', async () => {
   const ctx = makeBot();
   await ctx.bot.setApiKey(123456, 'valid-key', 'https://provider.example/v1');
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:model'));
-  const modelButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
-  assert.ok(modelButtons.some((button) => button.callback_data === 'tn:m:1'));
-  await ctx.bot.handleCallbackQuery(callbackQuery('tn:m:1', 123456, 502));
+  const home = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(home.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.callback_data === 'mc:model:1')));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:model:1', 123456, 500));
+  assert.ok(ctx.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
+    block.type === 'buttons' && block.buttons.some((button) => button.callback_data === 'mc:choose')));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:choose', 123456, 500));
   assert.equal(ctx.bot.getSyncState(123456).model, 'test/model-b');
 });
 
