@@ -536,3 +536,19 @@ test('OpenRouter single-model detail requests encode the author and slug safely'
   assert.throws(() => adapters.modelDetailsRequest(openrouter, 'test-key', 'bad/id/with/extra', false),
     /model ID/i);
 });
+
+
+test('OpenRouter model catalog requests pass validated search and sort options', () => {
+  const profile = catalog.find((item) => item.id === 'openrouter');
+  const request = adapters.modelsRequest(profile, 'key', false, {
+    query: 'nemotron',
+    sort: 'context-high-to-low'
+  });
+  const url = new URL(request.url);
+  assert.equal(url.searchParams.get('q'), 'nemotron');
+  assert.equal(url.searchParams.get('sort'), 'context-high-to-low');
+  const invalid = new URL(adapters.modelsRequest(profile, 'key', false, {
+    sort: 'arbitrary-value'
+  }).url);
+  assert.equal(invalid.searchParams.has('sort'), false);
+});

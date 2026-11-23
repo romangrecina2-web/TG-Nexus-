@@ -341,6 +341,7 @@
           await safeAnswerCallback(query.id, 'Неизвестный провайдер. Обновите панель настроек.');
           return true;
         }
+        if (result.changed) clearModelCatalogState(user, true, userId);
         notice = result.changed
           ? 'Провайдер изменён на ' + result.provider.name + '. Добавьте API-ключ и выберите модель.'
           : result.provider.name + ' уже выбран.';
@@ -391,6 +392,7 @@
         notice = 'Жду ваше значение в секундах.';
       } else if (data === 'tn:back' || data === 'tn:refresh') {
         pendingTimeoutInput.delete(String(userId));
+        clearModelCatalogState(user, true, userId);
         if (Object.prototype.hasOwnProperty.call(user, 'pendingSystemPromptInput')) {
           updatePendingSystemPromptInput(user, false);
         }

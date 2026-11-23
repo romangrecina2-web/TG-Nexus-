@@ -26,8 +26,10 @@ function normalizeModel(raw, providerId = 'custom') {
   const supportedParameters = cleanList(item.supported_parameters || item.supportedParameters);
   const inputModalities = cleanList(architecture.input_modalities || item.input_modalities || item.inputModalities);
   const outputModalities = cleanList(architecture.output_modalities || item.output_modalities || item.outputModalities);
-  const promptPrice = numberOrNull(pricing.prompt);
-  const completionPrice = numberOrNull(pricing.completion);
+  // OpenRouter documents pricing.prompt and pricing.completion in USD per token.
+  // Other providers use different or undocumented catalogue fields, so do not assume their units.
+  const promptPrice = providerId === 'openrouter' ? numberOrNull(pricing.prompt) : null;
+  const completionPrice = providerId === 'openrouter' ? numberOrNull(pricing.completion) : null;
   const contextLength = numberOrNull(item.context_length ?? item.contextLength ??
     item.inputTokenLimit ?? item.max_input_tokens ?? item.maxInputTokens);
   const maxOutputTokens = numberOrNull(topProvider.max_completion_tokens ??

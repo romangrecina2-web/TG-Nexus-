@@ -24,12 +24,12 @@ test('model catalogue normalizes provider metadata without guessing missing valu
   assert.equal(model.throughput, null);
 });
 
-test('free filter requires both input and output prices to be known and zero', () => {
+test('free filter requires both OpenRouter input and output prices to be known and zero', () => {
   const models = [
-    catalog.normalizeModel({ id: 'free', pricing: { prompt: '0', completion: '0' } }),
-    catalog.normalizeModel({ id: 'paid', pricing: { prompt: '0.000001', completion: '0.000002' } }),
-    catalog.normalizeModel({ id: 'unknown' }),
-    catalog.normalizeModel({ id: 'half-free', pricing: { prompt: '0', completion: '0.000001' } })
+    catalog.normalizeModel({ id: 'free', pricing: { prompt: '0', completion: '0' } }, 'openrouter'),
+    catalog.normalizeModel({ id: 'paid', pricing: { prompt: '0.000001', completion: '0.000002' } }, 'openrouter'),
+    catalog.normalizeModel({ id: 'unknown' }, 'openrouter'),
+    catalog.normalizeModel({ id: 'half-free', pricing: { prompt: '0', completion: '0.000001' } }, 'openrouter')
   ];
   assert.deepEqual(catalog.filterModels(models, { free: true }).map((item) => item.id), ['free']);
 });

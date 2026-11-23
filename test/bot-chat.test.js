@@ -1099,3 +1099,66 @@ test('model catalogue search uses ForceReply and does not forward the search phr
   assert.equal(ctx.bot.store.getUser(123456).chats.length, 0);
   assert.equal(ctx.providerCalls.some((call) => String(call.url).endsWith('/chat/completions')), false);
 });
+
+
+test('model catalogue search prompt and small view state survive a backend restart without saving model cards', async () => {
+  const userId = 654399;
+  const data = {
+    data: [
+      { id: 'test/model-a', name: 'Model A', description: 'A model', context_length: 128000 },
+      { id: 'test/model-b', name: 'Model B', description: 'B model', context_length: 256000 }
+    ]
+  };
+  const first = makeBot({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => data }) });
+  await first.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
+  await first.bot.handleMessage(message('/settings', userId, 801));
+  await first.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 802));
+  await first.bot.handleCallbackQuery(callbackQuery('mc:search', userId, 802));
+
+  const beforeRestart = first.bot.store.getUser(userId);
+  const promptId = beforeRestart.pendingModelCatalogSearch.promptMessageId;
+  assert.ok(beforeRestart.modelCatalogState);
+  assert.equal(Object.prototype.hasOwnProperty.call(beforeRestart.modelCatalogState, 'models'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(beforeRestart.modelCatalogState, 'description'), false);
+
+  const restarted = makeBot({
+    dir: first.dir,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => data })
+  });
+  const reply = message('Model B', userId, 803);
+  reply.reply_to_message = { message_id: promptId };
+  await restarted.bot.handleMessage(reply);
+
+  const result = restarted.editedRichMessages.at(-1).richMessage;
+  assert.ok(result.blocks.some((block) => block.type === 'heading' && block.text === 'Модели'));
+  assert.ok(result.blocks.some((block) => block.type === 'buttons' &&
+    block.buttons.some((button) => button.text.includes('Model B'))));
+  const afterRestart = restarted.bot.store.getUser(userId);
+  assert.equal(afterRestart.pendingModelCatalogSearch, undefined);
+  assert.equal(afterRestart.modelCatalogState.query, 'Model B');
+  assert.equal(afterRestart.chats.length, 0);
+});
+
+test('model card can be reopened after backend restart by re-fetching provider details', async () => {
+  const userId = 654400;
+  const data = {
+    data: [
+      { id: 'test/model-a', name: 'Model A', context_length: 128000 },
+      { id: 'test/model-b', name: 'Model B', description: 'B description', context_length: 256000 }
+    ]
+  };
+  const first = makeBot({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => data }) });
+  await first.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
+  await first.bot.handleMessage(message('/settings', userId, 811));
+  await first.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 812));
+
+  const restarted = makeBot({
+    dir: first.dir,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => data })
+  });
+  await restarted.bot.handleCallbackQuery(callbackQuery('mc:model:1', userId, 812));
+  const card = restarted.editedRichMessages.at(-1).richMessage;
+  assert.ok(card.blocks.some((block) => block.type === 'heading' && block.text === 'Model B'));
+  assert.ok(card.blocks.some((block) => block.type === 'paragraph' && block.text === 'B description'));
+  assert.equal(restarted.bot.store.getUser(userId).modelCatalogState.selectedModelId, 'test/model-b');
+});

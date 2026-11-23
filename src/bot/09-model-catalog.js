@@ -42,6 +42,116 @@ function modelProviderFromSession(user, session) {
     normalizeApiBase(profile.url) === session.providerUrl;
 }
 
+function normalizeSavedModelCatalogFilters(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const validSorts = ['popular', 'price', 'context', 'speed'];
+  return {
+    free: source.free === true,
+    minContext: [0, 131072, 262144, 1000000].includes(Number(source.minContext))
+      ? Number(source.minContext) : 0,
+    image: source.image === true,
+    file: source.file === true,
+    audio: source.audio === true,
+    reasoning: source.reasoning === true,
+    tools: source.tools === true,
+    sort: validSorts.includes(source.sort) ? source.sort : 'popular'
+  };
+}
+
+function saveModelCatalogState(user, session) {
+  const previous = user.modelCatalogState;
+  const next = {
+    providerId: String(session.providerId || ''),
+    providerUrl: String(session.providerUrl || ''),
+    chatId: Number(session.chatId),
+    messageId: Number(session.messageId),
+    query: String(session.query || '').slice(0, 100),
+    page: Math.max(0, Math.min(999, Math.round(Number(session.page) || 0))),
+    filters: normalizeSavedModelCatalogFilters(session.filters),
+    selectedModelId: session.selected && typeof session.selected.id === 'string'
+      ? session.selected.id.slice(0, 256) : '',
+    manualOnly: session.manualOnly === true,
+    expiresAt: Date.now() + MODEL_CATALOG_SESSION_TTL
+  };
+  user.modelCatalogState = next;
+  try {
+    store.save();
+  } catch (error) {
+    if (previous === undefined) delete user.modelCatalogState;
+    else user.modelCatalogState = previous;
+    throw error;
+  }
+  session.expiresAt = next.expiresAt;
+  return next;
+}
+
+function clearModelCatalogState(user, clearPending = true, userId = user.id) {
+  const previousState = user.modelCatalogState;
+  const previousPending = user.pendingModelCatalogSearch;
+  if (previousState !== undefined) delete user.modelCatalogState;
+  if (clearPending && previousPending !== undefined) delete user.pendingModelCatalogSearch;
+  const key = modelCatalogKey(userId);
+  modelCatalogSessions.delete(key);
+  if (clearPending) pendingModelCatalogSearches.delete(key);
+  if (previousState === undefined && (!clearPending || previousPending === undefined)) return false;
+  try {
+    store.save();
+  } catch (error) {
+    if (previousState !== undefined) user.modelCatalogState = previousState;
+    if (previousPending !== undefined) user.pendingModelCatalogSearch = previousPending;
+    throw error;
+  }
+  return true;
+}
+
+async function restoreModelCatalogSession(user, message, userId = user.id) {
+  const saved = user && user.modelCatalogState;
+  if (!saved || typeof saved !== 'object' || Number(saved.expiresAt) <= Date.now()) {
+    if (saved) clearModelCatalogState(user, false, userId);
+    return null;
+  }
+  const messageId = Number(message && message.message_id);
+  const chatId = Number(message && message.chat && message.chat.id);
+  if (!Number.isSafeInteger(messageId) || !Number.isSafeInteger(chatId) ||
+      messageId !== Number(saved.messageId) || chatId !== Number(saved.chatId)) return null;
+
+  const profile = providerProfile(user, user.apiBaseUrl || apiBaseUrl);
+  if (!profile || profile.id !== saved.providerId ||
+      normalizeApiBase(profile.url) !== saved.providerUrl) return null;
+
+  const filters = normalizeSavedModelCatalogFilters(saved.filters);
+  const manualOnly = saved.manualOnly === true || profile.modelsEndpoint === false;
+  let models = [];
+  if (!manualOnly) {
+    const result = await fetchModelCatalogForUser(user, String(saved.query || '').slice(0, 100), filters.sort);
+    models = result.models;
+  }
+  const session = {
+    providerId: profile.id,
+    providerUrl: normalizeApiBase(profile.url),
+    chatId,
+    messageId,
+    models,
+    visibleModels: [],
+    query: String(saved.query || '').slice(0, 100),
+    page: Math.max(0, Math.min(999, Math.round(Number(saved.page) || 0))),
+    filters,
+    selected: null,
+    manualOnly,
+    expiresAt: Date.now() + MODEL_CATALOG_SESSION_TTL
+  };
+  if (saved.selectedModelId && typeof saved.selectedModelId === 'string') {
+    const fallback = models.find((item) => item.id === saved.selectedModelId) ||
+      MODEL_CATALOG.normalizeModel({ id: saved.selectedModelId }, profile.id);
+    session.selected = await fetchModelDetailsForUser(user, saved.selectedModelId, fallback);
+  }
+  prepareModelCatalogView(session);
+  modelCatalogSessions.set(modelCatalogKey(userId), session);
+  trimModelCatalogSessions();
+  saveModelCatalogState(user, session);
+  return session;
+}
+
 function prepareModelCatalogView(session) {
   const source = Array.isArray(session.models) ? session.models : [];
   const filtered = MODEL_CATALOG.filterModels(source, {
@@ -104,7 +214,7 @@ function modelCatalogHomeRich(session, user) {
   } else {
     for (let index = 0; index < popular.length; index += 2) {
       blocks.push(modelCatalogBlocksButtons(popular.slice(index, index + 2).map((model) => {
-        const absoluteIndex = index + popular.indexOf(model);
+        const absoluteIndex = popular.indexOf(model);
         const marker = model.id === currentUserModel(user) ? '✓ ' : '';
         return modelCatalogButton(marker + (model.name || model.id), 'mc:model:' + absoluteIndex);
       })));
@@ -126,6 +236,9 @@ function modelCatalogHomeRich(session, user) {
       session.filters.file || session.filters.audio || session.filters.reasoning || session.filters.tools) {
     blocks.push(modelCatalogBlocksParagraph('Активны фильтры. Найдено моделей: ' + models.length + '.'));
   }
+  blocks.push(modelCatalogBlocksButtons([
+    modelCatalogButton('← Настройки', 'tn:back')
+  ]));
   blocks.push({ type: 'footer', text: 'Данные получены от API выбранного провайдера. Сведения могут отличаться в зависимости от сервиса.' });
   return modelCatalogRich(blocks);
 }
@@ -161,6 +274,7 @@ function modelCatalogResultsRich(session, user) {
     modelCatalogButton('Фильтры', 'mc:filters'),
     modelCatalogButton('К началу', 'mc:home')
   ]));
+  blocks.push(modelCatalogBlocksButtons([modelCatalogButton('← Настройки', 'tn:back')]));
   return modelCatalogRich(blocks);
 }
 
@@ -190,7 +304,8 @@ function modelCatalogFiltersRich(session) {
     ]),
     modelCatalogBlocksHeading('Сортировка', 2),
     modelCatalogBlocksButtons([
-      modelCatalogButton((f.sort === 'popular' ? '✓ ' : '') + 'Популярность', 'mc:sort:popular'),
+      modelCatalogButton((f.sort === 'popular' ? '✓ ' : '') +
+        (session.providerId === 'openrouter' ? 'Популярность' : 'Порядок API'), 'mc:sort:popular'),
       modelCatalogButton((f.sort === 'price' ? '✓ ' : '') + 'Цена', 'mc:sort:price')
     ]),
     modelCatalogBlocksButtons([
@@ -201,7 +316,10 @@ function modelCatalogFiltersRich(session) {
       modelCatalogButton('Сбросить фильтры', 'mc:reset-filters'),
       modelCatalogButton('Показать результаты', 'mc:all', 'primary')
     ]),
-    modelCatalogBlocksButtons([modelCatalogButton('← Назад к каталогу', 'mc:home')])
+    modelCatalogBlocksButtons([
+      modelCatalogButton('← Назад к каталогу', 'mc:home'),
+      modelCatalogButton('Настройки', 'tn:back')
+    ])
   ];
   return modelCatalogRich(blocks);
 }
@@ -256,18 +374,23 @@ function modelCatalogCardRich(model, user, selected = false, note = '') {
       modelCatalogButton('← Назад к моделям', 'mc:all')
     ]));
   }
+  blocks.push(modelCatalogBlocksButtons([modelCatalogButton('← Настройки', 'tn:back')]));
   return modelCatalogRich(blocks);
 }
 
-async function fetchModelCatalogForUser(user, query = '') {
+async function fetchModelCatalogForUser(user, query = '', sort = 'popular') {
   const profile = providerProfile(user, user.apiBaseUrl || apiBaseUrl);
   if (!profile.url) throw new Error('Адрес API-провайдера не настроен.');
   if (profile.modelsEndpoint === false) {
     throw new Error('Этот провайдер не предоставляет список моделей через API. Можно ввести ID модели вручную.');
   }
-  const options = profile.id === 'openrouter'
-    ? { query, sort: query ? 'most-popular' : 'most-popular' }
-    : {};
+  const openRouterSort = ({
+    popular: 'most-popular',
+    price: 'pricing-low-to-high',
+    context: 'context-high-to-low',
+    speed: 'throughput-high-to-low'
+  })[sort] || 'most-popular';
+  const options = profile.id === 'openrouter' ? { query, sort: openRouterSort } : {};
   const request = PROVIDER_ADAPTERS.modelsRequest(profile, user.apiKey, false, options);
   const response = await fetchImpl(request.url, {
     method: 'GET',
@@ -384,7 +507,7 @@ async function openModelCatalog(query, user) {
       throw error;
     }
   }
-  pendingModelCatalogSearches.delete(modelCatalogKey(user.id));
+  clearModelCatalogState(user, true);
   await safeAnswerCallback(query.id, 'Загружаю модели…');
   const message = query && query.message;
   if (!message || !message.chat) return false;
@@ -398,6 +521,7 @@ async function openModelCatalog(query, user) {
   if (profile.modelsEndpoint === false) {
     const session = newModelCatalogSession(user, message.chat.id, Number(message.message_id), [], '');
     session.manualOnly = true;
+    saveModelCatalogState(user, session);
     const rich = modelCatalogRich([
       modelCatalogBlocksHeading('Выбор ИИ', 1),
       modelCatalogBlocksParagraph('Этот провайдер не публикует список моделей через совместимый API. Можно ввести ID модели вручную.'),
@@ -412,6 +536,7 @@ async function openModelCatalog(query, user) {
       { inline_keyboard: [] });
     const result = await fetchModelCatalogForUser(user, '');
     const session = newModelCatalogSession(user, message.chat.id, Number(message.message_id), result.models, '');
+    saveModelCatalogState(user, session);
     await editModelCatalogMessage(session, modelCatalogHomeRich(session, user));
     return true;
   } catch (error) {
@@ -421,19 +546,33 @@ async function openModelCatalog(query, user) {
 }
 
 async function requestModelCatalogSearch(message, user, session, mode = 'search') {
+  saveModelCatalogState(user, session);
   const prompt = await sendTelegramMessage(message.chat.id,
     mode === 'manual'
       ? 'Отправьте ID модели одним сообщением. Для отмены используйте /cancel.'
       : 'Отправьте название или ID модели для поиска. Для отмены используйте /cancel.',
     { reply_markup: { force_reply: true, input_field_placeholder: 'Название или ID модели' } });
-  pendingModelCatalogSearches.set(modelCatalogKey(user.id), {
+  const pending = {
     mode,
-    chatId: message.chat.id,
+    chatId: Number(message.chat.id),
     promptMessageId: Number(prompt && prompt.message_id),
     menuMessageId: Number(session.messageId),
     createdAt: Date.now(),
     expiresAt: Date.now() + MODEL_CATALOG_SEARCH_TTL
-  });
+  };
+  if (!Number.isSafeInteger(pending.promptMessageId)) {
+    throw new Error('Telegram не вернул ID сообщения для поиска.');
+  }
+  const previous = user.pendingModelCatalogSearch;
+  user.pendingModelCatalogSearch = pending;
+  try {
+    store.save();
+  } catch (error) {
+    if (previous === undefined) delete user.pendingModelCatalogSearch;
+    else user.pendingModelCatalogSearch = previous;
+    throw error;
+  }
+  pendingModelCatalogSearches.set(modelCatalogKey(user.id), pending);
   trimModelCatalogSessions();
 }
 
@@ -459,18 +598,36 @@ function selectCatalogModel(user, modelId) {
 }
 
 async function handlePendingModelCatalogReply(message, user, text) {
-  const key = modelCatalogKey(message && message.from && message.from.id);
-  const pending = pendingModelCatalogSearches.get(key);
-  if (!pending) return false;
+  const userId = message && message.from && message.from.id;
+  const key = modelCatalogKey(userId);
+  const pending = pendingModelCatalogSearches.get(key) || user.pendingModelCatalogSearch;
+  if (!pending || Number(pending.chatId) !== Number(message.chat.id)) return false;
   const replyId = message && message.reply_to_message && Number(message.reply_to_message.message_id);
-  if (!replyId || replyId !== pending.promptMessageId) return false;
+  if (!replyId || replyId !== Number(pending.promptMessageId)) return false;
+
   pendingModelCatalogSearches.delete(key);
+  const previousPending = user.pendingModelCatalogSearch;
+  delete user.pendingModelCatalogSearch;
+  try {
+    store.save();
+  } catch (error) {
+    user.pendingModelCatalogSearch = previousPending;
+    pendingModelCatalogSearches.set(key, pending);
+    throw error;
+  }
   if (pending.expiresAt <= Date.now()) {
     await sendText(message.chat.id, 'Поиск устарел. Откройте /settings и нажмите «Модель» ещё раз.');
     return true;
   }
-  const session = getModelCatalogSession(user.id);
-  if (!session || Number(session.messageId) !== pending.menuMessageId ||
+  let session = getModelCatalogSession(userId);
+  if (!session || Number(session.messageId) !== Number(pending.menuMessageId) ||
+      !modelProviderFromSession(user, session)) {
+    session = await restoreModelCatalogSession(user, {
+      message_id: Number(pending.menuMessageId),
+      chat: { id: Number(pending.chatId) }
+    }, userId);
+  }
+  if (!session || Number(session.messageId) !== Number(pending.menuMessageId) ||
       !modelProviderFromSession(user, session)) {
     await sendText(message.chat.id, 'Каталог устарел. Откройте выбор модели заново.');
     return true;
@@ -485,6 +642,7 @@ async function handlePendingModelCatalogReply(message, user, text) {
     try {
       const fallback = MODEL_CATALOG.normalizeModel({ id: modelId }, session.providerId);
       session.selected = await fetchModelDetailsForUser(user, modelId, fallback);
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogCardRich(session.selected, user, false));
     } catch (error) {
       await sendText(message.chat.id, 'Не удалось получить данные модели: ' +
@@ -499,13 +657,13 @@ async function handlePendingModelCatalogReply(message, user, text) {
     return true;
   }
   try {
-    const result = await fetchModelCatalogForUser(user, query);
+    const result = await fetchModelCatalogForUser(user, query, session.filters.sort);
     session.models = result.models;
     session.query = query;
     session.page = 0;
     session.selected = null;
-    session.expiresAt = Date.now() + MODEL_CATALOG_SESSION_TTL;
     prepareModelCatalogView(session);
+    saveModelCatalogState(user, session);
     await editModelCatalogMessage(session, modelCatalogResultsRich(session, user));
   } catch (error) {
     await sendText(message.chat.id, 'Не удалось выполнить поиск: ' +
@@ -520,37 +678,51 @@ async function handleModelCatalogCallback(query, user, data) {
     await safeAnswerCallback(query.id, 'Сообщение каталога недоступно. Откройте выбор модели заново.');
     return true;
   }
-  const session = getModelCatalogSession(user.id);
+
+  // Confirm the click immediately; restoring a sleeping server may need a provider request.
+  await safeAnswerCallback(query.id, 'Открываю каталог…');
+  let session = getModelCatalogSession(user.id);
   if (!session || Number(session.messageId) !== Number(message.message_id) ||
       Number(session.chatId) !== Number(message.chat.id) || !modelProviderFromSession(user, session)) {
-    await safeAnswerCallback(query.id, 'Каталог устарел. Откройте «Модель» в настройках ещё раз.');
+    try {
+      session = await restoreModelCatalogSession(user, message, user.id);
+    } catch (error) {
+      await showModelCatalogError(query, error, user);
+      return true;
+    }
+  }
+  if (!session || Number(session.messageId) !== Number(message.message_id) ||
+      Number(session.chatId) !== Number(message.chat.id) || !modelProviderFromSession(user, session)) {
+    await editTelegramMessage(message.chat.id, message.message_id,
+      'Каталог устарел. Откройте «Модель» в настройках ещё раз.',
+      { inline_keyboard: [[{ text: '↻ Открыть каталог', callback_data: 'tn:model' }]] });
     return true;
   }
 
-  await safeAnswerCallback(query.id);
   try {
     if (data === 'mc:search' || data === 'mc:manual') {
       await requestModelCatalogSearch(message, user, session, data === 'mc:manual' ? 'manual' : 'search');
       return true;
     }
     if (data === 'mc:filters') {
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogFiltersRich(session));
       return true;
     }
     if (data === 'mc:home' || data === 'mc:clear-search') {
       if (data === 'mc:clear-search') {
         session.query = '';
-        if (session.providerId === 'openrouter' && session.models.length === 0) {
-          const result = await fetchModelCatalogForUser(user, '');
-          session.models = result.models;
-        }
+        const result = await fetchModelCatalogForUser(user, '', session.filters.sort);
+        session.models = result.models;
       }
       session.page = 0;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogHomeRich(session, user));
       return true;
     }
     if (data === 'mc:all') {
       session.page = 0;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogResultsRich(session, user));
       return true;
     }
@@ -558,6 +730,7 @@ async function handleModelCatalogCallback(query, user, data) {
     const pageMatch = data.match(/^mc:page:(\d{1,3})$/);
     if (pageMatch) {
       session.page = Number(pageMatch[1]);
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogResultsRich(session, user));
       return true;
     }
@@ -566,6 +739,7 @@ async function handleModelCatalogCallback(query, user, data) {
       const key = toggleMatch[1];
       session.filters[key] = !session.filters[key];
       session.page = 0;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogFiltersRich(session));
       return true;
     }
@@ -574,6 +748,7 @@ async function handleModelCatalogCallback(query, user, data) {
       const value = Number(contextMatch[1]);
       session.filters.minContext = session.filters.minContext === value ? 0 : value;
       session.page = 0;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogFiltersRich(session));
       return true;
     }
@@ -581,6 +756,16 @@ async function handleModelCatalogCallback(query, user, data) {
     if (sortMatch) {
       session.filters.sort = sortMatch[1];
       session.page = 0;
+      if (session.providerId === 'openrouter') {
+        await editModelCatalogMessage(session, modelCatalogRich([
+          modelCatalogBlocksHeading('Обновляю порядок моделей…', 1),
+          modelCatalogBlocksParagraph('Запрашиваю каталог у OpenRouter.')
+        ]));
+        const result = await fetchModelCatalogForUser(user, session.query, session.filters.sort);
+        session.models = result.models;
+      }
+      prepareModelCatalogView(session);
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogFiltersRich(session));
       return true;
     }
@@ -590,6 +775,10 @@ async function handleModelCatalogCallback(query, user, data) {
         reasoning: false, tools: false, sort: 'popular'
       };
       session.page = 0;
+      const result = await fetchModelCatalogForUser(user, session.query, 'popular');
+      session.models = result.models;
+      prepareModelCatalogView(session);
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogFiltersRich(session));
       return true;
     }
@@ -603,6 +792,7 @@ async function handleModelCatalogCallback(query, user, data) {
         return true;
       }
       session.selected = chosen;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogRich([
         modelCatalogBlocksHeading('Получаю информацию о модели…', 1),
         modelCatalogBlocksParagraph(chosen.name || chosen.id),
@@ -610,7 +800,7 @@ async function handleModelCatalogCallback(query, user, data) {
       ]));
       const details = await fetchModelDetailsForUser(user, chosen.id, chosen);
       session.selected = details;
-      session.expiresAt = Date.now() + MODEL_CATALOG_SESSION_TTL;
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogCardRich(details, user, false));
       return true;
     }
@@ -620,6 +810,7 @@ async function handleModelCatalogCallback(query, user, data) {
         return true;
       }
       selectCatalogModel(user, session.selected.id);
+      saveModelCatalogState(user, session);
       await editModelCatalogMessage(session, modelCatalogCardRich(session.selected, user, true,
         'Модель установлена для текущего чата.'));
       return true;

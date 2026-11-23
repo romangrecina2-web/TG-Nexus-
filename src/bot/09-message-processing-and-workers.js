@@ -52,13 +52,18 @@
       }
       const promptPending = !!(user && user.pendingSystemPromptInput);
       const timeoutPending = pendingTimeoutInput.has(inputKey);
-      const modelSearchPending = pendingModelCatalogSearches.has(inputKey);
+      const modelSearchPending = pendingModelCatalogSearches.has(inputKey) ||
+        !!(user && user.pendingModelCatalogSearch);
       pendingModelCatalogSearches.delete(inputKey);
-      if (promptPending) {
-        const previousPending = user.pendingSystemPromptInput;
-        delete user.pendingSystemPromptInput;
+      const previousPrompt = user && user.pendingSystemPromptInput;
+      const previousModelSearch = user && user.pendingModelCatalogSearch;
+      if (user && promptPending) delete user.pendingSystemPromptInput;
+      if (user && modelSearchPending) delete user.pendingModelCatalogSearch;
+      if (user && (promptPending || modelSearchPending)) {
         try { store.save(); } catch (error) {
-          user.pendingSystemPromptInput = previousPending;
+          if (promptPending) user.pendingSystemPromptInput = previousPrompt;
+          if (modelSearchPending) user.pendingModelCatalogSearch = previousModelSearch;
+          if (modelSearchPending) pendingModelCatalogSearches.set(inputKey, previousModelSearch);
           throw error;
         }
       }

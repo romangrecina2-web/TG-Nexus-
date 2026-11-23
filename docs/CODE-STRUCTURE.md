@@ -54,6 +54,7 @@ These fragments are concatenated in filename order into `bot-chat.js`. They shar
 | `08-provider-requests.js` | Provider request construction and error normalization |
 | `09-message-processing-and-workers.js` | Incoming message processing and queued workers |
 | `10-sync-api-and-exports.js` | Mini App sync API and public module exports |
+| `09-model-catalog.js` | Telegram model catalogue, provider search, filters, Rich Message cards and selection |
 | `09-model-catalog.js` | Telegram model catalogue, search, filters, model cards and selection |
 
 ## Existing standalone modules
