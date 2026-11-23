@@ -888,12 +888,11 @@ function createBotChat(options = {}) {
 
   function requestedCodeLanguage(text) {
     const value = String(text || '').normalize('NFKC').replace(/ё/gi, 'е');
-    const formats = '(?:html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)';
     const patterns = [
-      new RegExp('(?:расширени[а-яё]*|розширен[а-яё]*|extension)\\s+(?:с\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
-      new RegExp('(?:формат|format)\\s+(?:файла\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
-      new RegExp('(?:^|\\s)(?:в|во|у|into|to)\\s+(?:(?:расширени|розширен)[а-яё]*\\s+)?\\. ?(' + formats + ')(?=$|[\\s.,!?;:])'.replace('\\. ?', '\\.?'), 'i'),
-      new RegExp('(?:^|\\s)\\.(' + formats + ')(?=$|[\\s.,!?;:])', 'i')
+      /(?:расширени[а-яё]*|розширен[а-яё]*|extension)\s+(?:с\s+)?\.?(html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)(?=$|[\s.,!?;:])/i,
+      /(?:формат|format)\s+(?:файла\s+)?\.?(html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)(?=$|[\s.,!?;:])/i,
+      /(?:^|\s)(?:в|во|у|into|to)\s+(?:(?:расширени|розширен)[а-яё]*\s+)?\.?(html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)(?=$|[\s.,!?;:])/i,
+      /(?:^|\s)\.(html?|css|javascript|typescript|js|mjs|cjs|jsx|tsx|python|py|json|xml|sql|bash|shell|sh|yaml|yml|toml|markdown|md|text|txt|java|cpp|csharp|cs|go|rust|rs|php|ruby|rb|swift|kotlin|kt|powershell|ps1|vue|svelte)(?=$|[\s.,!?;:])/i
     ];
     for (const pattern of patterns) {
       const match = value.match(pattern);
@@ -902,7 +901,7 @@ function createBotChat(options = {}) {
     return '';
   }
 
-  function isCodeArtifactRequest(text) {
+    function isCodeArtifactRequest(text) {
     const value = String(text || '').normalize('NFKC').replace(/ё/gi, 'е');
     const hasAction = /(?:созда|напиш|сгенерир|сдела|зроб|розроб|реализу|реаліз|подготов|підгот|сохран|зберег|исправ|виправ|перепиш|обнов|онов|передел|перероб|перевед|перетвор|преобраз|конверт|експорт|экспорт|выдай|віддай|build|create|write|generate|make|implement|prepare|convert|export|save)/i.test(value);
     const hasArtifact = /(?:код|скрипт|программ|програм|приложен|додат|застосун|игр|гра|сайт|страниц|сторін|бот|плагин|плагін|расширен|розширен|файл|проект|проєкт|code|script|program|app|game|website|page|bot|plugin|extension|file|project)/i.test(value);
