@@ -424,7 +424,7 @@ test('an explicit target extension replaces a conflicting generated filename ext
 
 test('HTML content corrects a model-provided CSS filename even without an explicit conversion request', async () => {
   const tick = String.fromCharCode(96).repeat(3);
-  const answer = 'Файл готов.\\n\\n' + tick + 'css app.css\\n<!doctype html>\\n<html><body><h1>HTML_CONTENT</h1></body></html>\\n' + tick;
+  const answer = 'Файл готов.\n\n' + tick + 'css app.css\n<!doctype html>\n<html><body><h1>HTML_CONTENT</h1></body></html>\n' + tick;
   const ctx = makeBot({ answer });
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Создай простую HTML-страницу и отправь файлом.'));
