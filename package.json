@@ -2,7 +2,7 @@
   "name": "tg-shell-bot-backend",
   "version": "1.1.0",
   "private": true,
-  "description": "Telegram Mini App backend with security hardening",
+  "description": "Telegram AI shell with a GitHub Pages Mini App, multi-provider model catalogue, chat bot and isolated JavaScript sandbox.",
   "main": "server.js",
   "scripts": {
     "start": "npm run build && node server.js",
