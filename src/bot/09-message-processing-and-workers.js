@@ -70,7 +70,7 @@
       return true;
     }
     if (command === 'version') {
-      await sendText(chatId, 'TG Nexus backend build: 2026-11-21-responses-pro-v3. Astra Pro через Responses API; ручной выбор моделей включён.');
+      await sendText(chatId, 'В1 Release');
       return true;
     }
     if (command === 'info') {
