@@ -990,11 +990,31 @@ test('Telegram sandbox switch requires consent, stays offline by default, persis
   assert.equal(offButton.style, 'danger');
 });
 
-test('Telegram settings buttons change the token limit and reasoning level', async () => {
+test('Telegram settings token and reasoning menus render as rich selection cards', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/settings'));
-  await ctx.bot.handleCallbackQuery(callbackQuery('tn:t:4000'));
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:tokens'));
+  const tokenPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(tokenPanel.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Настройки TG Nexus'));
+  assert.ok(tokenPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Текущее значение: 1 200 токенов/.test(block.text)));
+  const tokenButtons = tokenPanel.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons);
+  assert.equal(tokenButtons.find((button) => button.callback_data === 'tn:t:1200').style, 'success');
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:t:4000', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.maxTokens, 4000);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:reason', 123456, 501));
+  const reasoningSelection = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(reasoningSelection.blocks.some((block) =>
+    block.type === 'paragraph' && /Текущее значение: Авто/.test(block.text)));
+  const reasoningButtons = reasoningSelection.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons);
+  assert.equal(reasoningButtons.find((button) => button.callback_data === 'tn:r:auto').style, 'success');
+
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.reasoning, 'high');
   const reasoningPanel = ctx.editedRichMessages.at(-1).richMessage;
@@ -1002,14 +1022,44 @@ test('Telegram settings buttons change the token limit and reasoning level', asy
     block.type === 'paragraph' && /Рассуждения: Высокий/.test(block.text)));
 });
 
+test('Telegram provider chooser renders providers inside the rich settings card', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/settings'));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:providers:0'));
+
+  const panel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(panel.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Настройки TG Nexus'));
+  assert.ok(panel.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Подключение'));
+  assert.ok(panel.blocks.some((block) =>
+    block.type === 'paragraph' && /Страница 1 из/.test(block.text)));
+
+  const buttons = panel.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons);
+  assert.ok(buttons.some((button) => button.callback_data === 'tn:provider:openrouter'));
+  assert.ok(buttons.some((button) => button.callback_data === 'tn:providers:1'));
+  assert.ok(buttons.some((button) => button.callback_data === 'tn:back'));
+});
+
 test('Telegram timeout setting selects and persists the provider response wait', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout'));
-  const timeoutButtons = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard.flat();
+  const timeoutSelectionPanel = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(timeoutSelectionPanel.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Настройки TG Nexus'));
+  assert.ok(timeoutSelectionPanel.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'Параметры ответа'));
+  assert.ok(timeoutSelectionPanel.blocks.some((block) =>
+    block.type === 'paragraph' && /Текущее значение: 120 секунд/.test(block.text)));
+  const timeoutButtons = timeoutSelectionPanel.blocks
+    .filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons);
   assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:300'));
   assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:7200'));
   assert.ok(timeoutButtons.some((button) => button.callback_data === 'tn:timeout:custom'));
+  assert.equal(timeoutButtons.find((button) => button.callback_data === 'tn:timeout:120').style, 'success');
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:300', 123456, 501));
   assert.equal(ctx.bot.getSyncState(123456).settings.requestTimeoutSeconds, 300);
   const timeoutPanel = ctx.editedRichMessages.at(-1).richMessage;
