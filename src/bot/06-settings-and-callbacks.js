@@ -228,6 +228,105 @@
     ]);
   }
 
+
+  function isSettingsSelectionView(view) {
+    return view === 'tokens' || view === 'timeout' || view === 'reasoning' ||
+      /^providers:\\d+$/.test(String(view));
+  }
+
+  function settingsSelectionRichMessage(user, view) {
+    const settings = user.settings || {};
+    const blocks = [modelCatalogBlocksHeading('Настройки TG Nexus', 1)];
+
+    const appendRows = (items, perRow, createButton) => {
+      for (let index = 0; index < items.length; index += perRow) {
+        blocks.push(modelCatalogBlocksButtons(
+          items.slice(index, index + perRow).map(createButton)
+        ));
+      }
+    };
+
+    const appendBack = () => blocks.push(modelCatalogBlocksButtons([
+      modelCatalogButton('← Назад к настройкам', 'tn:back')
+    ]));
+
+    if (view === 'timeout') {
+      const current = currentRequestTimeout(user);
+      const choices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
+      blocks.push(
+        modelCatalogBlocksHeading('Параметры ответа', 2),
+        modelCatalogBlocksParagraph('Время ожидания ответа провайдера'),
+        modelCatalogBlocksParagraph('Текущее значение: ' + current + ' секунд'),
+        modelCatalogBlocksHeading('Выберите новое значение', 3)
+      );
+      appendRows(choices, 3, (value) => modelCatalogButton(
+        (value === current ? '✓ ' : '') + value + ' с',
+        'tn:timeout:' + value,
+        value === current ? 'success' : undefined
+      ));
+      blocks.push(modelCatalogBlocksButtons([
+        modelCatalogButton('✍️ Ввести своё значение', 'tn:timeout:custom')
+      ]));
+      appendBack();
+    } else if (view === 'tokens') {
+      const current = currentTokenLimit(user);
+      blocks.push(
+        modelCatalogBlocksHeading('Параметры ответа', 2),
+        modelCatalogBlocksParagraph('Лимит ответа'),
+        modelCatalogBlocksParagraph('Текущее значение: ' + current.toLocaleString('ru-RU') + ' токенов'),
+        modelCatalogBlocksHeading('Выберите лимит', 3)
+      );
+      appendRows(tokenPresets, 3, (value) => modelCatalogButton(
+        (value === current ? '✓ ' : '') + value.toLocaleString('ru-RU'),
+        'tn:t:' + value,
+        value === current ? 'success' : undefined
+      ));
+      appendBack();
+    } else if (view === 'reasoning') {
+      const current = settings.reasoning || 'auto';
+      blocks.push(
+        modelCatalogBlocksHeading('Параметры ответа', 2),
+        modelCatalogBlocksParagraph('Уровень рассуждений'),
+        modelCatalogBlocksParagraph('Текущее значение: ' + (reasoningLabels[current] || 'Авто')),
+        modelCatalogBlocksHeading('Выберите уровень', 3)
+      );
+      appendRows(reasoningChoices, 2, (value) => modelCatalogButton(
+        (value === current ? '✓ ' : '') + reasoningLabels[value],
+        'tn:r:' + value,
+        value === current ? 'success' : undefined
+      ));
+      appendBack();
+    } else {
+      const match = String(view).match(/^providers:(\\d+)$/);
+      const pageCount = Math.max(1, Math.ceil(PROVIDER_CATALOG.length / 10));
+      const page = Math.max(0, Math.min(pageCount - 1, Number(match && match[1]) || 0));
+      const current = currentProvider(user);
+      const providers = PROVIDER_CATALOG.slice(page * 10, page * 10 + 10);
+      blocks.push(
+        modelCatalogBlocksHeading('Подключение', 2),
+        modelCatalogBlocksParagraph('Текущий провайдер: ' + currentProviderName(user)),
+        modelCatalogBlocksParagraph('Выберите API-провайдера · Страница ' + (page + 1) + ' из ' + pageCount),
+        modelCatalogBlocksHeading('Доступные провайдеры', 3)
+      );
+      appendRows(providers, 2, (provider) => {
+        const selected = current && current.id === provider.id;
+        return modelCatalogButton(
+          (selected ? '✓ ' : '') + provider.name,
+          'tn:provider:' + provider.id,
+          selected ? 'success' : undefined
+        );
+      });
+      const navigation = [];
+      if (page > 0) navigation.push(modelCatalogButton('← Предыдущие', 'tn:providers:' + (page - 1)));
+      if (page + 1 < pageCount) navigation.push(modelCatalogButton('Следующие →', 'tn:providers:' + (page + 1)));
+      if (navigation.length) blocks.push(modelCatalogBlocksButtons(navigation));
+      blocks.push(modelCatalogBlocksParagraph('При смене провайдера прежний API-ключ и модель могут быть сброшены.'));
+      appendBack();
+    }
+
+    return modelCatalogRich(blocks);
+  }
+
   function settingsKeyboard(user, view = 'main') {
     if (view === 'system-prompt') {
       return {
@@ -369,6 +468,13 @@
           message.chat.id,
           message.message_id,
           settingsRichMessage(user),
+          settingsMainReplyMarkup()
+        );
+      } else if (isSettingsSelectionView(view)) {
+        await editTelegramRichMessage(
+          message.chat.id,
+          message.message_id,
+          settingsSelectionRichMessage(user, view),
           settingsMainReplyMarkup()
         );
       } else {
