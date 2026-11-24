@@ -2,6 +2,7 @@
  * Source: src/bot/*.js
  * Rebuild with: npm run build
  */
+
 'use strict';
 
 const crypto = require('node:crypto');
@@ -1318,7 +1319,7 @@ function createBotChat(options = {}) {
 
   function isSettingsSelectionView(view) {
     return view === 'tokens' || view === 'timeout' || view === 'reasoning' ||
-      /^providers:\\d+$/.test(String(view));
+      /^providers:\d+$/.test(String(view));
   }
 
   function settingsSelectionRichMessage(user, view) {
