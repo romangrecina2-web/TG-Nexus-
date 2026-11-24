@@ -231,7 +231,7 @@
 
   function isSettingsSelectionView(view) {
     return view === 'tokens' || view === 'timeout' || view === 'reasoning' ||
-      /^providers:\\d+$/.test(String(view));
+      /^providers:\d+$/.test(String(view));
   }
 
   function settingsSelectionRichMessage(user, view) {
