@@ -999,7 +999,7 @@ test('Telegram settings token and reasoning menus render as rich selection cards
   assert.ok(tokenPanel.blocks.some((block) =>
     block.type === 'heading' && block.text === 'Настройки TG Nexus'));
   assert.ok(tokenPanel.blocks.some((block) =>
-    block.type === 'paragraph' && block.text.replace(/\\s/g, '').includes('Текущее значение:1200токенов')));
+    block.type === 'paragraph' && block.text.replace(/\s/g, '').includes('Текущее значение:1200токенов')));
   const tokenButtons = tokenPanel.blocks.filter((block) => block.type === 'buttons')
     .flatMap((block) => block.buttons);
   assert.equal(tokenButtons.find((button) => button.callback_data === 'tn:t:1200').style, 'success');
