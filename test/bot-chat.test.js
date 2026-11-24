@@ -999,7 +999,7 @@ test('Telegram settings token and reasoning menus render as rich selection cards
   assert.ok(tokenPanel.blocks.some((block) =>
     block.type === 'heading' && block.text === 'Настройки TG Nexus'));
   assert.ok(tokenPanel.blocks.some((block) =>
-    block.type === 'paragraph' && block.text.replace(/\s/g, '').includes('Текущее значение:1200токенов')));
+    block.type === 'paragraph' && block.text.replace(/\s/g, '').includes('Текущеезначение:1200токенов')));
   const tokenButtons = tokenPanel.blocks.filter((block) => block.type === 'buttons')
     .flatMap((block) => block.buttons);
   assert.equal(tokenButtons.find((button) => button.callback_data === 'tn:t:1200').style, 'success');
@@ -1234,13 +1234,16 @@ test('/provider switches endpoint and clears a key and model from the previous p
   assert.match(ctx.sent.at(-1).text, /Старый ключ сброшен/);
 });
 
-test('provider settings keyboard pages through the catalog and changes endpoint', async () => {
+test('provider settings card pages through the catalog and changes endpoint', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:providers:0'));
-  assert.match(ctx.editedMessages.at(-1).text, /Выберите API-провайдера/);
-  const rows = ctx.editedMessages.at(-1).replyMarkup.inline_keyboard;
-  assert.ok(rows.flat().some((button) => button.callback_data === 'tn:provider:openrouter'));
+  const selection = ctx.editedRichMessages.at(-1).richMessage;
+  assert.ok(selection.blocks.some((block) =>
+    block.type === 'paragraph' && /Выберите API-провайдера/.test(block.text)));
+  const buttons = selection.blocks.filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons);
+  assert.ok(buttons.some((button) => button.callback_data === 'tn:provider:openrouter'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:provider:groq', 123456, 501));
   const user = ctx.bot.store.getUser(123456);
   assert.equal(user.apiBaseUrl, 'https://api.groq.com/openai/v1');
