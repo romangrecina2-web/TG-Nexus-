@@ -1385,7 +1385,7 @@ function createBotChat(options = {}) {
       ));
       appendBack();
     } else {
-      const match = String(view).match(/^providers:(\\d+)$/);
+      const match = String(view).match(/^providers:(\d+)$/);
       const pageCount = Math.max(1, Math.ceil(PROVIDER_CATALOG.length / 10));
       const page = Math.max(0, Math.min(pageCount - 1, Number(match && match[1]) || 0));
       const current = currentProvider(user);
