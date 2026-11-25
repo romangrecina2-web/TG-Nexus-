@@ -11,6 +11,7 @@ function createBotChat(options = {}) {
   const fetchImpl = options.fetchImpl || global.fetch;
   const rawSendTelegramMessage = options.sendTelegramMessage || defaultSendTelegramMessage;
   const rawSendTelegramDocument = options.sendTelegramDocument || defaultSendTelegramDocument;
+  const rawSendTelegramRichMessage = options.sendTelegramRichMessage || defaultSendTelegramRichMessage;
   const deleteTelegramMessage = options.deleteTelegramMessage || defaultDeleteTelegramMessage;
   const store = options.store || createEncryptedStore({
     encryptionKey: options.encryptionKey || process.env.BOT_DATA_ENCRYPTION_KEY,
@@ -35,6 +36,28 @@ function createBotChat(options = {}) {
       if (isTelegramHtmlParseError(error)) {
         store.discardOutbox(context.updateId, queued.index);
       }
+      error.telegramDeliveryFailure = true;
+      throw error;
+    }
+    store.markOutboxDelivered(context.updateId, queued.index);
+    return sent;
+  }
+
+  async function sendTelegramRichMessage(chatId, richMessage, sendOptions = {}) {
+    const context = updateContext.getStore();
+    if (!context || !Number.isSafeInteger(context.updateId)) {
+      return rawSendTelegramRichMessage(chatId, richMessage, sendOptions);
+    }
+    const queued = store.appendOutbox(context.updateId, {
+      chatId,
+      kind: 'rich_message',
+      richMessage,
+      options: sendOptions
+    });
+    let sent;
+    try {
+      sent = await rawSendTelegramRichMessage(chatId, richMessage, sendOptions);
+    } catch (error) {
       error.telegramDeliveryFailure = true;
       throw error;
     }
@@ -68,6 +91,14 @@ function createBotChat(options = {}) {
 
   async function defaultSendTelegramMessage(chatId, text, sendOptions = {}) {
     return telegramRequest('sendMessage', { chat_id: chatId, text, ...sendOptions });
+  }
+
+  async function defaultSendTelegramRichMessage(chatId, richMessage, sendOptions = {}) {
+    return telegramRequest('sendRichMessage', {
+      chat_id: chatId,
+      rich_message: richMessage,
+      ...sendOptions
+    });
   }
 
   async function defaultSendTelegramDocument(chatId, document) {
