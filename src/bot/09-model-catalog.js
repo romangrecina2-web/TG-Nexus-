@@ -9,6 +9,19 @@ function modelCatalogKey(userId) {
   return String(userId);
 }
 
+function looksLikeApiKey(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate || candidate.length > 2_048 || /\s/.test(candidate)) return false;
+  return [
+    /^sk-(?:or-v1-|ant-api\d+-|proj-)?[a-z0-9_-]{12,}$/i,
+    /^gsk_[a-z0-9_-]{16,}$/i,
+    /^AIza[a-z0-9_-]{20,}$/i,
+    /^xai-[a-z0-9_-]{16,}$/i,
+    /^pplx-[a-z0-9_-]{16,}$/i,
+    /^voyage-[a-z0-9_-]{16,}$/i
+  ].some((pattern) => pattern.test(candidate));
+}
+
 function getModelCatalogSession(userId) {
   const key = modelCatalogKey(userId);
   const session = modelCatalogSessions.get(key);
@@ -558,15 +571,21 @@ async function openModelCatalog(query, user) {
   }
 }
 
-async function requestModelCatalogSearch(message, user, session, mode = 'search') {
+async function requestModelCatalogSearch(message, user, session, mode = 'search', promptOverride = '') {
   saveModelCatalogState(user, session);
-  const prompt = await sendTelegramMessage(message.chat.id,
+  const promptText = promptOverride || (
     mode === 'manual'
       ? 'Отправьте ID модели одним сообщением. Для отмены используйте /cancel.'
       : mode === 'key'
         ? 'Отправьте API-ключ выбранного провайдера ответом на это сообщение. Ключ будет удалён после получения. Для отмены используйте /cancel.'
-        : 'Отправьте название или ID модели для поиска. Для отмены используйте /cancel.',
-    { reply_markup: { force_reply: true, input_field_placeholder: mode === 'key' ? 'API-ключ' : 'Название или ID модели' } });
+        : 'Отправьте название или ID модели для поиска. Для отмены используйте /cancel.'
+  );
+  const prompt = await sendTelegramMessage(message.chat.id, promptText, {
+    reply_markup: {
+      force_reply: true,
+      input_field_placeholder: mode === 'key' ? 'API-ключ' : mode === 'manual' ? 'ID модели' : 'Название или ID модели'
+    }
+  });
   const pending = {
     mode,
     chatId: Number(message.chat.id),
@@ -709,6 +728,25 @@ async function handlePendingModelCatalogReply(message, user, text) {
 
   if (pending.mode === 'manual') {
     const modelId = String(text || '').trim();
+    if (looksLikeApiKey(modelId)) {
+      try {
+        await deleteTelegramMessage(message.chat.id, message.message_id);
+      } catch {
+        await sendText(message.chat.id,
+          'Похоже, вы отправили API-ключ, а не ID модели. Telegram не подтвердил удаление сообщения, поэтому я не буду обрабатывать или сохранять его. Удалите сообщение вручную и повторите ввод через кнопку «Ввести ID модели вручную».');
+        return true;
+      }
+
+      await requestModelCatalogSearch(
+        message,
+        user,
+        session,
+        'manual',
+        'Похоже, вы отправили API-ключ, а не ID модели. Мне нужен именно ID модели (обычно в формате provider/model). API-ключ используется отдельно для подключения к провайдеру. Отправьте ID модели ответом на это сообщение.'
+      );
+      return true;
+    }
+
     if (!modelId || modelId.length > 256 || /\s/.test(modelId)) {
       await sendText(message.chat.id, 'ID модели должен быть одной строкой без пробелов. Повторите ввод через кнопку каталога.');
       return true;
