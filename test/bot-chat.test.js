@@ -1530,7 +1530,7 @@ test('model catalogue detects an API key entered where a manual model ID is requ
   const user = ctx.bot.store.getUser(userId);
   assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === 931));
   assert.match(ctx.sent.at(-1).text, /API-ключ, а не ID модели/);
-  assert.match(ctx.sent.at(-1).text, /provider\\/model/);
+  assert.ok(ctx.sent.at(-1).text.includes('provider/model'));
   assert.equal(user.apiKey, 'configured-provider-key');
   assert.notEqual(user.modelCatalogState.selectedModelId, accidentalKey);
   assert.notEqual(user.model, accidentalKey);
