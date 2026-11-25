@@ -411,6 +411,16 @@ async function handleStart(message, targetBot = botChat) {
 async function processTelegramUpdate(update, targetBot = botChat) {
   const callbackQuery = update && update.callback_query;
   if (callbackQuery) {
+    const callbackData = typeof callbackQuery.data === 'string' ? callbackQuery.data : '';
+    const callbackUserId = callbackQuery.from && callbackQuery.from.id;
+    if (!callbackData.startsWith('terms:') && !hasAcceptedTerms(targetBot, callbackUserId)) {
+      const callbackMessage = callbackQuery.message;
+      await handleStart({
+        chat: callbackMessage && callbackMessage.chat,
+        from: callbackQuery.from
+      }, targetBot);
+      return;
+    }
     if (targetBot && typeof targetBot.handleCallbackQuery === 'function') {
       await targetBot.handleCallbackQuery(callbackQuery);
     }
