@@ -198,7 +198,8 @@ function createEncryptedStore(options = {}) {
     const index = item.outbox.length;
     const entry = {
       chatId: message.chatId,
-      kind: message.kind === 'document' ? 'document' : 'message',
+      kind: message.kind === 'document' ? 'document' :
+        (message.kind === 'rich_message' ? 'rich_message' : 'message'),
       text: String(message.text == null ? '' : message.text),
       options: message.options || {},
       status: 'pending',
@@ -209,6 +210,12 @@ function createEncryptedStore(options = {}) {
       entry.mimeType = String(message.mimeType || 'text/plain; charset=utf-8').slice(0, 100);
       entry.caption = String(message.caption || '').slice(0, 900);
       entry.contentBase64 = String(message.contentBase64 || '');
+    } else if (entry.kind === 'rich_message') {
+      if (!message.richMessage || typeof message.richMessage !== 'object' ||
+          Array.isArray(message.richMessage)) {
+        throw new TypeError('A valid Telegram Rich Message is required.');
+      }
+      entry.richMessage = message.richMessage;
     }
     item.outbox.push(entry);
     save();
