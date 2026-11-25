@@ -1085,7 +1085,20 @@ function createBotChat(options = {}) {
     xhigh: 'Максимальный'
   };
 
-  function getSettingsUrl() {
+  const REQUIRED_TERMS_VERSION = '2026-11-25-v1';
+const TERMS_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
+
+function getTermsAcceptedAppUrl() {
+  const value = String(options.webAppUrl || process.env.WEB_APP_URL || '');
+  try {
+    const target = new URL(value);
+    return target.protocol === 'https:' ? target.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+function getSettingsUrl() {
     let value = options.webAppUrl || process.env.WEB_APP_URL || '';
     try {
       const target = new URL(value);
@@ -1585,7 +1598,8 @@ function createBotChat(options = {}) {
 
   async function handleCallbackQuery(query) {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
-        (!query.data.startsWith('tn:') && !query.data.startsWith('mc:'))) return false;
+        (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
+         !query.data.startsWith('terms:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -1609,6 +1623,61 @@ function createBotChat(options = {}) {
     }
 
     const data = query.data;
+    const termsMatch = data.match(/^terms:(accept|decline):([A-Za-z0-9._-]{1,40})$/);
+    if (data.startsWith('terms:')) {
+      if (!termsMatch || termsMatch[2] !== REQUIRED_TERMS_VERSION) {
+        await safeAnswerCallback(query.id, 'This consent button is outdated. Send /start to get the current version.');
+        return true;
+      }
+      if (termsMatch[1] === 'decline') {
+        await safeAnswerCallback(query.id, 'You declined the current terms.');
+        await sendTelegramMessage(message.chat.id,
+          'Access to TG Next is not enabled because the Terms of Service and Privacy Policy were declined. You can review them and send /start again.');
+        return true;
+      }
+
+      const previousVersion = user.termsAcceptedVersion;
+      const previousAcceptedAt = user.termsAcceptedAt;
+      user.termsAcceptedVersion = REQUIRED_TERMS_VERSION;
+      if (previousVersion !== REQUIRED_TERMS_VERSION || !previousAcceptedAt) {
+        user.termsAcceptedAt = new Date().toISOString();
+      }
+      try {
+        store.save();
+      } catch {
+        if (previousVersion === undefined) delete user.termsAcceptedVersion;
+        else user.termsAcceptedVersion = previousVersion;
+        if (previousAcceptedAt === undefined) delete user.termsAcceptedAt;
+        else user.termsAcceptedAt = previousAcceptedAt;
+        await safeAnswerCallback(query.id, 'Could not save your acceptance. Please try again.');
+        return true;
+      }
+
+      await safeAnswerCallback(query.id, 'Acceptance saved.');
+      const rows = [];
+      const appUrl = getTermsAcceptedAppUrl();
+      if (appUrl) rows.push([{ text: 'Open TG Next', web_app: { url: appUrl } }]);
+      rows.push([{ text: '📩 Support: Nexus Telegram Channel', url: TERMS_SUPPORT_URL }]);
+      await sendTelegramMessage(message.chat.id, [
+        '<b>Terms accepted!</b>',
+        '',
+        'Welcome to TG Next. Your acceptance has been saved.',
+        '',
+        `📩 Support: <a href="${TERMS_SUPPORT_URL}">Nexus Telegram Channel</a>`,
+        '',
+        '<b>Created by Mr tet0r</b>'
+      ].join('\n'), {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: rows }
+      });
+      return true;
+    }
+
+    if (user.termsAcceptedVersion !== REQUIRED_TERMS_VERSION) {
+      await safeAnswerCallback(query.id, 'Please accept the current terms first. Send /start.');
+      return true;
+    }
+
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
