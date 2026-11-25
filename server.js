@@ -349,13 +349,13 @@ async function handleStart(message, targetBot = botChat) {
   if (hasAcceptedTerms(targetBot, message.from.id)) {
     const acceptedRichMessage = {
       blocks: [
-        { type: 'heading', text: 'Welcome back to TG Next!', size: 1 },
+        { type: 'heading', text: 'Welcome back to TG Nexus!', size: 1 },
         { type: 'paragraph', text: 'Your current Terms of Service and Privacy Policy are accepted.' },
         { type: 'paragraph', text: 'Open your AI workspace using the button below.' },
         {
           type: 'buttons',
           align: 'center',
-          buttons: [{ text: 'Open TG Next', web_app: { url: WEB_APP_URL }, style: 'success' }]
+          buttons: [{ text: 'Open TG Nexus', web_app: { url: WEB_APP_URL }, style: 'success' }]
         },
         {
           type: 'paragraph',
@@ -372,7 +372,7 @@ async function handleStart(message, targetBot = botChat) {
       return;
     }
     const welcome = [
-      '<b>Welcome back to TG Next!</b>',
+      '<b>Welcome back to TG Nexus!</b>',
       '',
       'Your current Terms of Service and Privacy Policy are accepted.',
       'Open your AI workspace using the button below.',
@@ -385,7 +385,7 @@ async function handleStart(message, targetBot = botChat) {
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [[
-          { text: 'Open TG Next', web_app: { url: WEB_APP_URL } }
+          { text: 'Open TG Nexus', web_app: { url: WEB_APP_URL } }
         ]]
       }
     });
@@ -394,9 +394,9 @@ async function handleStart(message, targetBot = botChat) {
 
   const richMessage = {
     blocks: [
-      { type: 'heading', text: 'Welcome to TG Next!', size: 1 },
+      { type: 'heading', text: 'Welcome to TG Nexus!', size: 1 },
       { type: 'paragraph', text: 'Your AI workspace is ready.' },
-      { type: 'paragraph', text: 'Before using TG Next, please review and accept the documents below.' },
+      { type: 'paragraph', text: 'Before using TG Nexus, please review and accept the documents below.' },
       {
         type: 'buttons',
         align: 'center',
@@ -455,11 +455,11 @@ async function handleStart(message, targetBot = botChat) {
   }
 
   const text = [
-    '<b>Welcome to TG Next!</b>',
+    '<b>Welcome to TG Nexus!</b>',
     '',
     'Your AI workspace is ready.',
     '',
-    'Before using TG Next, please review and accept the documents below.',
+    'Before using TG Nexus, please review and accept the documents below.',
     '',
     `📄 <a href="${TERMS_URL}">Terms of Service</a>`,
     `🔒 <a href="${PRIVACY_URL}">Privacy Policy</a>`,
@@ -523,7 +523,7 @@ async function processTelegramUpdate(update, targetBot = botChat) {
   if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
       message.chat && message.chat.type === 'private') {
     await targetBot.sendMessage(message.chat.id,
-      'Use the Mini App to open TG Next. For help, contact the Nexus Telegram Channel.');
+      'Use the Mini App to open TG Nexus. For help, contact the Nexus Telegram Channel.');
     return;
   }
   await targetBot.handleMessage(message);

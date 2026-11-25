@@ -349,7 +349,7 @@ test('/start embeds document and consent buttons inside one Rich Message', async
 
   assert.equal(sent.length, 1);
   const blocks = sent[0].richMessage.blocks;
-  assert.equal(blocks[0].text, 'Welcome to TG Next!');
+  assert.equal(blocks[0].text, 'Welcome to TG Nexus!');
   const buttonRows = blocks.filter((block) => block.type === 'buttons');
   assert.deepEqual(buttonRows[0].buttons.map((button) => button.text), [
     'Terms of Service',

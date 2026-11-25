@@ -545,7 +545,7 @@ function getSettingsUrl() {
       if (termsMatch[1] === 'decline') {
         await safeAnswerCallback(query.id, 'You declined the current terms.');
         await sendTelegramMessage(message.chat.id,
-          'Access to TG Next is not enabled because the Terms of Service and Privacy Policy were declined. You can review them and send /start again.');
+          'Access to TG Nexus is not enabled because the Terms of Service and Privacy Policy were declined. You can review them and send /start again.');
         return true;
       }
 
@@ -569,12 +569,12 @@ function getSettingsUrl() {
       await safeAnswerCallback(query.id, 'Acceptance saved.');
       const rows = [];
       const appUrl = getTermsAcceptedAppUrl();
-      if (appUrl) rows.push([{ text: 'Open TG Next', web_app: { url: appUrl } }]);
+      if (appUrl) rows.push([{ text: 'Open TG Nexus', web_app: { url: appUrl } }]);
       rows.push([{ text: '📩 Support: Nexus Telegram Channel', url: TERMS_SUPPORT_URL }]);
       await sendTelegramMessage(message.chat.id, [
         '<b>Terms accepted!</b>',
         '',
-        'Welcome to TG Next. Your acceptance has been saved.',
+        'Welcome to TG Nexus. Your acceptance has been saved.',
         '',
         `📩 Support: <a href="${TERMS_SUPPORT_URL}">Nexus Telegram Channel</a>`,
         '',
