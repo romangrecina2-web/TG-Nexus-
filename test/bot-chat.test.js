@@ -1514,7 +1514,7 @@ test('encrypted outbox persists Rich Messages and their buttons across reloads',
 test('model catalogue detects an API key entered where a manual model ID is requested', async () => {
   const ctx = makeBot();
   const userId = 777130;
-  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleMessage(message('/settings', userId, 929));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 930));
   await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 930));
 
@@ -1531,7 +1531,7 @@ test('model catalogue detects an API key entered where a manual model ID is requ
   assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === 931));
   assert.match(ctx.sent.at(-1).text, /API-ключ, а не ID модели/);
   assert.ok(ctx.sent.at(-1).text.includes('provider/model'));
-  assert.equal(user.apiKey, 'configured-provider-key');
+  assert.equal(user.apiKey, '');
   assert.notEqual(user.modelCatalogState.selectedModelId, accidentalKey);
   assert.notEqual(user.model, accidentalKey);
   assert.equal(ctx.providerCalls.length, callsBeforeReply);
@@ -1542,7 +1542,7 @@ test('model catalogue detects an API key entered where a manual model ID is requ
 test('model catalogue does not process a key-like value if Telegram cannot delete the message', async () => {
   const ctx = makeBot({ deleteTelegramMessageError: true });
   const userId = 777131;
-  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleMessage(message('/settings', userId, 939));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 940));
   await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 940));
 
@@ -1556,7 +1556,7 @@ test('model catalogue does not process a key-like value if Telegram cannot delet
 
   const user = ctx.bot.store.getUser(userId);
   assert.match(ctx.sent.at(-1).text, /не буду обрабатывать или сохранять/);
-  assert.equal(user.apiKey, 'configured-provider-key');
+  assert.equal(user.apiKey, '');
   assert.notEqual(user.modelCatalogState.selectedModelId, accidentalKey);
   assert.notEqual(user.model, accidentalKey);
   assert.equal(user.pendingModelCatalogSearch, undefined);
@@ -1566,7 +1566,7 @@ test('model catalogue does not process a key-like value if Telegram cannot delet
 test('manual model catalogue entry still accepts a normal provider/model ID', async () => {
   const ctx = makeBot();
   const userId = 777132;
-  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleMessage(message('/settings', userId, 949));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 950));
   await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 950));
 
