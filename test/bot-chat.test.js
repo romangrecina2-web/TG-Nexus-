@@ -50,6 +50,7 @@ function callbackQuery(data, userId = 123456, messageId = 500) {
 function makeBot(options = {}) {
   const dir = options.dir || tempDir();
   const sent = [];
+  const richMessages = [];
   const documents = [];
   const actions = [];
   const providerCalls = [];
@@ -86,6 +87,18 @@ function makeBot(options = {}) {
     encryptionKey: 'ab'.repeat(32),
     dataDir: dir,
     fetchImpl,
+    sendTelegramRichMessage: async (chatId, richMessage, sendOptions) => {
+      const record = {
+        chatId,
+        richMessage,
+        options: sendOptions || {},
+        message_id: richMessages.length + 1
+      };
+      richMessages.push(record);
+      events.push({ type: 'rich_send', options: sendOptions || {} });
+      if (options.failRichSends) throw new Error('Telegram rich message delivery failed');
+      return record;
+    },
     sendTelegramDocument: async (chatId, document) => {
       const record = { chatId, ...document, message_id: documents.length + 1 };
       documents.push(record);
@@ -117,7 +130,7 @@ function makeBot(options = {}) {
       editedRichMessages.push({ chatId, messageId, richMessage, replyMarkup });
     }
   });
-  return { bot, dir, sent, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages, editedRichMessages };
+  return { bot, dir, sent, richMessages, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages, editedRichMessages };
 }
 
 test('API endpoint must be HTTPS and cannot contain credentials or query parameters', () => {
@@ -1448,4 +1461,51 @@ test('model card can be reopened after backend restart by re-fetching provider d
   assert.ok(card.blocks.some((block) => block.type === 'heading' && block.text === 'Model B'));
   assert.ok(card.blocks.some((block) => block.type === 'paragraph' && block.text === 'B description'));
   assert.equal(restarted.bot.store.getUser(userId).modelCatalogState.selectedModelId, 'test/model-b');
+});
+
+
+test('sendRichMessage sends a Telegram Rich Message with in-message buttons', async () => {
+  const ctx = makeBot();
+  const richMessage = {
+    blocks: [{
+      type: 'buttons',
+      buttons: [
+        { text: 'Accept', callback_data: 'terms:accept:test', style: 'success' },
+        { text: 'Decline', callback_data: 'terms:decline:test', style: 'danger' }
+      ]
+    }]
+  };
+  await ctx.bot.sendRichMessage(123456, richMessage);
+  assert.equal(ctx.richMessages.length, 1);
+  assert.deepEqual(ctx.richMessages[0].richMessage, richMessage);
+  assert.equal(ctx.events.at(-1).type, 'rich_send');
+});
+
+test('encrypted outbox persists Rich Messages and their buttons across reloads', () => {
+  const dir = tempDir();
+  const key = 'ef'.repeat(32);
+  const first = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  first.enqueueUpdate({
+    update_id: 8901,
+    message: {
+      text: '/start',
+      chat: { id: 123456, type: 'private' },
+      from: { id: 123456, is_bot: false }
+    }
+  });
+  first.claimNextUpdate();
+
+  const richMessage = {
+    blocks: [{
+      type: 'buttons',
+      buttons: [{ text: 'Accept & Continue', callback_data: 'terms:accept:test', style: 'success' }]
+    }]
+  };
+  first.appendOutbox(8901, { chatId: 123456, kind: 'rich_message', richMessage });
+
+  const restarted = createEncryptedStore({ dataDir: dir, encryptionKey: key });
+  const pending = restarted.getOutboxState(8901).pending;
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].kind, 'rich_message');
+  assert.deepEqual(pending[0].richMessage, richMessage);
 });
