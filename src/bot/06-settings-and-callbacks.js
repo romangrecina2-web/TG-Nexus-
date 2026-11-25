@@ -586,11 +586,6 @@ function getSettingsUrl() {
       return true;
     }
 
-    if (user.termsAcceptedVersion !== REQUIRED_TERMS_VERSION) {
-      await safeAnswerCallback(query.id, 'Please accept the current terms first. Send /start.');
-      return true;
-    }
-
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
