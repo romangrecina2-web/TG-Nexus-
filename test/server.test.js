@@ -325,3 +325,60 @@ test('sync endpoint blocks browser origins outside the configured Mini App origi
     assert.equal(result.body.ok, false);
   });
 });
+
+
+test('/start shows the English agreement screen with document and Nexus support links', async () => {
+  const user = {};
+  const sent = [];
+  const bot = {
+    store: { enabled: true, getUser: () => user },
+    async sendMessage(chatId, text, options) { sent.push({ chatId, text, options }); }
+  };
+  await processTelegramUpdate({
+    message: {
+      message_id: 90,
+      text: '/start',
+      chat: { id: 123456, type: 'private' },
+      from: { id: 123456, is_bot: false }
+    }
+  }, bot);
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Welcome to TG Next/);
+  assert.match(sent[0].text, /Created by Mr tet0r/);
+  assert.match(sent[0].text, /Nexus Telegram Channel/);
+  assert.match(sent[0].text, /https:\/\/t\.me\/TG_Nexus_official/);
+  const keyboard = sent[0].options.reply_markup.inline_keyboard;
+  assert.equal(keyboard[0][0].text, 'Terms of Service');
+  assert.match(keyboard[0][0].url, /terms\.html$/);
+  assert.equal(keyboard[0][1].text, 'Privacy Policy');
+  assert.match(keyboard[0][1].url, /privacy\.html$/);
+  assert.equal(keyboard[1][0].callback_data, 'terms:accept:2026-11-25-v1');
+  assert.equal(keyboard[2][0].callback_data, 'terms:decline:2026-11-25-v1');
+});
+
+test('private bot messages remain blocked until the current terms version is accepted', async () => {
+  const user = {};
+  const sent = [];
+  const handled = [];
+  const bot = {
+    store: { enabled: true, getUser: () => user },
+    async sendMessage(chatId, text, options) { sent.push({ chatId, text, options }); },
+    async handleMessage(message) { handled.push(message); }
+  };
+  const message = {
+    message_id: 91,
+    text: 'Hello',
+    chat: { id: 123456, type: 'private' },
+    from: { id: 123456, is_bot: false }
+  };
+
+  await processTelegramUpdate({ message }, bot);
+  assert.equal(handled.length, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Terms of Service/);
+
+  user.termsAcceptedVersion = '2026-11-25-v1';
+  await processTelegramUpdate({ message: { ...message, message_id: 92 } }, bot);
+  assert.equal(handled.length, 1);
+});
