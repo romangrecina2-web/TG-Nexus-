@@ -1509,3 +1509,74 @@ test('encrypted outbox persists Rich Messages and their buttons across reloads',
   assert.equal(pending[0].kind, 'rich_message');
   assert.deepEqual(pending[0].richMessage, richMessage);
 });
+
+
+test('model catalogue detects an API key entered where a manual model ID is requested', async () => {
+  const ctx = makeBot();
+  const userId = 777130;
+  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 930));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 930));
+
+  const firstPrompt = ctx.sent.at(-1);
+  assert.equal(firstPrompt.options.reply_markup.input_field_placeholder, 'ID модели');
+  const accidentalKey = 'sk-or-v1-' + 'a'.repeat(48);
+  const reply = message(accidentalKey, userId, 931);
+  reply.reply_to_message = { message_id: firstPrompt.message_id };
+  const callsBeforeReply = ctx.providerCalls.length;
+
+  await ctx.bot.handleMessage(reply);
+
+  const user = ctx.bot.store.getUser(userId);
+  assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === 931));
+  assert.match(ctx.sent.at(-1).text, /API-ключ, а не ID модели/);
+  assert.match(ctx.sent.at(-1).text, /provider\\/model/);
+  assert.equal(user.apiKey, 'configured-provider-key');
+  assert.notEqual(user.modelCatalogState.selectedModelId, accidentalKey);
+  assert.notEqual(user.model, accidentalKey);
+  assert.equal(ctx.providerCalls.length, callsBeforeReply);
+  assert.equal(user.pendingModelCatalogSearch.mode, 'manual');
+  assert.notEqual(user.pendingModelCatalogSearch.promptMessageId, firstPrompt.message_id);
+});
+
+test('model catalogue does not process a key-like value if Telegram cannot delete the message', async () => {
+  const ctx = makeBot({ deleteTelegramMessageError: true });
+  const userId = 777131;
+  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 940));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 940));
+
+  const prompt = ctx.sent.at(-1);
+  const accidentalKey = 'sk-or-v1-' + 'b'.repeat(48);
+  const reply = message(accidentalKey, userId, 941);
+  reply.reply_to_message = { message_id: prompt.message_id };
+  const callsBeforeReply = ctx.providerCalls.length;
+
+  await ctx.bot.handleMessage(reply);
+
+  const user = ctx.bot.store.getUser(userId);
+  assert.match(ctx.sent.at(-1).text, /не буду обрабатывать или сохранять/);
+  assert.equal(user.apiKey, 'configured-provider-key');
+  assert.notEqual(user.modelCatalogState.selectedModelId, accidentalKey);
+  assert.notEqual(user.model, accidentalKey);
+  assert.equal(user.pendingModelCatalogSearch, undefined);
+  assert.equal(ctx.providerCalls.length, callsBeforeReply);
+});
+
+test('manual model catalogue entry still accepts a normal provider/model ID', async () => {
+  const ctx = makeBot();
+  const userId = 777132;
+  await ctx.bot.setApiKey(userId, 'configured-provider-key', 'https://openrouter.ai/api/v1');
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:model', userId, 950));
+  await ctx.bot.handleCallbackQuery(callbackQuery('mc:manual', userId, 950));
+
+  const prompt = ctx.sent.at(-1);
+  const reply = message('test/model-a', userId, 951);
+  reply.reply_to_message = { message_id: prompt.message_id };
+
+  await ctx.bot.handleMessage(reply);
+
+  assert.equal(ctx.bot.store.getUser(userId).modelCatalogState.selectedModelId, 'test/model-a');
+  assert.ok(ctx.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
+    block.type === 'heading' && block.text === 'test/model-a'));
+});
