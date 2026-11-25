@@ -253,7 +253,8 @@ function createEncryptedStore(options = {}) {
     const index = item.outbox.length;
     const entry = {
       chatId: message.chatId,
-      kind: message.kind === 'document' ? 'document' : 'message',
+      kind: message.kind === 'document' ? 'document' :
+        (message.kind === 'rich_message' ? 'rich_message' : 'message'),
       text: String(message.text == null ? '' : message.text),
       options: message.options || {},
       status: 'pending',
@@ -264,6 +265,12 @@ function createEncryptedStore(options = {}) {
       entry.mimeType = String(message.mimeType || 'text/plain; charset=utf-8').slice(0, 100);
       entry.caption = String(message.caption || '').slice(0, 900);
       entry.contentBase64 = String(message.contentBase64 || '');
+    } else if (entry.kind === 'rich_message') {
+      if (!message.richMessage || typeof message.richMessage !== 'object' ||
+          Array.isArray(message.richMessage)) {
+        throw new TypeError('A valid Telegram Rich Message is required.');
+      }
+      entry.richMessage = message.richMessage;
     }
     item.outbox.push(entry);
     save();
@@ -684,6 +691,7 @@ function createBotChat(options = {}) {
   const fetchImpl = options.fetchImpl || global.fetch;
   const rawSendTelegramMessage = options.sendTelegramMessage || defaultSendTelegramMessage;
   const rawSendTelegramDocument = options.sendTelegramDocument || defaultSendTelegramDocument;
+  const rawSendTelegramRichMessage = options.sendTelegramRichMessage || defaultSendTelegramRichMessage;
   const deleteTelegramMessage = options.deleteTelegramMessage || defaultDeleteTelegramMessage;
   const store = options.store || createEncryptedStore({
     encryptionKey: options.encryptionKey || process.env.BOT_DATA_ENCRYPTION_KEY,
@@ -708,6 +716,28 @@ function createBotChat(options = {}) {
       if (isTelegramHtmlParseError(error)) {
         store.discardOutbox(context.updateId, queued.index);
       }
+      error.telegramDeliveryFailure = true;
+      throw error;
+    }
+    store.markOutboxDelivered(context.updateId, queued.index);
+    return sent;
+  }
+
+  async function sendTelegramRichMessage(chatId, richMessage, sendOptions = {}) {
+    const context = updateContext.getStore();
+    if (!context || !Number.isSafeInteger(context.updateId)) {
+      return rawSendTelegramRichMessage(chatId, richMessage, sendOptions);
+    }
+    const queued = store.appendOutbox(context.updateId, {
+      chatId,
+      kind: 'rich_message',
+      richMessage,
+      options: sendOptions
+    });
+    let sent;
+    try {
+      sent = await rawSendTelegramRichMessage(chatId, richMessage, sendOptions);
+    } catch (error) {
       error.telegramDeliveryFailure = true;
       throw error;
     }
@@ -741,6 +771,14 @@ function createBotChat(options = {}) {
 
   async function defaultSendTelegramMessage(chatId, text, sendOptions = {}) {
     return telegramRequest('sendMessage', { chat_id: chatId, text, ...sendOptions });
+  }
+
+  async function defaultSendTelegramRichMessage(chatId, richMessage, sendOptions = {}) {
+    return telegramRequest('sendRichMessage', {
+      chat_id: chatId,
+      rich_message: richMessage,
+      ...sendOptions
+    });
   }
 
   async function defaultSendTelegramDocument(chatId, document) {
@@ -2485,6 +2523,8 @@ function getSettingsUrl() {
           caption: entry.caption,
           contentBase64: entry.contentBase64
         });
+      } else if (entry.kind === 'rich_message') {
+        await rawSendTelegramRichMessage(entry.chatId, entry.richMessage, entry.options || {});
       } else {
         await rawSendTelegramMessage(entry.chatId, entry.text, entry.options || {});
       }
@@ -2621,6 +2661,10 @@ function getSettingsUrl() {
 
   async function sendMessage(chatId, text, sendOptions = {}) {
     return sendTelegramMessage(chatId, text, sendOptions);
+  }
+
+  async function sendRichMessage(chatId, richMessage, sendOptions = {}) {
+    return sendTelegramRichMessage(chatId, richMessage, sendOptions);
   }
 
 const MODEL_CATALOG_PAGE_SIZE = 8;
@@ -3697,6 +3741,7 @@ async function handleModelCatalogCallback(query, user, data) {
     stopUpdateWorker,
     getWorkerStats,
     sendMessage,
+    sendRichMessage,
     store,
     apiBaseUrl
   };
