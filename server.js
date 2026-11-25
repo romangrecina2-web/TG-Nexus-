@@ -327,15 +327,83 @@ async function sendCodeToBot(userId, fileName, code) {
   return { messageId: result.result.message_id, bytes };
 }
 
-async function handleStart(message) {
+const TERMS_VERSION = '2026-11-25-v1';
+const SUPPORT_CHANNEL_URL = 'https://t.me/TG_Nexus_official';
+const TERMS_URL = new URL('terms.html', WEB_APP_URL.endsWith('/') ? WEB_APP_URL : WEB_APP_URL + '/').toString();
+const PRIVACY_URL = new URL('privacy.html', WEB_APP_URL.endsWith('/') ? WEB_APP_URL : WEB_APP_URL + '/').toString();
+
+function hasAcceptedTerms(targetBot, userId) {
+  try {
+    if (!targetBot || !targetBot.store || !targetBot.store.enabled ||
+        typeof targetBot.store.getUser !== 'function') return false;
+    return targetBot.store.getUser(userId).termsAcceptedVersion === TERMS_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+async function handleStart(message, targetBot = botChat) {
   if (!message || !message.chat || message.chat.type !== 'private' ||
-      !message.from || message.chat.id !== message.from.id) return;
-  const text = 'Привет! Можно общаться с ИИ прямо в этом чате или открыть мини-приложение кнопкой ниже.';
-  await botChat.sendMessage(message.chat.id, text, {
+      !message.from || Number(message.chat.id) !== Number(message.from.id)) return;
+
+  if (hasAcceptedTerms(targetBot, message.from.id)) {
+    const welcome = [
+      '<b>Welcome back to TG Next!</b>',
+      '',
+      'Your current Terms of Service and Privacy Policy are accepted.',
+      'Open your AI workspace using the button below.',
+      '',
+      `📩 Support: <a href="${SUPPORT_CHANNEL_URL}">Nexus Telegram Channel</a>`,
+      '',
+      '<b>Created by Mr tet0r</b>'
+    ].join('\n');
+    await targetBot.sendMessage(message.chat.id, welcome, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: 'Open TG Next', web_app: { url: WEB_APP_URL } }
+        ]]
+      }
+    });
+    return;
+  }
+
+  const text = [
+    '<b>Welcome to TG Next!</b>',
+    '',
+    'Your AI workspace is ready.',
+    '',
+    'Before using TG Next, please review and accept the documents below.',
+    '',
+    `📄 <a href="${TERMS_URL}">Terms of Service</a>`,
+    'Rules for using TG Next, user responsibilities, prohibited activities and service limitations.',
+    '',
+    `🔒 <a href="${PRIVACY_URL}">Privacy Policy</a>`,
+    'Information about data processing, storage and sharing with external AI providers.',
+    '',
+    '<b>Important:</b>',
+    '• Your prompts and uploaded files may be sent to the AI provider you select.',
+    '• External AI providers have their own terms and data-handling rules.',
+    '• AI-generated content may be inaccurate. Verify important information.',
+    '• Do not submit sensitive personal information.',
+    '',
+    `By pressing <b>Accept &amp; Continue</b>, you confirm that you have read and agree to the current Terms of Service and Privacy Policy (version ${TERMS_VERSION}).`,
+    '',
+    '<b>Created by Mr tet0r</b>',
+    `📩 Support: <a href="${SUPPORT_CHANNEL_URL}">Nexus Telegram Channel</a>`
+  ].join('\n');
+
+  await targetBot.sendMessage(message.chat.id, text, {
+    parse_mode: 'HTML',
     reply_markup: {
-      inline_keyboard: [[
-        { text: 'Открыть мини-приложение', web_app: { url: WEB_APP_URL } }
-      ]]
+      inline_keyboard: [
+        [
+          { text: 'Terms of Service', url: TERMS_URL },
+          { text: 'Privacy Policy', url: PRIVACY_URL }
+        ],
+        [{ text: 'Accept & Continue', callback_data: 'terms:accept:' + TERMS_VERSION }],
+        [{ text: 'Decline', callback_data: 'terms:decline:' + TERMS_VERSION }]
+      ]
     }
   });
 }
@@ -352,18 +420,22 @@ async function processTelegramUpdate(update, targetBot = botChat) {
   if (!message) return;
   const text = typeof message.text === 'string' ? message.text.trim() : '';
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-    await handleStart(message);
+    await handleStart(message, targetBot);
+    return;
+  }
+  if (message.chat && message.chat.type === 'private' && message.from &&
+      !hasAcceptedTerms(targetBot, message.from.id)) {
+    await handleStart(message, targetBot);
     return;
   }
   if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
       message.chat && message.chat.type === 'private') {
     await targetBot.sendMessage(message.chat.id,
-      'Пишите сообщение прямо сюда, чтобы общаться с ИИ. Команды и управление чатами: /info. Мини-приложение открывается кнопкой ниже.');
+      'Use the Mini App to open TG Next. For help, contact the Nexus Telegram Channel.');
     return;
   }
   await targetBot.handleMessage(message);
 }
-
 async function handleWebhook(req, res, dependencies = {}) {
   const webhookSecret = dependencies.webhookSecret || WEBHOOK_SECRET;
   const textBot = dependencies.botChat || botChat;
