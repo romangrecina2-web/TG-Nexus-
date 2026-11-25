@@ -262,6 +262,8 @@
           caption: entry.caption,
           contentBase64: entry.contentBase64
         });
+      } else if (entry.kind === 'rich_message') {
+        await rawSendTelegramRichMessage(entry.chatId, entry.richMessage, entry.options || {});
       } else {
         await rawSendTelegramMessage(entry.chatId, entry.text, entry.options || {});
       }
@@ -398,4 +400,8 @@
 
   async function sendMessage(chatId, text, sendOptions = {}) {
     return sendTelegramMessage(chatId, text, sendOptions);
+  }
+
+  async function sendRichMessage(chatId, richMessage, sendOptions = {}) {
+    return sendTelegramRichMessage(chatId, richMessage, sendOptions);
   }
