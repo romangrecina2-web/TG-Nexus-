@@ -158,6 +158,7 @@
     stopUpdateWorker,
     getWorkerStats,
     sendMessage,
+    sendRichMessage,
     store,
     apiBaseUrl
   };
