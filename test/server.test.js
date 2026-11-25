@@ -299,6 +299,10 @@ test('sync endpoint returns only the authenticated user state and accepts valid 
 test('Telegram callback_query updates reach the bot settings handler', async () => {
   const received = [];
   const fakeBot = {
+    store: {
+      enabled: true,
+      getUser() { return { termsAcceptedVersion: '2026-11-25-v1' }; }
+    },
     async handleCallbackQuery(query) { received.push(query); }
   };
   const query = {
@@ -381,4 +385,42 @@ test('private bot messages remain blocked until the current terms version is acc
   user.termsAcceptedVersion = '2026-11-25-v1';
   await processTelegramUpdate({ message: { ...message, message_id: 92 } }, bot);
   assert.equal(handled.length, 1);
+});
+
+
+test('unaccepted users are shown the agreement instead of opening old settings callbacks', async () => {
+  const user = {};
+  const sent = [];
+  const handled = [];
+  const bot = {
+    store: { enabled: true, getUser: () => user },
+    async sendMessage(chatId, text, options) { sent.push({ chatId, text, options }); },
+    async handleCallbackQuery(query) { handled.push(query); }
+  };
+  await processTelegramUpdate({
+    callback_query: {
+      id: 'pre-consent-settings',
+      data: 'tn:refresh',
+      from: { id: 123456, is_bot: false },
+      message: { message_id: 10, chat: { id: 123456, type: 'private' } }
+    }
+  }, bot);
+  assert.equal(handled.length, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Terms of Service/);
+});
+
+test('terms acceptance callbacks are allowed before consent is recorded', async () => {
+  const handled = [];
+  const bot = {
+    async handleCallbackQuery(query) { handled.push(query); }
+  };
+  const query = {
+    id: 'terms-accept',
+    data: 'terms:accept:2026-11-25-v1',
+    from: { id: 123456 },
+    message: { message_id: 11, chat: { id: 123456, type: 'private' } }
+  };
+  await processTelegramUpdate({ callback_query: query }, bot);
+  assert.deepEqual(handled, [query]);
 });
