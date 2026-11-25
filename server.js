@@ -347,6 +347,30 @@ async function handleStart(message, targetBot = botChat) {
       !message.from || Number(message.chat.id) !== Number(message.from.id)) return;
 
   if (hasAcceptedTerms(targetBot, message.from.id)) {
+    const acceptedRichMessage = {
+      blocks: [
+        { type: 'heading', text: 'Welcome back to TG Next!', size: 1 },
+        { type: 'paragraph', text: 'Your current Terms of Service and Privacy Policy are accepted.' },
+        { type: 'paragraph', text: 'Open your AI workspace using the button below.' },
+        {
+          type: 'buttons',
+          align: 'center',
+          buttons: [{ text: 'Open TG Next', web_app: { url: WEB_APP_URL }, style: 'success' }]
+        },
+        {
+          type: 'paragraph',
+          text: [
+            '📩 Support: ',
+            { type: 'url', text: 'Nexus Telegram Channel', url: SUPPORT_CHANNEL_URL }
+          ]
+        },
+        { type: 'footer', text: 'Created by Mr tet0r' }
+      ]
+    };
+    if (typeof targetBot.sendRichMessage === 'function') {
+      await targetBot.sendRichMessage(message.chat.id, acceptedRichMessage);
+      return;
+    }
     const welcome = [
       '<b>Welcome back to TG Next!</b>',
       '',
@@ -368,6 +392,68 @@ async function handleStart(message, targetBot = botChat) {
     return;
   }
 
+  const richMessage = {
+    blocks: [
+      { type: 'heading', text: 'Welcome to TG Next!', size: 1 },
+      { type: 'paragraph', text: 'Your AI workspace is ready.' },
+      { type: 'paragraph', text: 'Before using TG Next, please review and accept the documents below.' },
+      {
+        type: 'buttons',
+        align: 'center',
+        buttons: [
+          { text: 'Terms of Service', url: TERMS_URL, style: 'primary' },
+          { text: 'Privacy Policy', url: PRIVACY_URL, style: 'primary' }
+        ]
+      },
+      { type: 'heading', text: 'Important:', size: 2 },
+      { type: 'paragraph', text: '• Your prompts and uploaded files may be sent to the AI provider you select.' },
+      { type: 'paragraph', text: '• External AI providers have their own terms and data-handling rules.' },
+      { type: 'paragraph', text: '• AI-generated content may be inaccurate. Verify important information.' },
+      { type: 'paragraph', text: '• Do not submit sensitive personal information.' },
+      {
+        type: 'paragraph',
+        text: [
+          'By pressing ',
+          { type: 'bold', text: 'Accept & Continue' },
+          ', you confirm that you have read and agree to the current Terms of Service and Privacy Policy (version ',
+          TERMS_VERSION,
+          ').'
+        ]
+      },
+      {
+        type: 'buttons',
+        align: 'center',
+        buttons: [{
+          text: 'Accept & Continue',
+          callback_data: 'terms:accept:' + TERMS_VERSION,
+          style: 'success'
+        }]
+      },
+      {
+        type: 'buttons',
+        align: 'center',
+        buttons: [{
+          text: 'Decline',
+          callback_data: 'terms:decline:' + TERMS_VERSION,
+          style: 'danger'
+        }]
+      },
+      { type: 'footer', text: 'Created by Mr tet0r' },
+      {
+        type: 'paragraph',
+        text: [
+          '📩 Support: ',
+          { type: 'url', text: 'Nexus Telegram Channel', url: SUPPORT_CHANNEL_URL }
+        ]
+      }
+    ]
+  };
+
+  if (typeof targetBot.sendRichMessage === 'function') {
+    await targetBot.sendRichMessage(message.chat.id, richMessage);
+    return;
+  }
+
   const text = [
     '<b>Welcome to TG Next!</b>',
     '',
@@ -376,10 +462,7 @@ async function handleStart(message, targetBot = botChat) {
     'Before using TG Next, please review and accept the documents below.',
     '',
     `📄 <a href="${TERMS_URL}">Terms of Service</a>`,
-    'Rules for using TG Next, user responsibilities, prohibited activities and service limitations.',
-    '',
     `🔒 <a href="${PRIVACY_URL}">Privacy Policy</a>`,
-    'Information about data processing, storage and sharing with external AI providers.',
     '',
     '<b>Important:</b>',
     '• Your prompts and uploaded files may be sent to the AI provider you select.',
@@ -407,7 +490,6 @@ async function handleStart(message, targetBot = botChat) {
     }
   });
 }
-
 async function processTelegramUpdate(update, targetBot = botChat) {
   const callbackQuery = update && update.callback_query;
   if (callbackQuery) {
