@@ -34,6 +34,10 @@ const BOT_COMMANDS = [
   { command: 'test', description: 'Проверить реальный запрос к API' },
   { command: 'version', description: 'Показать версию backend' },
   { command: 'settings', description: 'Показать настройки ИИ' },
+  { command: 'pro', description: 'Посмотреть тарифы TG Nexus PRO' },
+  { command: 'mypro', description: 'Проверить статус PRO' },
+  { command: 'promocode', description: 'Активировать промокод' },
+  { command: 'paysupport', description: 'Помощь с платежами' },
   { command: 'cancel', description: 'Отменить текущий ввод настройки' }
 ];
 
