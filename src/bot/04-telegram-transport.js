@@ -70,13 +70,17 @@ function createBotChat(options = {}) {
   let globalRateStartedAt = lastRateSweep;
   let globalRateCount = 0;
 
-  async function telegramRequest(method, payload) {
+  async function telegramRequest(method, payload, requestOptions = {}) {
+    if (typeof options.telegramApiCall === 'function') {
+      return options.telegramApiCall(method, payload, requestOptions);
+    }
     if (!botToken) throw new Error('Telegram bot token is not configured.');
+    const timeoutMs = Math.max(1_000, Math.min(15_000, Number(requestOptions.timeoutMs) || 15_000));
     const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/' + method, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
