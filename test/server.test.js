@@ -301,7 +301,7 @@ test('Telegram callback_query updates reach the bot settings handler', async () 
   const fakeBot = {
     store: {
       enabled: true,
-      getUser() { return { termsAcceptedVersion: '2026-11-25-v1' }; }
+      getUser() { return { termsAcceptedVersion: '2026-11-26-v2' }; }
     },
     async handleCallbackQuery(query) { received.push(query); }
   };
@@ -357,9 +357,9 @@ test('/start embeds document and consent buttons inside one Rich Message', async
   ]);
   assert.match(buttonRows[0].buttons[0].url, /terms\.html$/);
   assert.match(buttonRows[0].buttons[1].url, /privacy\.html$/);
-  assert.equal(buttonRows[1].buttons[0].callback_data, 'terms:accept:2026-11-25-v1');
+  assert.equal(buttonRows[1].buttons[0].callback_data, 'terms:accept:2026-11-26-v2');
   assert.equal(buttonRows[1].buttons[0].style, 'success');
-  assert.equal(buttonRows[2].buttons[0].callback_data, 'terms:decline:2026-11-25-v1');
+  assert.equal(buttonRows[2].buttons[0].callback_data, 'terms:decline:2026-11-26-v2');
   assert.equal(buttonRows[2].buttons[0].style, 'danger');
   assert.equal(blocks.find((block) => block.type === 'footer').text, 'Created by Mr tet0r');
   const support = blocks.find((block) => block.type === 'paragraph' &&
@@ -388,7 +388,7 @@ test('private bot messages remain blocked until the current terms version is acc
   assert.equal(sent.length, 1);
   assert.match(sent[0].text, /Terms of Service/);
 
-  user.termsAcceptedVersion = '2026-11-25-v1';
+  user.termsAcceptedVersion = '2026-11-26-v2';
   await processTelegramUpdate({ message: { ...message, message_id: 92 } }, bot);
   assert.equal(handled.length, 1);
 });
@@ -423,7 +423,7 @@ test('terms acceptance callbacks are allowed before consent is recorded', async 
   };
   const query = {
     id: 'terms-accept',
-    data: 'terms:accept:2026-11-25-v1',
+    data: 'terms:accept:2026-11-26-v2',
     from: { id: 123456 },
     message: { message_id: 11, chat: { id: 123456, type: 'private' } }
   };
