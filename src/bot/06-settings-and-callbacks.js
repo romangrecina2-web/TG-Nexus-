@@ -1,4 +1,4 @@
-  const REQUIRED_TERMS_VERSION = '2026-11-25-v1';
+  const REQUIRED_TERMS_VERSION = '2026-11-26-v2';
 const TERMS_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
 
 function getTermsAcceptedAppUrl() {
@@ -512,7 +512,7 @@ function getSettingsUrl() {
   async function handleCallbackQuery(query) {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
         (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
-         !query.data.startsWith('terms:'))) return false;
+         !query.data.startsWith('terms:') && !query.data.startsWith('pro:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -566,7 +566,11 @@ function getSettingsUrl() {
         return true;
       }
 
-      await safeAnswerCallback(query.id, 'Acceptance saved.');
+      try { ensureProTrial(userId); } catch {
+        await safeAnswerCallback(query.id, 'Terms saved, but the free PRO trial could not be activated yet. Send /pro to retry.');
+        return true;
+      }
+      await safeAnswerCallback(query.id, 'Acceptance saved. Your 12-day PRO trial is active.');
       const rows = [];
       const appUrl = getTermsAcceptedAppUrl();
       if (appUrl) rows.push([{ text: 'Open TG Nexus', web_app: { url: appUrl } }]);
@@ -589,6 +593,7 @@ function getSettingsUrl() {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('pro:')) return await handleProCallback(query, user);
       if (data.startsWith('mc:')) {
         return await handleModelCatalogCallback(query, user, data);
       }
