@@ -1,0 +1,365 @@
+const TG_NEXUS_PRO_DAY_MS = 24 * 60 * 60 * 1000;
+const TG_NEXUS_PRO_TRIAL_DAYS = 12;
+const TG_NEXUS_PRO_PLANS = Object.freeze({
+  7: { days: 7, stars: 49 },
+  14: { days: 14, stars: 89 },
+  21: { days: 21, stars: 119 },
+  30: { days: 30, stars: 149 }
+});
+const TG_NEXUS_BILLING_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
+const proCheckoutReservations = new Map();
+
+function normalizeProState(user) {
+  if (!user.pro || typeof user.pro !== 'object' || Array.isArray(user.pro)) user.pro = {};
+  const pro = user.pro;
+  if (!Number.isFinite(Number(pro.expiresAt))) pro.expiresAt = 0;
+  if (!Array.isArray(pro.payments)) pro.payments = [];
+  if (!Array.isArray(pro.promoRedemptions)) pro.promoRedemptions = [];
+  if (!Array.isArray(user.pendingStarPayments)) user.pendingStarPayments = [];
+  return pro;
+}
+
+function isProBillingEnabled() {
+  if (typeof options.proBillingEnabled === 'boolean') return options.proBillingEnabled;
+  return String(process.env.PRO_BILLING_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+function ensureProTrial(userId, now = Date.now()) {
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  if (Number(pro.trialStartedAt) > 0) return getProStatus(userId, now);
+  pro.trialStartedAt = now;
+  pro.trialExpiresAt = now + TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
+  pro.expiresAt = Math.max(now, Number(pro.expiresAt) || 0) +
+    TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
+  store.save();
+  return getProStatus(userId, now);
+}
+
+function getProStatus(userId, now = Date.now()) {
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const expiresAt = Math.max(0, Number(pro.expiresAt) || 0);
+  const trialExpiresAt = Math.max(0, Number(pro.trialExpiresAt) || 0);
+  const payments = pro.payments;
+  const promoRedemptions = pro.promoRedemptions;
+  const active = expiresAt > now;
+  const trialActive = active && trialExpiresAt > now &&
+    payments.length === 0 && promoRedemptions.length === 0;
+  return {
+    active,
+    expiresAt,
+    remainingDays: active ? Math.ceil((expiresAt - now) / TG_NEXUS_PRO_DAY_MS) : 0,
+    trialStartedAt: Number(pro.trialStartedAt) || 0,
+    trialExpiresAt,
+    trialActive,
+    hasPaidPayments: payments.length > 0,
+    hasPromoRedemptions: promoRedemptions.length > 0
+  };
+}
+
+function formatProDate(timestamp) {
+  if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return 'не указана';
+  return new Date(Number(timestamp)).toLocaleString('ru-RU', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+}
+
+function isBillingAdmin(userId) {
+  const configured = String(process.env.BOT_ADMIN_IDS || '');
+  return configured.split(',').map((item) => item.trim()).filter(Boolean)
+    .includes(String(userId));
+}
+
+async function sendProMenu(chatId, userId) {
+  const status = getProStatus(userId);
+  const lines = [
+    '<b>TG Nexus PRO</b>',
+    '',
+    'Бесплатный пробный период: 12 дней на один Telegram-аккаунт.',
+    status.active
+      ? 'Доступ активен: до ' + formatProDate(status.expiresAt) +
+        ' (ещё ' + status.remainingDays + ' дн.).'
+      : 'Активного PRO-доступа сейчас нет.',
+    '',
+    'Тарифы:',
+    '• 7 дней — 49 ⭐',
+    '• 14 дней — 89 ⭐',
+    '• 21 день — 119 ⭐',
+    '• 30 дней — 149 ⭐',
+    '',
+    'Покупки разовые: автоматического списания нет.',
+    'Новые дни добавляются к текущему сроку доступа.',
+    'Расходы на API-провайдеров оплачиваются отдельно.'
+  ];
+  const optionsForMenu = { parse_mode: 'HTML' };
+  if (isProBillingEnabled()) {
+    optionsForMenu.reply_markup = {
+      inline_keyboard: [
+        [
+          { text: '7 дней · 49 ⭐', callback_data: 'pro:buy:7' },
+          { text: '14 дней · 89 ⭐', callback_data: 'pro:buy:14' }
+        ],
+        [
+          { text: '21 день · 119 ⭐', callback_data: 'pro:buy:21' },
+          { text: '30 дней · 149 ⭐', callback_data: 'pro:buy:30' }
+        ]
+      ]
+    };
+  } else {
+    lines.push('', 'Оплата пока отключена и не принимает Stars.');
+  }
+  await sendTelegramMessage(chatId, lines.join('\n'), optionsForMenu);
+}
+
+async function sendProStatus(chatId, userId) {
+  const status = getProStatus(userId);
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const lines = ['<b>Ваш TG Nexus PRO</b>', ''];
+  if (status.active) {
+    lines.push('Статус: активен', 'Действует до: ' + formatProDate(status.expiresAt),
+      'Осталось: ' + status.remainingDays + ' дн.');
+    if (status.trialActive) lines.push('Это ваш бесплатный 12-дневный период.');
+  } else {
+    lines.push('Статус: не активен', 'Используйте /pro, чтобы посмотреть тарифы.');
+  }
+  if (pro.payments.length) {
+    lines.push('', '<b>Последние покупки:</b>');
+    pro.payments.slice(-5).reverse().forEach((payment) => {
+      lines.push('• ' + payment.days + ' дн. · ' + payment.amount + ' ⭐ · ' +
+        formatProDate(payment.paidAt));
+    });
+  }
+  if (pro.promoRedemptions.length) {
+    lines.push('', 'Активировано промокодов: ' + pro.promoRedemptions.length + '.');
+  }
+  await sendTelegramMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
+
+async function createProInvoice(chatId, userId, days) {
+  const plan = TG_NEXUS_PRO_PLANS[Number(days)];
+  if (!plan) throw new Error('Unknown PRO plan.');
+  if (!isProBillingEnabled()) throw new Error('PRO billing is not enabled.');
+
+  const user = store.getUser(userId);
+  normalizeProState(user);
+  const now = Date.now();
+  user.pendingStarPayments = user.pendingStarPayments
+    .filter((item) => item && Number(item.expiresAt) > now)
+    .slice(-10);
+  const payload = 'tgnexuspro1_' + crypto.randomBytes(18).toString('hex');
+  user.pendingStarPayments.push({
+    payload,
+    days: plan.days,
+    amount: plan.stars,
+    currency: 'XTR',
+    createdAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000
+  });
+  store.save();
+
+  try {
+    await telegramRequest('sendInvoice', {
+      chat_id: chatId,
+      title: 'TG Nexus PRO',
+      description: 'Доступ к TG Nexus PRO на ' + plan.days + ' дней.',
+      payload,
+      currency: 'XTR',
+      prices: [{ label: 'TG Nexus PRO · ' + plan.days + ' дней', amount: plan.stars }]
+    });
+  } catch (error) {
+    user.pendingStarPayments = user.pendingStarPayments.filter((item) => item.payload !== payload);
+    store.save();
+    throw error;
+  }
+  return { payload, days: plan.days, amount: plan.stars };
+}
+
+async function handleProCallback(query, user) {
+  const match = String(query.data || '').match(/^pro:buy:(7|14|21|30)$/);
+  if (!match) {
+    await safeAnswerCallback(query.id, 'Эта кнопка тарифа устарела. Откройте /pro ещё раз.');
+    return true;
+  }
+  if (!isProBillingEnabled()) {
+    await safeAnswerCallback(query.id, 'Оплата пока отключена.');
+    return true;
+  }
+  try {
+    await createProInvoice(query.message.chat.id, query.from.id, Number(match[1]));
+    await safeAnswerCallback(query.id, 'Счёт отправлен. Завершите оплату в Telegram.');
+  } catch {
+    await safeAnswerCallback(query.id, 'Не удалось создать счёт. Попробуйте позже или обратитесь в /paysupport.');
+  }
+  return true;
+}
+
+async function handlePreCheckoutQuery(query) {
+  const queryId = String(query && query.id || '');
+  const userId = query && query.from && query.from.id;
+  const payload = String(query && query.invoice_payload || '');
+  let valid = false;
+  let user = null;
+  let pending = null;
+  let errorMessage = 'Счёт недействителен или устарел. Откройте /pro и создайте новый.';
+
+  if (queryId && userId != null && payload && isProBillingEnabled()) {
+    user = store.getUser(userId);
+    normalizeProState(user);
+    pending = user.pendingStarPayments.find((item) => item && item.payload === payload) || null;
+    const now = Date.now();
+    const reserved = proCheckoutReservations.get(String(userId));
+    const reservedStillActive = reserved && reserved.expiresAt > now;
+    const termsAccepted = user.termsAcceptedVersion === REQUIRED_TERMS_VERSION;
+    const fresh = pending && Number(pending.expiresAt) > now;
+    const correctAmount = pending && query.currency === 'XTR' &&
+      Number(query.total_amount) === Number(pending.amount);
+    const notReservedForAnotherInvoice = !reservedStillActive || reserved.payload === payload;
+
+    valid = Boolean(termsAccepted && fresh && correctAmount && notReservedForAnotherInvoice);
+    if (!termsAccepted) errorMessage = 'Сначала примите актуальные Terms of Service через /start.';
+    else if (reservedStillActive && reserved.payload !== payload) {
+      errorMessage = 'У вас уже есть оплата в процессе. Завершите её или попробуйте позже.';
+    } else if (fresh && !correctAmount) errorMessage = 'Сумма счёта не совпадает с тарифом.';
+  } else if (!isProBillingEnabled()) {
+    errorMessage = 'Оплата TG Nexus PRO временно отключена.';
+  }
+
+  await telegramRequest('answerPreCheckoutQuery', {
+    pre_checkout_query_id: queryId,
+    ok: valid,
+    ...(!valid ? { error_message: errorMessage } : {})
+  }, { timeoutMs: 8_000 });
+
+  if (valid) {
+    proCheckoutReservations.set(String(userId), {
+      payload,
+      expiresAt: Date.now() + 15 * 60 * 1000
+    });
+  }
+  return valid;
+}
+
+async function handleSuccessfulPayment(message) {
+  const userId = message && message.from && message.from.id;
+  const chatId = message && message.chat && message.chat.id;
+  const payment = message && message.successful_payment;
+  if (userId == null || chatId == null || !payment) return false;
+
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const chargeId = String(payment.telegram_payment_charge_id || '');
+  const alreadyApplied = chargeId && pro.payments.some((item) =>
+    item && item.telegramPaymentChargeId === chargeId);
+  if (alreadyApplied) {
+    await sendText(chatId, 'Эта оплата уже была учтена. Статус: /mypro');
+    return true;
+  }
+
+  const payload = String(payment.invoice_payload || '');
+  const pendingIndex = user.pendingStarPayments.findIndex((item) =>
+    item && item.payload === payload);
+  const pending = pendingIndex >= 0 ? user.pendingStarPayments[pendingIndex] : null;
+  if (!pending || payment.currency !== 'XTR' ||
+      Number(payment.total_amount) !== Number(pending.amount) || !chargeId) {
+    await sendText(chatId,
+      'Платёж получен, но не удалось сопоставить его с тарифом. Не оплачивайте повторно; обратитесь в /paysupport.');
+    return true;
+  }
+
+  const now = Date.now();
+  const previousExpiry = Number(pro.expiresAt) || 0;
+  const previousPayments = pro.payments.slice();
+  const previousPending = user.pendingStarPayments.slice();
+  const baseExpiry = Math.max(now, previousExpiry);
+  const nextExpiry = baseExpiry + Number(pending.days) * TG_NEXUS_PRO_DAY_MS;
+  pro.expiresAt = nextExpiry;
+  pro.payments.push({
+    telegramPaymentChargeId: chargeId,
+    amount: Number(pending.amount),
+    currency: 'XTR',
+    days: Number(pending.days),
+    paidAt: now,
+    expiresAt: nextExpiry
+  });
+  if (pro.payments.length > 100) pro.payments.splice(0, pro.payments.length - 100);
+  user.pendingStarPayments = [];
+  try {
+    store.save();
+  } catch (error) {
+    pro.expiresAt = previousExpiry;
+    pro.payments = previousPayments;
+    user.pendingStarPayments = previousPending;
+    throw error;
+  }
+  proCheckoutReservations.delete(String(userId));
+
+  await sendText(chatId, [
+    'TG Nexus PRO активирован!',
+    'Добавлено: ' + pending.days + ' дней.',
+    'Доступ действует до: ' + formatProDate(nextExpiry),
+    'Текущий статус: /mypro'
+  ].join('\n'));
+  return true;
+}
+
+async function handlePromoCreateCommand(chatId, userId, args) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const parts = String(args || '').trim().split(/\s+/);
+  const code = parts[0] || '';
+  const days = Number(parts[1]);
+  const maxUses = parts[2] === undefined ? 1 : Number(parts[2]);
+  const result = store.createPromoCode(code, { days, maxUses, createdBy: userId });
+  if (!result.ok) {
+    const messages = {
+      invalid_code: 'Код: 4–32 символа A–Z, 0–9, _ или -.',
+      invalid_days: 'Количество дней должно быть от 1 до 365.',
+      invalid_limit: 'Лимит должен быть от 0 до 100000; 0 означает без лимита.',
+      exists: 'Такой промокод уже существует.'
+    };
+    await sendText(chatId, messages[result.reason] || 'Не удалось создать промокод.');
+    return true;
+  }
+  await sendText(chatId, 'Промокод ' + result.code + ' создан: ' + result.days +
+    ' дней, использований: ' + (result.maxUses === 0 ? 'без лимита' : result.maxUses) + '.');
+  return true;
+}
+
+async function handlePromoDisableCommand(chatId, userId, args) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const code = String(args || '').trim();
+  if (!code) {
+    await sendText(chatId, 'Использование: /promo_disable CODE');
+    return true;
+  }
+  await sendText(chatId, store.disablePromoCode(code)
+    ? 'Промокод отключён.'
+    : 'Промокод не найден.');
+  return true;
+}
+
+async function handlePromoListCommand(chatId, userId) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const list = store.listPromoCodes().slice(-30);
+  if (!list.length) {
+    await sendText(chatId, 'Промокодов пока нет.');
+    return true;
+  }
+  await sendText(chatId, list.map((item) =>
+    item.code + ' — ' + item.days + ' дн. · ' +
+    (item.enabled ? 'активен' : 'отключён') + ' · ' +
+    item.uses + '/' + (item.maxUses || '∞')
+  ).join('\n'));
+  return true;
+}
