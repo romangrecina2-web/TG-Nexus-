@@ -87,6 +87,8 @@ function makeBot(options = {}) {
     encryptionKey: 'ab'.repeat(32),
     dataDir: dir,
     fetchImpl,
+    telegramApiCall: options.telegramApiCall,
+    proBillingEnabled: options.proBillingEnabled,
     sendTelegramRichMessage: async (chatId, richMessage, sendOptions) => {
       const record = {
         chatId,
@@ -1579,4 +1581,104 @@ test('manual model catalogue entry still accepts a normal provider/model ID', as
   assert.equal(ctx.bot.store.getUser(userId).modelCatalogState.selectedModelId, 'test/model-a');
   assert.ok(ctx.editedRichMessages.at(-1).richMessage.blocks.some((block) =>
     block.type === 'heading' && block.text === 'test/model-a'));
+});
+
+
+test('12-day PRO trial is granted once and persists across restarts', () => {
+  const ctx = makeBot();
+  const userId = 770001;
+  const first = ctx.bot.ensureTrial(userId);
+  assert.equal(first.trialActive, true);
+  assert.equal(first.remainingDays, 12);
+  assert.equal(first.expiresAt, first.trialExpiresAt);
+
+  const repeated = ctx.bot.ensureTrial(userId);
+  assert.equal(repeated.expiresAt, first.expiresAt);
+
+  const restarted = makeBot({ dir: ctx.dir });
+  const afterRestart = restarted.bot.ensureTrial(userId);
+  assert.equal(afterRestart.expiresAt, first.expiresAt);
+  assert.equal(afterRestart.trialActive, true);
+});
+
+test('Telegram Stars invoice is XTR and payment adds purchased days exactly once', async () => {
+  const apiCalls = [];
+  const ctx = makeBot({
+    proBillingEnabled: true,
+    telegramApiCall: async (method, payload, requestOptions) => {
+      apiCalls.push({ method, payload, requestOptions });
+      return method === 'sendInvoice' ? { message_id: 991 } : true;
+    }
+  });
+  const userId = 770002;
+  const user = ctx.bot.store.getUser(userId);
+  user.termsAcceptedVersion = '2026-11-26-v2';
+  ctx.bot.store.save();
+  const trial = ctx.bot.ensureTrial(userId);
+
+  await ctx.bot.handleMessage(message('/pro', userId, 9910));
+  assert.ok(ctx.sent.at(-1).options.reply_markup.inline_keyboard.flat()
+    .some((button) => button.callback_data === 'pro:buy:7'));
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:7', userId, 9911));
+  const invoiceCall = apiCalls.find((item) => item.method === 'sendInvoice');
+  assert.ok(invoiceCall);
+  assert.equal(invoiceCall.payload.currency, 'XTR');
+  assert.equal(invoiceCall.payload.prices[0].amount, 49);
+  assert.equal(Object.prototype.hasOwnProperty.call(invoiceCall.payload, 'provider_token'), false);
+
+  const pending = ctx.bot.store.getUser(userId).pendingStarPayments[0];
+  assert.ok(pending);
+  const approved = await ctx.bot.handlePreCheckoutQuery({
+    id: 'pre-checkout-770002',
+    from: { id: userId },
+    invoice_payload: pending.payload,
+    currency: 'XTR',
+    total_amount: 49
+  });
+  assert.equal(approved, true);
+  assert.equal(apiCalls.at(-1).method, 'answerPreCheckoutQuery');
+  assert.equal(apiCalls.at(-1).payload.ok, true);
+  assert.equal(apiCalls.at(-1).requestOptions.timeoutMs, 8000);
+
+  const paidMessage = {
+    message_id: 9912,
+    chat: { id: userId, type: 'private' },
+    from: { id: userId, is_bot: false },
+    successful_payment: {
+      invoice_payload: pending.payload,
+      currency: 'XTR',
+      total_amount: 49,
+      telegram_payment_charge_id: 'telegram-charge-770002'
+    }
+  };
+  await ctx.bot.handleSuccessfulPayment(paidMessage);
+  const afterPayment = ctx.bot.getProStatus(userId);
+  assert.equal(afterPayment.expiresAt, trial.expiresAt + 7 * 24 * 60 * 60 * 1000);
+  assert.equal(ctx.bot.store.getUser(userId).pro.payments.length, 1);
+
+  await ctx.bot.handleSuccessfulPayment(paidMessage);
+  assert.equal(ctx.bot.getProStatus(userId).expiresAt, afterPayment.expiresAt);
+  assert.equal(ctx.bot.store.getUser(userId).pro.payments.length, 1);
+});
+
+test('promo codes grant days once per user and respect the global usage limit', async () => {
+  const ctx = makeBot();
+  const firstUser = 770003;
+  const secondUser = 770004;
+  const trial = ctx.bot.ensureTrial(firstUser);
+  assert.equal(ctx.bot.store.createPromoCode('WELCOME12', {
+    days: 5, maxUses: 1, createdBy: 1
+  }).ok, true);
+
+  await ctx.bot.handleMessage(message('/promocode WELCOME12', firstUser, 9920));
+  const afterFirst = ctx.bot.getProStatus(firstUser);
+  assert.equal(afterFirst.expiresAt, trial.expiresAt + 5 * 24 * 60 * 60 * 1000);
+
+  await ctx.bot.handleMessage(message('/promocode WELCOME12', firstUser, 9921));
+  assert.equal(ctx.bot.getProStatus(firstUser).expiresAt, afterFirst.expiresAt);
+
+  await ctx.bot.handleMessage(message('/promocode WELCOME12', secondUser, 9922));
+  assert.equal(ctx.bot.getProStatus(secondUser).active, false);
+  assert.equal(ctx.bot.store.listPromoCodes()[0].uses, 1);
 });
