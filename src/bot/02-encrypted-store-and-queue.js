@@ -33,6 +33,7 @@ function createEncryptedStore(options = {}) {
     if (!Array.isArray(decoded.queue)) decoded.queue = [];
     if (!Array.isArray(decoded.processedUpdateIds)) decoded.processedUpdateIds = [];
     if (!Array.isArray(decoded.deadLetterUpdates)) decoded.deadLetterUpdates = [];
+    if (!decoded.promocodes || typeof decoded.promocodes !== 'object' || Array.isArray(decoded.promocodes)) decoded.promocodes = {};
     return decoded;
   }
 
@@ -59,7 +60,8 @@ function createEncryptedStore(options = {}) {
       users: {},
       queue: [],
       processedUpdateIds: [],
-      deadLetterUpdates: []
+      deadLetterUpdates: [],
+      promocodes: {}
     };
     return state;
   }
@@ -368,6 +370,83 @@ function createEncryptedStore(options = {}) {
     return user;
   }
 
+  function createPromoCode(code, details = {}) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const days = Math.round(Number(details.days));
+    const maxUses = Math.round(Number(details.maxUses));
+    if (!/^[A-Z0-9_-]{4,32}$/.test(normalized)) return { ok: false, reason: 'invalid_code' };
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false, reason: 'invalid_days' };
+    if (!Number.isInteger(maxUses) || maxUses < 0 || maxUses > 100000) return { ok: false, reason: 'invalid_limit' };
+    const current = load();
+    if (current.promocodes[normalized]) return { ok: false, reason: 'exists' };
+    current.promocodes[normalized] = {
+      days, maxUses, enabled: true, createdAt: Number(details.createdAt) || Date.now(),
+      createdBy: String(details.createdBy || ''), redemptions: []
+    };
+    try { save(); } catch (error) { delete current.promocodes[normalized]; throw error; }
+    return { ok: true, code: normalized, days, maxUses };
+  }
+
+  function disablePromoCode(code) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const promo = load().promocodes[normalized];
+    if (!promo) return false;
+    const previous = promo.enabled;
+    const previousDisabledAt = promo.disabledAt;
+    promo.enabled = false;
+    promo.disabledAt = Date.now();
+    try { save(); } catch (error) {
+      promo.enabled = previous;
+      if (previousDisabledAt === undefined) delete promo.disabledAt;
+      else promo.disabledAt = previousDisabledAt;
+      throw error;
+    }
+    return true;
+  }
+
+  function listPromoCodes() {
+    const records = load().promocodes;
+    return Object.keys(records).sort().map((code) => ({
+      code, days: Number(records[code].days) || 0, maxUses: Number(records[code].maxUses) || 0,
+      enabled: records[code].enabled === true,
+      uses: Array.isArray(records[code].redemptions) ? records[code].redemptions.length : 0,
+      createdAt: Number(records[code].createdAt) || 0
+    }));
+  }
+
+  function redeemPromoCode(code, userId, now = Date.now()) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const current = load();
+    const promo = current.promocodes[normalized];
+    if (!promo) return { ok: false, reason: 'not_found' };
+    if (promo.enabled !== true) return { ok: false, reason: 'disabled' };
+    const days = Number(promo.days);
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false, reason: 'invalid' };
+    if (Number(promo.expiresAt) > 0 && Number(promo.expiresAt) <= now) {
+      promo.enabled = false; save(); return { ok: false, reason: 'expired' };
+    }
+    if (!Array.isArray(promo.redemptions)) promo.redemptions = [];
+    const id = String(userId);
+    if (promo.redemptions.some((item) => item && String(item.userId) === id)) {
+      return { ok: false, reason: 'already_used' };
+    }
+    const maxUses = Math.max(0, Number(promo.maxUses) || 0);
+    if (maxUses > 0 && promo.redemptions.length >= maxUses) return { ok: false, reason: 'limit' };
+    const user = getUser(id);
+    if (!user.pro || typeof user.pro !== 'object' || Array.isArray(user.pro)) user.pro = {};
+    if (!Array.isArray(user.pro.promoRedemptions)) user.pro.promoRedemptions = [];
+    const previousPro = JSON.parse(JSON.stringify(user.pro));
+    const previousRedemptions = promo.redemptions.slice();
+    const currentExpiry = Math.max(now, Number(user.pro.expiresAt) || 0);
+    user.pro.expiresAt = currentExpiry + days * 24 * 60 * 60 * 1000;
+    user.pro.promoRedemptions.push({ code: normalized, redeemedAt: now, days });
+    promo.redemptions.push({ userId: id, redeemedAt: now });
+    try { save(); } catch (error) {
+      user.pro = previousPro; promo.redemptions = previousRedemptions; throw error;
+    }
+    return { ok: true, code: normalized, days, expiresAt: user.pro.expiresAt };
+  }
+
   return {
     enabled: !!encryptionKey,
     filePath,
@@ -383,5 +462,9 @@ function createEncryptedStore(options = {}) {
     discardOutbox,
     completeUpdate,
     retryUpdate,
-    getQueueStats
+    getQueueStats,
+    createPromoCode,
+    disablePromoCode,
+    listPromoCodes,
+    redeemPromoCode
   };
