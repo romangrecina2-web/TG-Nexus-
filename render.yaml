@@ -10,6 +10,10 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
+      - key: PRO_BILLING_ENABLED
+        value: "false"
+      - key: BOT_ADMIN_IDS
+        sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: WEB_APP_URL
