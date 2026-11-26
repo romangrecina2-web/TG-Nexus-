@@ -111,6 +111,7 @@ function createBotChat(options = {}) {
     const form = new FormData();
     form.set('chat_id', String(chatId));
     if (document.caption) form.set('caption', String(document.caption).slice(0, 900));
+    if (document.replyMarkup) form.set('reply_markup', JSON.stringify(document.replyMarkup));
     form.set('document', new Blob([bytes], { type: document.mimeType || 'text/plain; charset=utf-8' }), document.fileName || 'code.txt');
     const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/sendDocument', {
       method: 'POST',
@@ -137,12 +138,13 @@ function createBotChat(options = {}) {
       callback_query_id: callbackQueryId,
       ...(text ? { text } : {})
     }));
-  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
+  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup, editOptions = {}) =>
     telegramRequest('editMessageText', {
+      ...editOptions,
       chat_id: chatId,
       message_id: messageId,
       text,
-      reply_markup: replyMarkup
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
     }));
   const editTelegramRichMessage = options.editTelegramRichMessage || ((chatId, messageId, richMessage, replyMarkup) =>
     telegramRequest('editMessageText', {
@@ -157,7 +159,8 @@ function createBotChat(options = {}) {
       fileName: String(document.fileName || 'code.txt').slice(0, 120),
       mimeType: String(document.mimeType || 'text/plain; charset=utf-8').slice(0, 100),
       caption: String(document.caption || '').slice(0, 900),
-      contentBase64: Buffer.from(document.content || '').toString('base64')
+      contentBase64: Buffer.from(document.content || '').toString('base64'),
+      ...(document.replyMarkup ? { replyMarkup: document.replyMarkup } : {})
     };
     const context = updateContext.getStore();
     if (!context || !Number.isSafeInteger(context.updateId)) return rawSendTelegramDocument(chatId, packet);
@@ -178,17 +181,21 @@ function createBotChat(options = {}) {
     for (const chunk of chunks) await sendTelegramMessage(chatId, chunk);
   }
 
-  async function sendAssistantText(chatId, text) {
+  async function sendAssistantText(chatId, text, sendOptions = {}) {
     const html = markdownToTelegramHtml(text);
     const chunks = splitTelegramHtml(html);
-    for (const chunk of chunks) {
+    let lastSent = null;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      const chunkOptions = index === chunks.length - 1 ? sendOptions : {};
       try {
-        await sendTelegramMessage(chatId, chunk.html, { parse_mode: 'HTML' });
+        lastSent = await sendTelegramMessage(chatId, chunk.html, { ...chunkOptions, parse_mode: 'HTML' });
       } catch (error) {
         if (!isTelegramHtmlParseError(error)) throw error;
-        await sendTelegramMessage(chatId, chunk.text);
+        lastSent = await sendTelegramMessage(chatId, chunk.text, chunkOptions);
       }
     }
+    return lastSent;
   }
 
   async function startGenerationIndicator(chatId) {
@@ -202,10 +209,10 @@ function createBotChat(options = {}) {
     let editInFlight = Promise.resolve();
 
     const elapsedSeconds = () => Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    const editStatus = async (text) => {
+    const editStatus = async (text, replyMarkup) => {
       if (!messageId) return false;
       try {
-        await editTelegramMessage(chatId, messageId, text);
+        await editTelegramMessage(chatId, messageId, text, replyMarkup);
         return true;
       } catch {
         return false;
@@ -223,17 +230,20 @@ function createBotChat(options = {}) {
 
     return {
       elapsedSeconds,
-      async finish(finalText) {
+      async finish(finalText, replyMarkup) {
         stopped = true;
         clearInterval(timer);
         await editInFlight;
         const seconds = elapsedSeconds();
+        const fallbackOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
         if (!messageId) {
-          if (finalText) await sendText(chatId, finalText);
+          if (finalText) await sendTelegramMessage(chatId, finalText, fallbackOptions);
           return seconds;
         }
         if (finalText) {
-          if (!(await editStatus(finalText))) await sendText(chatId, finalText);
+          if (!(await editStatus(finalText, replyMarkup))) {
+            await sendTelegramMessage(chatId, finalText, fallbackOptions);
+          }
         } else {
           try {
             await deleteTelegramMessage(chatId, messageId);

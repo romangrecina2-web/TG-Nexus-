@@ -512,7 +512,8 @@ function getSettingsUrl() {
   async function handleCallbackQuery(query) {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
         (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
-         !query.data.startsWith('terms:') && !query.data.startsWith('pro:'))) return false;
+         !query.data.startsWith('terms:') && !query.data.startsWith('pro:') &&
+         !query.data.startsWith('regen:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -593,6 +594,7 @@ function getSettingsUrl() {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('regen:')) return await handleRegenerateCallback(query, user, data);
       if (data.startsWith('pro:')) return await handleProCallback(query, user);
       if (data.startsWith('mc:')) {
         return await handleModelCatalogCallback(query, user, data);

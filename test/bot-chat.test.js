@@ -125,8 +125,8 @@ function makeBot(options = {}) {
       if (options.deleteTelegramMessageError) throw new Error('Telegram delete failed');
     },
     answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
-    editTelegramMessage: async (chatId, messageId, text, replyMarkup) => {
-      editedMessages.push({ chatId, messageId, text, replyMarkup });
+    editTelegramMessage: async (chatId, messageId, text, replyMarkup, editOptions) => {
+      editedMessages.push({ chatId, messageId, text, replyMarkup, editOptions: editOptions || {} });
     },
     editTelegramRichMessage: async (chatId, messageId, richMessage, replyMarkup) => {
       editedRichMessages.push({ chatId, messageId, richMessage, replyMarkup });
@@ -1681,4 +1681,91 @@ test('promo codes grant days once per user and respect the global usage limit', 
   await ctx.bot.handleMessage(message('/promocode WELCOME12', secondUser, 9922));
   assert.equal(ctx.bot.getProStatus(secondUser).active, false);
   assert.equal(ctx.bot.store.listPromoCodes()[0].uses, 1);
+});
+
+
+test('AI replies include an inline regenerate button and regenerate the matching request in place', async () => {
+  const answers = ['Первый ответ', 'Второй ответ'];
+  let requestCount = 0;
+  const ctx = makeBot({
+    fetchImpl: async (url) => {
+      assert.equal(String(url), 'https://provider.example/v1/chat/completions');
+      requestCount += 1;
+      const answer = answers.shift();
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: answer } }] })
+      };
+    }
+  });
+  const userId = 780001;
+  const user = ctx.bot.store.getUser(userId);
+  user.apiKey = 'valid-test-key';
+  user.model = 'test/model-a';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('Проверь ответ', userId, 10001));
+  const firstReply = ctx.sent.at(-1);
+  const firstButton = firstReply.options.reply_markup.inline_keyboard[0][0];
+  assert.equal(firstButton.text, '🔄 Перегенерировать ответ');
+  assert.match(firstButton.callback_data, /^regen:[0-9a-f-]{36}$/i);
+  assert.equal(requestCount, 1);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery(firstButton.callback_data, userId, firstReply.message_id));
+
+  const updatedUser = ctx.bot.store.getUser(userId);
+  const chat = updatedUser.chats.find((item) => item.messages.some((entry) =>
+    entry.role === 'user' && entry.content === 'Проверь ответ'));
+  assert.ok(chat);
+  assert.equal(chat.messages.find((entry) => entry.role === 'assistant').content, 'Второй ответ');
+  assert.equal(requestCount, 2);
+  const editedReply = ctx.editedMessages.find((item) =>
+    item.messageId === firstReply.message_id && item.text.includes('Второй ответ'));
+  assert.ok(editedReply);
+  assert.equal(editedReply.replyMarkup.inline_keyboard[0][0].callback_data, firstButton.callback_data);
+  assert.equal(editedReply.editOptions.parse_mode, 'HTML');
+});
+
+test('provider error messages also offer a button to retry the original request', async () => {
+  let requestCount = 0;
+  const ctx = makeBot({
+    fetchImpl: async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return {
+          ok: false,
+          status: 429,
+          json: async () => ({ error: { message: 'Provider returned error' } })
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: 'Ответ после повтора' } }] })
+      };
+    }
+  });
+  const userId = 780002;
+  const user = ctx.bot.store.getUser(userId);
+  user.apiKey = 'valid-test-key';
+  user.model = 'test/model-a';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('Повтори если ошибка', userId, 10002));
+  const errorMessage = ctx.editedMessages.find((item) => item.text.includes('HTTP 429'));
+  assert.ok(errorMessage);
+  const retryButton = errorMessage.replyMarkup.inline_keyboard[0][0];
+  assert.equal(retryButton.text, '🔄 Повторить запрос');
+
+  await ctx.bot.handleCallbackQuery(callbackQuery(retryButton.callback_data, userId, errorMessage.messageId));
+
+  assert.equal(requestCount, 2);
+  const savedChat = ctx.bot.store.getUser(userId).chats[0];
+  assert.ok(savedChat.messages.some((item) =>
+    item.role === 'assistant' && item.content === 'Ответ после повтора'));
+  assert.ok(ctx.editedMessages.some((item) =>
+    item.messageId === errorMessage.messageId && item.text.includes('Ответ после повтора')));
 });

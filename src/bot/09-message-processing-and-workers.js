@@ -1,3 +1,14 @@
+  const pendingRegenerationRequests = new Set();
+
+  function regenerateReplyMarkup(requestId, label = '🔄 Перегенерировать ответ') {
+    return {
+      inline_keyboard: [[{
+        text: label,
+        callback_data: 'regen:' + requestId
+      }]]
+    };
+  }
+
   async function handleUserMessage(message, user, text) {
     let chat = activeChat(user);
     if (!chat) chat = createChat(user, nextChatTitle(user));
@@ -11,7 +22,13 @@
       return;
     }
 
-    chat.messages.push({ id: crypto.randomUUID(), createdAt: Date.now(), role: 'user', content: text.slice(0, MAX_MESSAGE_LENGTH) });
+    const userMessage = {
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+      role: 'user',
+      content: text.slice(0, MAX_MESSAGE_LENGTH)
+    };
+    chat.messages.push(userMessage);
     chat.updatedAt = Date.now();
     if (chat.messages.length > MAX_MESSAGES_PER_CHAT) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
@@ -25,7 +42,10 @@
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
       const elapsed = indicator.elapsedSeconds();
-      await indicator.finish('Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason);
+      await indicator.finish(
+        'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason,
+        regenerateReplyMarkup(userMessage.id, '🔄 Повторить запрос')
+      );
       return;
     }
 
@@ -36,7 +56,146 @@
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
     store.save();
-    await sendAssistantResponse(message.chat.id, answer, text);
+    await sendAssistantResponse(message.chat.id, answer, text, {
+      reply_markup: regenerateReplyMarkup(userMessage.id)
+    });
+  }
+
+  async function handleRegenerateCallback(query, user, data) {
+    const match = String(data || '').match(/^regen:([0-9a-f-]{36})$/i);
+    const message = query && query.message;
+    const userId = query && query.from && query.from.id;
+    if (!match || !message || !message.chat || userId == null) {
+      await safeAnswerCallback(query.id, 'Эта кнопка устарела. Отправьте новый запрос.');
+      return true;
+    }
+
+    const requestId = match[1];
+    const lockKey = String(userId) + ':' + requestId;
+    if (pendingRegenerationRequests.has(lockKey)) {
+      await safeAnswerCallback(query.id, 'Этот ответ уже перегенерируется.');
+      return true;
+    }
+
+    let targetChat = null;
+    let promptIndex = -1;
+    for (const candidate of Array.isArray(user.chats) ? user.chats : []) {
+      if (!candidate || !Array.isArray(candidate.messages)) continue;
+      const index = candidate.messages.findIndex((item) =>
+        item && item.id === requestId && item.role === 'user');
+      if (index >= 0) {
+        targetChat = candidate;
+        promptIndex = index;
+        break;
+      }
+    }
+    if (!targetChat || promptIndex < 0) {
+      await safeAnswerCallback(query.id, 'Исходный запрос больше не найден. Отправьте его ещё раз.');
+      return true;
+    }
+    if (!user.apiKey) {
+      await safeAnswerCallback(query.id, 'API-ключ не настроен. Добавьте его командой /key.');
+      return true;
+    }
+    if (!checkRateLimit(userId)) {
+      await safeAnswerCallback(query.id, 'Слишком много запросов. Подождите минуту и повторите.');
+      return true;
+    }
+
+    pendingRegenerationRequests.add(lockKey);
+    try {
+      await safeAnswerCallback(query.id, 'Перегенерирую ответ…');
+      const indicator = await startGenerationIndicator(message.chat.id);
+      const promptMessage = targetChat.messages[promptIndex];
+      let answer;
+      try {
+        const requestChat = {
+          ...targetChat,
+          messages: targetChat.messages.slice(0, promptIndex + 1)
+        };
+        answer = await requestAssistant(user, requestChat);
+      } catch (error) {
+        const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
+        await indicator.finish(
+          'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
+            ' сек.\nПричина: ' + reason,
+          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
+        );
+        return true;
+      }
+
+      const assistantIndex = promptIndex + 1;
+      const existingAssistant = targetChat.messages[assistantIndex] &&
+        targetChat.messages[assistantIndex].role === 'assistant'
+        ? targetChat.messages[assistantIndex]
+        : null;
+      const previousUpdatedAt = targetChat.updatedAt;
+      const previousAssistant = existingAssistant
+        ? { content: existingAssistant.content, createdAt: existingAssistant.createdAt }
+        : null;
+      let assistantMessage = existingAssistant;
+      try {
+        if (assistantMessage) {
+          assistantMessage.content = answer;
+          assistantMessage.createdAt = Date.now();
+        } else {
+          assistantMessage = {
+            id: crypto.randomUUID(),
+            createdAt: Date.now(),
+            role: 'assistant',
+            content: answer
+          };
+          targetChat.messages.splice(assistantIndex, 0, assistantMessage);
+        }
+        targetChat.updatedAt = Date.now();
+        if (targetChat.messages.length > MAX_MESSAGES_PER_CHAT) {
+          targetChat.messages.splice(0, targetChat.messages.length - MAX_MESSAGES_PER_CHAT);
+        }
+        store.save();
+      } catch (error) {
+        if (existingAssistant && previousAssistant) {
+          existingAssistant.content = previousAssistant.content;
+          existingAssistant.createdAt = previousAssistant.createdAt;
+        } else if (!existingAssistant && assistantMessage) {
+          const insertedIndex = targetChat.messages.indexOf(assistantMessage);
+          if (insertedIndex >= 0) targetChat.messages.splice(insertedIndex, 1);
+        }
+        targetChat.updatedAt = previousUpdatedAt;
+        await indicator.finish(
+          'Ответ получен, но не удалось сохранить его в историю. Повторите попытку.',
+          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
+        );
+        return true;
+      }
+
+      await indicator.finish();
+      const replyMarkup = regenerateReplyMarkup(requestId);
+      const html = markdownToTelegramHtml(answer);
+      const chunks = splitTelegramHtml(html);
+      if (!isCodeArtifactRequest(promptMessage.content) && chunks.length === 1 &&
+          Number.isSafeInteger(Number(message.message_id))) {
+        try {
+          await editTelegramMessage(
+            message.chat.id,
+            Number(message.message_id),
+            chunks[0].html,
+            replyMarkup,
+            { parse_mode: 'HTML' }
+          );
+          return true;
+        } catch (error) {
+          const description = String(error && (error.telegramDescription || error.message) || '');
+          if (/message is not modified/i.test(description)) return true;
+        }
+      }
+
+      await sendAssistantResponse(message.chat.id, answer, promptMessage.content, {
+        reply_markup: replyMarkup
+      });
+      return true;
+    } finally {
+      pendingRegenerationRequests.delete(lockKey);
+    }
   }
 
   async function processMessage(message, parsed, text) {

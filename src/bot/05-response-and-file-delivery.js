@@ -155,20 +155,22 @@
     return segments;
   }
 
-  async function sendAssistantResponse(chatId, answer, requestText) {
+  async function sendAssistantResponse(chatId, answer, requestText, sendOptions = {}) {
     const segments = splitAssistantFiles(answer, requestText);
     if (!segments || !segments.some((segment) => segment.type === 'file')) {
-      await sendAssistantText(chatId, answer);
-      return;
+      return sendAssistantText(chatId, answer, sendOptions);
     }
     const files = segments.filter((segment) => segment.type === 'file');
     if (files.length > 5) {
       await sendText(chatId, 'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.');
-      return;
+      return null;
     }
-    for (const segment of segments) {
+    let lastSent = null;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      const isLast = index === segments.length - 1;
       if (segment.type === 'text') {
-        await sendAssistantText(chatId, segment.value);
+        lastSent = await sendAssistantText(chatId, segment.value, isLast ? sendOptions : {});
         continue;
       }
       const size = Buffer.byteLength(segment.content, 'utf8');
@@ -176,13 +178,15 @@
         await sendText(chatId, 'Файл «' + segment.name + '» не отправлен: пустой или превышает лимит 2 МБ.');
         continue;
       }
-      await sendTelegramDocument(chatId, {
+      lastSent = await sendTelegramDocument(chatId, {
         fileName: segment.name,
         mimeType: codeFileMimeType(segment.language),
         caption: 'Файл с кодом: ' + segment.name,
-        content: segment.content
+        content: segment.content,
+        ...(isLast && sendOptions.reply_markup ? { replyMarkup: sendOptions.reply_markup } : {})
       });
     }
+    return lastSent;
   }
 
     const modelChoiceCache = new Map();
