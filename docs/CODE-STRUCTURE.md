@@ -52,6 +52,7 @@ These fragments are concatenated in filename order into `bot-chat.js`. They shar
 | `06-settings-and-callbacks.js` | Settings views, keyboards and callback processing |
 | `07-chat-and-provider-commands.js` | Chat, key, provider and model commands |
 | `08-provider-requests.js` | Provider request construction and error normalization |
+| `09-billing-and-promos.js` | Telegram Stars invoices, 12-day trial, PRO status and promo codes |
 | `09-message-processing-and-workers.js` | Incoming message processing and queued workers |
 | `09-model-catalog.js` | Telegram model catalogue, provider search, filters, Rich Message cards and model selection |
 | `10-sync-api-and-exports.js` | Mini App sync API and public module exports |
