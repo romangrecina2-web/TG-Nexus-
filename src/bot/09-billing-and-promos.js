@@ -28,11 +28,26 @@ function ensureProTrial(userId, now = Date.now()) {
   const user = store.getUser(userId);
   const pro = normalizeProState(user);
   if (Number(pro.trialStartedAt) > 0) return getProStatus(userId, now);
+  const previous = {
+    trialStartedAt: pro.trialStartedAt,
+    trialExpiresAt: pro.trialExpiresAt,
+    expiresAt: pro.expiresAt
+  };
   pro.trialStartedAt = now;
   pro.trialExpiresAt = now + TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
   pro.expiresAt = Math.max(now, Number(pro.expiresAt) || 0) +
     TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
-  store.save();
+  try {
+    store.save();
+  } catch (error) {
+    if (previous.trialStartedAt === undefined) delete pro.trialStartedAt;
+    else pro.trialStartedAt = previous.trialStartedAt;
+    if (previous.trialExpiresAt === undefined) delete pro.trialExpiresAt;
+    else pro.trialExpiresAt = previous.trialExpiresAt;
+    if (previous.expiresAt === undefined) delete pro.expiresAt;
+    else pro.expiresAt = previous.expiresAt;
+    throw error;
+  }
   return getProStatus(userId, now);
 }
 
