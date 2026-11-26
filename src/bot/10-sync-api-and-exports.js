@@ -12,6 +12,7 @@
       settings: user.settings || {},
       activeChatId: user.activeChatId || null,
       chats: user.chats || [],
+      pro: getProStatus(userId),
       initialized: !!(user.syncInitialized || user.apiKey || user.chats.length || Object.keys(user.settings || {}).length || user.modelExplicit || user.apiBaseUrlExplicit)
     };
   }
@@ -153,6 +154,10 @@
     applySyncState,
     setApiKey,
     clearApiKey,
+    ensureTrial: ensureProTrial,
+    getProStatus,
+    handlePreCheckoutQuery,
+    handleSuccessfulPayment,
     enqueueUpdate,
     startUpdateWorker,
     stopUpdateWorker,
