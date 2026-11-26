@@ -125,8 +125,8 @@ function makeBot(options = {}) {
       if (options.deleteTelegramMessageError) throw new Error('Telegram delete failed');
     },
     answerCallbackQuery: async (callbackQueryId, text) => { callbackAnswers.push({ callbackQueryId, text }); },
-    editTelegramMessage: async (chatId, messageId, text, replyMarkup, editOptions) => {
-      editedMessages.push({ chatId, messageId, text, replyMarkup, editOptions: editOptions || {} });
+    editTelegramMessage: async (chatId, messageId, text, replyMarkup) => {
+      editedMessages.push({ chatId, messageId, text, replyMarkup });
     },
     editTelegramRichMessage: async (chatId, messageId, richMessage, replyMarkup) => {
       editedRichMessages.push({ chatId, messageId, richMessage, replyMarkup });
@@ -401,7 +401,7 @@ test('Telegram bot uses native Anthropic Messages API with the provider authenti
   assert.equal(calls[0].url, 'https://api.anthropic.com/v1/messages');
   assert.equal(calls[0].request.headers['x-api-key'], 'anthropic-test-key');
   assert.equal(calls[0].request.headers['anthropic-version'], '2023-06-01');
-  assert.equal(ctx.sent.at(-1).text, 'Ответ от Anthropic');
+  assert.ok(ctx.richMessages.at(-1).richMessage.markdown.startsWith('Ответ от Anthropic'));
 });
 
 test('code generation requests send named source files as Telegram documents', async () => {
@@ -414,8 +414,8 @@ test('code generation requests send named source files as Telegram documents', a
   assert.equal(ctx.documents[0].fileName, 'main.py');
   assert.match(Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8'), /print\("hello from file"\)/);
   assert.equal(ctx.documents[0].caption, 'Файл с кодом: main.py');
-  assert.ok(ctx.sent.some((item) => item.text.includes('Готовый скрипт ниже.')));
-  assert.ok(ctx.sent.some((item) => item.text.includes('Запустите файл')));
+  assert.ok(ctx.richMessages.some((item) => item.richMessage.markdown.includes('Готовый скрипт ниже.')));
+  assert.ok(ctx.richMessages.some((item) => item.richMessage.markdown.includes('Запустите файл')));
   assert.ok(!ctx.sent.some((item) => item.text.includes('print("hello from file")')));
   const prompt = JSON.parse(ctx.providerCalls.at(-1).request.body).messages[0].content;
   assert.match(prompt, /каждый готовый файл отдельным блоком кода/);
@@ -434,7 +434,7 @@ test('format conversion requests deliver HTML documents even when the model labe
   const fileContent = Buffer.from(ctx.documents[0].contentBase64, 'base64').toString('utf8');
   assert.match(fileContent, /<!doctype html>/i);
   assert.match(fileContent, /HTML_OK/);
-  assert.equal(ctx.sent.some((item) => item.text.includes('<!doctype html>')), false);
+  assert.equal(ctx.richMessages.some((item) => item.richMessage.markdown.includes('<!doctype html>')), false);
 });
 
 test('an explicit target extension replaces a conflicting generated filename extension', async () => {
@@ -471,7 +471,7 @@ test('code examples in explanatory replies stay inline and do not become files',
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Объясни, что делает пример кода.'));
   assert.equal(ctx.documents.length, 0);
-  assert.ok(ctx.sent.some((item) => item.text.includes('console.log(2)')));
+  assert.ok(ctx.richMessages.some((item) => item.richMessage.markdown.includes('console.log(2)')));
 });
 
 test('normal chat messages use Responses API for direct OpenAI Astra Pro', async () => {
@@ -510,7 +510,7 @@ test('normal chat messages use Responses API for direct OpenAI Astra Pro', async
   await ctx.bot.handleMessage(message('Review this patch.'));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
-  assert.match(ctx.sent.at(-1).text, /NORMAL_CHAT_OK/);
+  assert.match(ctx.richMessages.at(-1).richMessage.markdown, /NORMAL_CHAT_OK/);
 });
 
 test('normal messages create a chat automatically and send the AI response', async () => {
@@ -521,8 +521,9 @@ test('normal messages create a chat automatically and send the AI response', asy
   assert.equal(user.chats.length, 1);
   assert.equal(user.chats[0].title, 'Чат 1');
   assert.deepEqual(user.chats[0].messages.map((x) => x.role), ['user', 'assistant']);
-  assert.equal(ctx.sent.at(-1).text, 'Ответ ИИ');
-  assert.equal(ctx.sent.at(-1).options.parse_mode, 'HTML');
+  assert.match(ctx.richMessages.at(-1).richMessage.markdown, /^Ответ ИИ/);
+  assert.match(ctx.richMessages.at(-1).richMessage.markdown, /<tg-button-row align="center">/);
+  assert.match(ctx.richMessages.at(-1).richMessage.markdown, /<tg-button type="callback_data" style="success" data="regen:/);
   assert.ok(ctx.sent.some((item) => item.text === 'Генерируем ответ... (0 сек.)'));
   const indicator = ctx.sent.find((item) => item.text === 'Генерируем ответ... (0 сек.)');
   assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === indicator.message_id));
@@ -537,7 +538,7 @@ test('generation indicator updates its elapsed seconds and is removed after comp
   const progressEdits = ctx.editedMessages.filter((item) => /^Генерируем ответ\.\.\. \(\d+ сек\.\)$/.test(item.text));
   assert.ok(progressEdits.length >= 1);
   assert.ok(progressEdits.some((item) => Number(item.text.match(/\((\d+) сек\.\)/)[1]) >= 1));
-  assert.equal(ctx.sent.at(-1).text, 'Ответ ИИ');
+  assert.match(ctx.richMessages.at(-1).richMessage.markdown, /^Ответ ИИ/);
 });
 
 test('Telegram send failures propagate instead of being silently swallowed', async () => {
@@ -629,16 +630,15 @@ test('HTML chunks stay within the limit and keep every tag balanced, including c
   assert.ok(chunks.map((chunk) => chunk.text).join('').includes('<значение>'));
 });
 
-test('HTML parse errors retry the same assistant part as plain text', async () => {
+test('assistant answers are sent as Rich Markdown with the regenerate button inside the message', async () => {
   const ctx = makeBot({ answer: '**Привет**\n# Заголовок', rejectHtml: true });
   await ctx.bot.handleMessage(message('/key valid-key'));
   await ctx.bot.handleMessage(message('Скажи привет'));
-  const htmlAttempt = ctx.attempts.find((attempt) => attempt.options.parse_mode === 'HTML');
-  const plainFallback = ctx.sent.at(-1);
-  assert.equal(htmlAttempt.options.parse_mode, 'HTML');
-  assert.equal(htmlAttempt.text, '<b>Привет</b>\n<b>Заголовок</b>');
-  assert.equal(plainFallback.text, 'Привет\nЗаголовок');
-  assert.deepEqual(plainFallback.options, {});
+  const richMessage = ctx.richMessages.at(-1).richMessage;
+  assert.match(richMessage.markdown, /^\*\*Привет\*\*\n# Заголовок/);
+  assert.match(richMessage.markdown, /<tg-button-row align="center">/);
+  assert.match(richMessage.markdown, /data="regen:[0-9a-f-]{36}"/);
+  assert.equal(ctx.attempts.some((attempt) => attempt.options.parse_mode === 'HTML'), false);
 });
 
 test('registered Telegram command names are lowercase and retain /start and /help', () => {
@@ -743,7 +743,7 @@ test('worker preserves the order of messages from the same user with concurrent 
 });
 
 
-test('queued assistant output falls back from rejected HTML without retrying invalid markup', async () => {
+test('queued assistant output is delivered as a rich message with its in-message button', async () => {
   const ctx = makeBot({ answer: '**Привет**\n# Заголовок', rejectHtml: true });
   await ctx.bot.handleMessage(message('/key valid-key'));
   ctx.bot.startUpdateWorker(async (update) => ctx.bot.handleMessage(update.message), {
@@ -756,9 +756,9 @@ test('queued assistant output falls back from rejected HTML without retrying inv
   });
 
   await waitFor(() => ctx.bot.getWorkerStats().total === 0);
-  const htmlAttempt = ctx.attempts.find((attempt) => attempt.options.parse_mode === 'HTML');
-  assert.ok(htmlAttempt);
-  assert.equal(ctx.sent.at(-1).text, 'Привет\nЗаголовок');
+  const richMessage = ctx.richMessages.at(-1).richMessage;
+  assert.match(richMessage.markdown, /^\*\*Привет\*\*\n# Заголовок/);
+  assert.match(richMessage.markdown, /<tg-button-row align="center">/);
   assert.equal(ctx.bot.getWorkerStats().deadLettered, 0);
   await ctx.bot.stopUpdateWorker({ timeoutMs: 1_000 });
 });
@@ -1707,13 +1707,15 @@ test('AI replies include an inline regenerate button and regenerate the matching
   ctx.bot.store.save();
 
   await ctx.bot.handleMessage(message('Проверь ответ', userId, 10001));
-  const firstReply = ctx.sent.at(-1);
-  const firstButton = firstReply.options.reply_markup.inline_keyboard[0][0];
-  assert.equal(firstButton.text, '🔄 Перегенерировать ответ');
-  assert.match(firstButton.callback_data, /^regen:[0-9a-f-]{36}$/i);
+  const firstReply = ctx.richMessages.at(-1);
+  const firstMarkdown = firstReply.richMessage.markdown;
+  const callbackData = firstMarkdown.match(/data="(regen:[0-9a-f-]{36})"/i)?.[1];
+  assert.ok(firstMarkdown.includes('<tg-button-row align="center">'));
+  assert.ok(firstMarkdown.includes('🔄 Перегенерировать ответ'));
+  assert.match(callbackData || '', /^regen:[0-9a-f-]{36}$/i);
   assert.equal(requestCount, 1);
 
-  await ctx.bot.handleCallbackQuery(callbackQuery(firstButton.callback_data, userId, firstReply.message_id));
+  await ctx.bot.handleCallbackQuery(callbackQuery(callbackData, userId, firstReply.message_id));
 
   const updatedUser = ctx.bot.store.getUser(userId);
   const chat = updatedUser.chats.find((item) => item.messages.some((entry) =>
@@ -1721,11 +1723,11 @@ test('AI replies include an inline regenerate button and regenerate the matching
   assert.ok(chat);
   assert.equal(chat.messages.find((entry) => entry.role === 'assistant').content, 'Второй ответ');
   assert.equal(requestCount, 2);
-  const editedReply = ctx.editedMessages.find((item) =>
-    item.messageId === firstReply.message_id && item.text.includes('Второй ответ'));
+  const editedReply = ctx.editedRichMessages.find((item) =>
+    item.messageId === firstReply.message_id && item.richMessage.markdown.includes('Второй ответ'));
   assert.ok(editedReply);
-  assert.equal(editedReply.replyMarkup.inline_keyboard[0][0].callback_data, firstButton.callback_data);
-  assert.equal(editedReply.editOptions.parse_mode, 'HTML');
+  assert.ok(editedReply.richMessage.markdown.includes('<tg-button-row align="center">'));
+  assert.ok(editedReply.richMessage.markdown.includes('data="' + callbackData + '"'));
 });
 
 test('provider error messages also offer a button to retry the original request', async () => {
@@ -1755,17 +1757,18 @@ test('provider error messages also offer a button to retry the original request'
   ctx.bot.store.save();
 
   await ctx.bot.handleMessage(message('Повтори если ошибка', userId, 10002));
-  const errorMessage = ctx.editedMessages.find((item) => item.text.includes('HTTP 429'));
+  const errorMessage = ctx.editedRichMessages.find((item) => item.richMessage.markdown.includes('HTTP 429'));
   assert.ok(errorMessage);
-  const retryButton = errorMessage.replyMarkup.inline_keyboard[0][0];
-  assert.equal(retryButton.text, '🔄 Повторить запрос');
+  const callbackData = errorMessage.richMessage.markdown.match(/data="(regen:[0-9a-f-]{36})"/i)?.[1];
+  assert.match(callbackData || '', /^regen:[0-9a-f-]{36}$/i);
+  assert.ok(errorMessage.richMessage.markdown.includes('🔄 Повторить запрос'));
 
-  await ctx.bot.handleCallbackQuery(callbackQuery(retryButton.callback_data, userId, errorMessage.messageId));
+  await ctx.bot.handleCallbackQuery(callbackQuery(callbackData, userId, errorMessage.messageId));
 
   assert.equal(requestCount, 2);
   const savedChat = ctx.bot.store.getUser(userId).chats[0];
   assert.ok(savedChat.messages.some((item) =>
     item.role === 'assistant' && item.content === 'Ответ после повтора'));
-  assert.ok(ctx.editedMessages.some((item) =>
-    item.messageId === errorMessage.messageId && item.text.includes('Ответ после повтора')));
+  assert.ok(ctx.editedRichMessages.some((item) =>
+    item.messageId === errorMessage.messageId && item.richMessage.markdown.includes('Ответ после повтора')));
 });

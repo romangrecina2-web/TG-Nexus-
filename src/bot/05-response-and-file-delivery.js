@@ -155,26 +155,33 @@
     return segments;
   }
 
-  async function sendAssistantResponse(chatId, answer, requestText, sendOptions = {}) {
+  async function sendAssistantResponse(chatId, answer, requestText, requestId) {
     const segments = splitAssistantFiles(answer, requestText);
     if (!segments || !segments.some((segment) => segment.type === 'file')) {
-      return sendAssistantText(chatId, answer, sendOptions);
+      return sendAssistantText(chatId, answer, requestId);
     }
     const files = segments.filter((segment) => segment.type === 'file');
     if (files.length > 5) {
-      await sendText(chatId, 'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.');
+      await sendAssistantText(
+        chatId,
+        'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.',
+        requestId
+      );
       return null;
     }
     let lastSent = null;
+    const finalSegment = segments[segments.length - 1];
+    let fileDeliveryFailed = false;
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index];
       const isLast = index === segments.length - 1;
       if (segment.type === 'text') {
-        lastSent = await sendAssistantText(chatId, segment.value, isLast ? sendOptions : {});
+        lastSent = await sendAssistantText(chatId, segment.value, isLast ? requestId : null);
         continue;
       }
       const size = Buffer.byteLength(segment.content, 'utf8');
       if (!size || size > 2 * 1024 * 1024) {
+        fileDeliveryFailed = true;
         await sendText(chatId, 'Файл «' + segment.name + '» не отправлен: пустой или превышает лимит 2 МБ.');
         continue;
       }
@@ -182,9 +189,15 @@
         fileName: segment.name,
         mimeType: codeFileMimeType(segment.language),
         caption: 'Файл с кодом: ' + segment.name,
-        content: segment.content,
-        ...(isLast && sendOptions.reply_markup ? { replyMarkup: sendOptions.reply_markup } : {})
+        content: segment.content
       });
+    }
+    if (requestId && finalSegment && finalSegment.type === 'file') {
+      lastSent = await sendAssistantText(
+        chatId,
+        fileDeliveryFailed ? 'Не удалось прикрепить один или несколько файлов.' : 'Файлы с ответом прикреплены выше.',
+        requestId
+      );
     }
     return lastSent;
   }

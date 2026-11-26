@@ -111,7 +111,6 @@ function createBotChat(options = {}) {
     const form = new FormData();
     form.set('chat_id', String(chatId));
     if (document.caption) form.set('caption', String(document.caption).slice(0, 900));
-    if (document.replyMarkup) form.set('reply_markup', JSON.stringify(document.replyMarkup));
     form.set('document', new Blob([bytes], { type: document.mimeType || 'text/plain; charset=utf-8' }), document.fileName || 'code.txt');
     const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/sendDocument', {
       method: 'POST',
@@ -138,13 +137,12 @@ function createBotChat(options = {}) {
       callback_query_id: callbackQueryId,
       ...(text ? { text } : {})
     }));
-  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup, editOptions = {}) =>
+  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
     telegramRequest('editMessageText', {
-      ...editOptions,
       chat_id: chatId,
       message_id: messageId,
       text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      reply_markup: replyMarkup
     }));
   const editTelegramRichMessage = options.editTelegramRichMessage || ((chatId, messageId, richMessage, replyMarkup) =>
     telegramRequest('editMessageText', {
@@ -159,8 +157,7 @@ function createBotChat(options = {}) {
       fileName: String(document.fileName || 'code.txt').slice(0, 120),
       mimeType: String(document.mimeType || 'text/plain; charset=utf-8').slice(0, 100),
       caption: String(document.caption || '').slice(0, 900),
-      contentBase64: Buffer.from(document.content || '').toString('base64'),
-      ...(document.replyMarkup ? { replyMarkup: document.replyMarkup } : {})
+      contentBase64: Buffer.from(document.content || '').toString('base64')
     };
     const context = updateContext.getStore();
     if (!context || !Number.isSafeInteger(context.updateId)) return rawSendTelegramDocument(chatId, packet);
@@ -181,19 +178,51 @@ function createBotChat(options = {}) {
     for (const chunk of chunks) await sendTelegramMessage(chatId, chunk);
   }
 
-  async function sendAssistantText(chatId, text, sendOptions = {}) {
-    const html = markdownToTelegramHtml(text);
-    const chunks = splitTelegramHtml(html);
+  function escapeAssistantRichButtonTags(value) {
+    return String(value == null ? '' : value).replace(/<\/?tg-button(?:-row)?\b[^>]*>/gi, (tag) =>
+      tag.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+  }
+
+  function buildAssistantRichMessage(text, requestId, buttonText) {
+    const safeText = escapeAssistantRichButtonTags(text).trim() || ' ';
+    const id = String(requestId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { markdown: safeText };
+
+    const label = buttonText === '🔄 Повторить запрос'
+      ? '🔄 Повторить запрос'
+      : '🔄 Перегенерировать ответ';
+    return {
+      markdown: safeText + '\n\n' +
+        '<tg-button-row align="center"><tg-button type="callback_data" style="success" data="regen:' +
+        id + '">' + label + '</tg-button></tg-button-row>'
+    };
+  }
+
+  function splitAssistantRichMarkdown(value, maxLength = 30_000) {
+    let remaining = String(value == null ? '' : value).trim();
+    if (!remaining) return [' '];
+    const chunks = [];
+    while (remaining.length > maxLength) {
+      let cut = remaining.lastIndexOf('\n\n', maxLength);
+      if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf('\n', maxLength);
+      if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf(' ', maxLength);
+      if (cut < 1) cut = maxLength;
+      chunks.push(remaining.slice(0, cut).trimEnd());
+      remaining = remaining.slice(cut).trimStart();
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks.length ? chunks : [' '];
+  }
+
+  async function sendAssistantText(chatId, text, requestId, buttonText) {
+    const chunks = splitAssistantRichMarkdown(text);
     let lastSent = null;
     for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index];
-      const chunkOptions = index === chunks.length - 1 ? sendOptions : {};
-      try {
-        lastSent = await sendTelegramMessage(chatId, chunk.html, { ...chunkOptions, parse_mode: 'HTML' });
-      } catch (error) {
-        if (!isTelegramHtmlParseError(error)) throw error;
-        lastSent = await sendTelegramMessage(chatId, chunk.text, chunkOptions);
-      }
+      const isLast = index === chunks.length - 1;
+      lastSent = await sendTelegramRichMessage(
+        chatId,
+        buildAssistantRichMessage(chunks[index], isLast ? requestId : null, buttonText)
+      );
     }
     return lastSent;
   }
@@ -230,26 +259,40 @@ function createBotChat(options = {}) {
 
     return {
       elapsedSeconds,
-      async finish(finalText, replyMarkup) {
+      async finish(finalText) {
         stopped = true;
         clearInterval(timer);
         await editInFlight;
         const seconds = elapsedSeconds();
-        const fallbackOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
         if (!messageId) {
-          if (finalText) await sendTelegramMessage(chatId, finalText, fallbackOptions);
+          if (finalText) await sendText(chatId, finalText);
           return seconds;
         }
         if (finalText) {
-          if (!(await editStatus(finalText, replyMarkup))) {
-            await sendTelegramMessage(chatId, finalText, fallbackOptions);
-          }
+          if (!(await editStatus(finalText))) await sendText(chatId, finalText);
         } else {
           try {
             await deleteTelegramMessage(chatId, messageId);
           } catch {
             await editStatus('Ответ готов за ' + seconds + ' сек.');
           }
+        }
+        return seconds;
+      },
+      async finishRich(richMessage) {
+        stopped = true;
+        clearInterval(timer);
+        await editInFlight;
+        const seconds = elapsedSeconds();
+        if (!messageId) {
+          await sendTelegramRichMessage(chatId, richMessage);
+          return seconds;
+        }
+        try {
+          await editTelegramRichMessage(chatId, messageId, richMessage);
+        } catch {
+          try { await deleteTelegramMessage(chatId, messageId); } catch {}
+          await sendTelegramRichMessage(chatId, richMessage);
         }
         return seconds;
       }

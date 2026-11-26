@@ -1,14 +1,5 @@
   const pendingRegenerationRequests = new Set();
 
-  function regenerateReplyMarkup(requestId, label = '🔄 Перегенерировать ответ') {
-    return {
-      inline_keyboard: [[{
-        text: label,
-        callback_data: 'regen:' + requestId
-      }]]
-    };
-  }
-
   async function handleUserMessage(message, user, text) {
     let chat = activeChat(user);
     if (!chat) chat = createChat(user, nextChatTitle(user));
@@ -42,10 +33,11 @@
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
       const elapsed = indicator.elapsedSeconds();
-      await indicator.finish(
+      await indicator.finishRich(buildAssistantRichMessage(
         'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason,
-        regenerateReplyMarkup(userMessage.id, '🔄 Повторить запрос')
-      );
+        userMessage.id,
+        '🔄 Повторить запрос'
+      ));
       return;
     }
 
@@ -56,9 +48,7 @@
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
     store.save();
-    await sendAssistantResponse(message.chat.id, answer, text, {
-      reply_markup: regenerateReplyMarkup(userMessage.id)
-    });
+    await sendAssistantResponse(message.chat.id, answer, text, userMessage.id);
   }
 
   async function handleRegenerateCallback(query, user, data) {
@@ -116,11 +106,12 @@
         answer = await requestAssistant(user, requestChat);
       } catch (error) {
         const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
-        await indicator.finish(
+        await indicator.finishRich(buildAssistantRichMessage(
           'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
             ' сек.\nПричина: ' + reason,
-          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
-        );
+          requestId,
+          '🔄 Повторить запрос'
+        ));
         return true;
       }
 
@@ -161,26 +152,24 @@
           if (insertedIndex >= 0) targetChat.messages.splice(insertedIndex, 1);
         }
         targetChat.updatedAt = previousUpdatedAt;
-        await indicator.finish(
+        await indicator.finishRich(buildAssistantRichMessage(
           'Ответ получен, но не удалось сохранить его в историю. Повторите попытку.',
-          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
-        );
+          requestId,
+          '🔄 Повторить запрос'
+        ));
         return true;
       }
 
       await indicator.finish();
-      const replyMarkup = regenerateReplyMarkup(requestId);
-      const html = markdownToTelegramHtml(answer);
-      const chunks = splitTelegramHtml(html);
-      if (!isCodeArtifactRequest(promptMessage.content) && chunks.length === 1 &&
-          Number.isSafeInteger(Number(message.message_id))) {
+      const messageId = Number(message.message_id);
+      if (!isCodeArtifactRequest(promptMessage.content) &&
+          splitAssistantRichMarkdown(answer).length === 1 &&
+          Number.isSafeInteger(messageId)) {
         try {
-          await editTelegramMessage(
+          await editTelegramRichMessage(
             message.chat.id,
-            Number(message.message_id),
-            chunks[0].html,
-            replyMarkup,
-            { parse_mode: 'HTML' }
+            messageId,
+            buildAssistantRichMessage(answer, requestId)
           );
           return true;
         } catch (error) {
@@ -189,9 +178,14 @@
         }
       }
 
-      await sendAssistantResponse(message.chat.id, answer, promptMessage.content, {
-        reply_markup: replyMarkup
-      });
+      if (Number.isSafeInteger(messageId)) {
+        try {
+          await editTelegramRichMessage(message.chat.id, messageId, {
+            markdown: 'Новая версия ответа сформирована и отправлена ниже.'
+          });
+        } catch {}
+      }
+      await sendAssistantResponse(message.chat.id, answer, promptMessage.content, requestId);
       return true;
     } finally {
       pendingRegenerationRequests.delete(lockKey);

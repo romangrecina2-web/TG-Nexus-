@@ -2,6 +2,7 @@
  * Source: src/bot/*.js
  * Rebuild with: npm run build
  */
+
 'use strict';
 
 const crypto = require('node:crypto');
@@ -878,7 +879,6 @@ function createBotChat(options = {}) {
     const form = new FormData();
     form.set('chat_id', String(chatId));
     if (document.caption) form.set('caption', String(document.caption).slice(0, 900));
-    if (document.replyMarkup) form.set('reply_markup', JSON.stringify(document.replyMarkup));
     form.set('document', new Blob([bytes], { type: document.mimeType || 'text/plain; charset=utf-8' }), document.fileName || 'code.txt');
     const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/sendDocument', {
       method: 'POST',
@@ -905,13 +905,12 @@ function createBotChat(options = {}) {
       callback_query_id: callbackQueryId,
       ...(text ? { text } : {})
     }));
-  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup, editOptions = {}) =>
+  const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
     telegramRequest('editMessageText', {
-      ...editOptions,
       chat_id: chatId,
       message_id: messageId,
       text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      reply_markup: replyMarkup
     }));
   const editTelegramRichMessage = options.editTelegramRichMessage || ((chatId, messageId, richMessage, replyMarkup) =>
     telegramRequest('editMessageText', {
@@ -926,8 +925,7 @@ function createBotChat(options = {}) {
       fileName: String(document.fileName || 'code.txt').slice(0, 120),
       mimeType: String(document.mimeType || 'text/plain; charset=utf-8').slice(0, 100),
       caption: String(document.caption || '').slice(0, 900),
-      contentBase64: Buffer.from(document.content || '').toString('base64'),
-      ...(document.replyMarkup ? { replyMarkup: document.replyMarkup } : {})
+      contentBase64: Buffer.from(document.content || '').toString('base64')
     };
     const context = updateContext.getStore();
     if (!context || !Number.isSafeInteger(context.updateId)) return rawSendTelegramDocument(chatId, packet);
@@ -948,19 +946,51 @@ function createBotChat(options = {}) {
     for (const chunk of chunks) await sendTelegramMessage(chatId, chunk);
   }
 
-  async function sendAssistantText(chatId, text, sendOptions = {}) {
-    const html = markdownToTelegramHtml(text);
-    const chunks = splitTelegramHtml(html);
+  function escapeAssistantRichButtonTags(value) {
+    return String(value == null ? '' : value).replace(/<\/?tg-button(?:-row)?\b[^>]*>/gi, (tag) =>
+      tag.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+  }
+
+  function buildAssistantRichMessage(text, requestId, buttonText) {
+    const safeText = escapeAssistantRichButtonTags(text).trim() || ' ';
+    const id = String(requestId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { markdown: safeText };
+
+    const label = buttonText === '🔄 Повторить запрос'
+      ? '🔄 Повторить запрос'
+      : '🔄 Перегенерировать ответ';
+    return {
+      markdown: safeText + '\n\n' +
+        '<tg-button-row align="center"><tg-button type="callback_data" style="success" data="regen:' +
+        id + '">' + label + '</tg-button></tg-button-row>'
+    };
+  }
+
+  function splitAssistantRichMarkdown(value, maxLength = 30_000) {
+    let remaining = String(value == null ? '' : value).trim();
+    if (!remaining) return [' '];
+    const chunks = [];
+    while (remaining.length > maxLength) {
+      let cut = remaining.lastIndexOf('\n\n', maxLength);
+      if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf('\n', maxLength);
+      if (cut < Math.floor(maxLength * 0.6)) cut = remaining.lastIndexOf(' ', maxLength);
+      if (cut < 1) cut = maxLength;
+      chunks.push(remaining.slice(0, cut).trimEnd());
+      remaining = remaining.slice(cut).trimStart();
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks.length ? chunks : [' '];
+  }
+
+  async function sendAssistantText(chatId, text, requestId, buttonText) {
+    const chunks = splitAssistantRichMarkdown(text);
     let lastSent = null;
     for (let index = 0; index < chunks.length; index += 1) {
-      const chunk = chunks[index];
-      const chunkOptions = index === chunks.length - 1 ? sendOptions : {};
-      try {
-        lastSent = await sendTelegramMessage(chatId, chunk.html, { ...chunkOptions, parse_mode: 'HTML' });
-      } catch (error) {
-        if (!isTelegramHtmlParseError(error)) throw error;
-        lastSent = await sendTelegramMessage(chatId, chunk.text, chunkOptions);
-      }
+      const isLast = index === chunks.length - 1;
+      lastSent = await sendTelegramRichMessage(
+        chatId,
+        buildAssistantRichMessage(chunks[index], isLast ? requestId : null, buttonText)
+      );
     }
     return lastSent;
   }
@@ -997,26 +1027,40 @@ function createBotChat(options = {}) {
 
     return {
       elapsedSeconds,
-      async finish(finalText, replyMarkup) {
+      async finish(finalText) {
         stopped = true;
         clearInterval(timer);
         await editInFlight;
         const seconds = elapsedSeconds();
-        const fallbackOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
         if (!messageId) {
-          if (finalText) await sendTelegramMessage(chatId, finalText, fallbackOptions);
+          if (finalText) await sendText(chatId, finalText);
           return seconds;
         }
         if (finalText) {
-          if (!(await editStatus(finalText, replyMarkup))) {
-            await sendTelegramMessage(chatId, finalText, fallbackOptions);
-          }
+          if (!(await editStatus(finalText))) await sendText(chatId, finalText);
         } else {
           try {
             await deleteTelegramMessage(chatId, messageId);
           } catch {
             await editStatus('Ответ готов за ' + seconds + ' сек.');
           }
+        }
+        return seconds;
+      },
+      async finishRich(richMessage) {
+        stopped = true;
+        clearInterval(timer);
+        await editInFlight;
+        const seconds = elapsedSeconds();
+        if (!messageId) {
+          await sendTelegramRichMessage(chatId, richMessage);
+          return seconds;
+        }
+        try {
+          await editTelegramRichMessage(chatId, messageId, richMessage);
+        } catch {
+          try { await deleteTelegramMessage(chatId, messageId); } catch {}
+          await sendTelegramRichMessage(chatId, richMessage);
         }
         return seconds;
       }
@@ -1180,26 +1224,33 @@ function createBotChat(options = {}) {
     return segments;
   }
 
-  async function sendAssistantResponse(chatId, answer, requestText, sendOptions = {}) {
+  async function sendAssistantResponse(chatId, answer, requestText, requestId) {
     const segments = splitAssistantFiles(answer, requestText);
     if (!segments || !segments.some((segment) => segment.type === 'file')) {
-      return sendAssistantText(chatId, answer, sendOptions);
+      return sendAssistantText(chatId, answer, requestId);
     }
     const files = segments.filter((segment) => segment.type === 'file');
     if (files.length > 5) {
-      await sendText(chatId, 'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.');
+      await sendAssistantText(
+        chatId,
+        'Ответ содержит слишком много файлов (' + files.length + '). Максимум за одно сообщение — 5 файлов. Попросите ИИ разделить проект на части.',
+        requestId
+      );
       return null;
     }
     let lastSent = null;
+    const finalSegment = segments[segments.length - 1];
+    let fileDeliveryFailed = false;
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index];
       const isLast = index === segments.length - 1;
       if (segment.type === 'text') {
-        lastSent = await sendAssistantText(chatId, segment.value, isLast ? sendOptions : {});
+        lastSent = await sendAssistantText(chatId, segment.value, isLast ? requestId : null);
         continue;
       }
       const size = Buffer.byteLength(segment.content, 'utf8');
       if (!size || size > 2 * 1024 * 1024) {
+        fileDeliveryFailed = true;
         await sendText(chatId, 'Файл «' + segment.name + '» не отправлен: пустой или превышает лимит 2 МБ.');
         continue;
       }
@@ -1207,9 +1258,15 @@ function createBotChat(options = {}) {
         fileName: segment.name,
         mimeType: codeFileMimeType(segment.language),
         caption: 'Файл с кодом: ' + segment.name,
-        content: segment.content,
-        ...(isLast && sendOptions.reply_markup ? { replyMarkup: sendOptions.reply_markup } : {})
+        content: segment.content
       });
+    }
+    if (requestId && finalSegment && finalSegment.type === 'file') {
+      lastSent = await sendAssistantText(
+        chatId,
+        fileDeliveryFailed ? 'Не удалось прикрепить один или несколько файлов.' : 'Файлы с ответом прикреплены выше.',
+        requestId
+      );
     }
     return lastSent;
   }
@@ -2754,15 +2811,6 @@ async function handlePromoListCommand(chatId, userId) {
 
   const pendingRegenerationRequests = new Set();
 
-  function regenerateReplyMarkup(requestId, label = '🔄 Перегенерировать ответ') {
-    return {
-      inline_keyboard: [[{
-        text: label,
-        callback_data: 'regen:' + requestId
-      }]]
-    };
-  }
-
   async function handleUserMessage(message, user, text) {
     let chat = activeChat(user);
     if (!chat) chat = createChat(user, nextChatTitle(user));
@@ -2796,10 +2844,11 @@ async function handlePromoListCommand(chatId, userId) {
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
       const elapsed = indicator.elapsedSeconds();
-      await indicator.finish(
+      await indicator.finishRich(buildAssistantRichMessage(
         'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason,
-        regenerateReplyMarkup(userMessage.id, '🔄 Повторить запрос')
-      );
+        userMessage.id,
+        '🔄 Повторить запрос'
+      ));
       return;
     }
 
@@ -2810,9 +2859,7 @@ async function handlePromoListCommand(chatId, userId) {
       chat.messages.splice(0, chat.messages.length - MAX_MESSAGES_PER_CHAT);
     }
     store.save();
-    await sendAssistantResponse(message.chat.id, answer, text, {
-      reply_markup: regenerateReplyMarkup(userMessage.id)
-    });
+    await sendAssistantResponse(message.chat.id, answer, text, userMessage.id);
   }
 
   async function handleRegenerateCallback(query, user, data) {
@@ -2870,11 +2917,12 @@ async function handlePromoListCommand(chatId, userId) {
         answer = await requestAssistant(user, requestChat);
       } catch (error) {
         const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
-        await indicator.finish(
+        await indicator.finishRich(buildAssistantRichMessage(
           'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
             ' сек.\nПричина: ' + reason,
-          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
-        );
+          requestId,
+          '🔄 Повторить запрос'
+        ));
         return true;
       }
 
@@ -2915,26 +2963,24 @@ async function handlePromoListCommand(chatId, userId) {
           if (insertedIndex >= 0) targetChat.messages.splice(insertedIndex, 1);
         }
         targetChat.updatedAt = previousUpdatedAt;
-        await indicator.finish(
+        await indicator.finishRich(buildAssistantRichMessage(
           'Ответ получен, но не удалось сохранить его в историю. Повторите попытку.',
-          regenerateReplyMarkup(requestId, '🔄 Повторить запрос')
-        );
+          requestId,
+          '🔄 Повторить запрос'
+        ));
         return true;
       }
 
       await indicator.finish();
-      const replyMarkup = regenerateReplyMarkup(requestId);
-      const html = markdownToTelegramHtml(answer);
-      const chunks = splitTelegramHtml(html);
-      if (!isCodeArtifactRequest(promptMessage.content) && chunks.length === 1 &&
-          Number.isSafeInteger(Number(message.message_id))) {
+      const messageId = Number(message.message_id);
+      if (!isCodeArtifactRequest(promptMessage.content) &&
+          splitAssistantRichMarkdown(answer).length === 1 &&
+          Number.isSafeInteger(messageId)) {
         try {
-          await editTelegramMessage(
+          await editTelegramRichMessage(
             message.chat.id,
-            Number(message.message_id),
-            chunks[0].html,
-            replyMarkup,
-            { parse_mode: 'HTML' }
+            messageId,
+            buildAssistantRichMessage(answer, requestId)
           );
           return true;
         } catch (error) {
@@ -2943,9 +2989,14 @@ async function handlePromoListCommand(chatId, userId) {
         }
       }
 
-      await sendAssistantResponse(message.chat.id, answer, promptMessage.content, {
-        reply_markup: replyMarkup
-      });
+      if (Number.isSafeInteger(messageId)) {
+        try {
+          await editTelegramRichMessage(message.chat.id, messageId, {
+            markdown: 'Новая версия ответа сформирована и отправлена ниже.'
+          });
+        } catch {}
+      }
+      await sendAssistantResponse(message.chat.id, answer, promptMessage.content, requestId);
       return true;
     } finally {
       pendingRegenerationRequests.delete(lockKey);
