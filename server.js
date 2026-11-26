@@ -327,7 +327,7 @@ async function sendCodeToBot(userId, fileName, code) {
   return { messageId: result.result.message_id, bytes };
 }
 
-const TERMS_VERSION = '2026-11-25-v1';
+const TERMS_VERSION = '2026-11-26-v2';
 const SUPPORT_CHANNEL_URL = 'https://t.me/TG_Nexus_official';
 const TERMS_URL = new URL('terms.html', WEB_APP_URL.endsWith('/') ? WEB_APP_URL : WEB_APP_URL + '/').toString();
 const PRIVACY_URL = new URL('privacy.html', WEB_APP_URL.endsWith('/') ? WEB_APP_URL : WEB_APP_URL + '/').toString();
@@ -491,6 +491,13 @@ async function handleStart(message, targetBot = botChat) {
   });
 }
 async function processTelegramUpdate(update, targetBot = botChat) {
+  if (update && update.pre_checkout_query) {
+    if (!targetBot || typeof targetBot.handlePreCheckoutQuery !== 'function') {
+      throw new Error('Telegram pre-checkout handler is unavailable.');
+    }
+    await targetBot.handlePreCheckoutQuery(update.pre_checkout_query);
+    return;
+  }
   const callbackQuery = update && update.callback_query;
   if (callbackQuery) {
     const callbackData = typeof callbackQuery.data === 'string' ? callbackQuery.data : '';
@@ -503,6 +510,9 @@ async function processTelegramUpdate(update, targetBot = botChat) {
       }, targetBot);
       return;
     }
+    if (!callbackData.startsWith('terms:') && targetBot && typeof targetBot.ensureTrial === 'function') {
+      await targetBot.ensureTrial(callbackUserId);
+    }
     if (targetBot && typeof targetBot.handleCallbackQuery === 'function') {
       await targetBot.handleCallbackQuery(callbackQuery);
     }
@@ -512,12 +522,20 @@ async function processTelegramUpdate(update, targetBot = botChat) {
   if (!message) return;
   const text = typeof message.text === 'string' ? message.text.trim() : '';
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
+    if (hasAcceptedTerms(targetBot, message.from && message.from.id) &&
+        typeof targetBot.ensureTrial === 'function') await targetBot.ensureTrial(message.from.id);
     await handleStart(message, targetBot);
     return;
   }
   if (message.chat && message.chat.type === 'private' && message.from &&
       !hasAcceptedTerms(targetBot, message.from.id)) {
     await handleStart(message, targetBot);
+    return;
+  }
+  if (message.chat && message.chat.type === 'private' && message.from &&
+      typeof targetBot.ensureTrial === 'function') await targetBot.ensureTrial(message.from.id);
+  if (message.successful_payment && typeof targetBot.handleSuccessfulPayment === 'function') {
+    await targetBot.handleSuccessfulPayment(message);
     return;
   }
   if (/^\/help(?:@\w+)?(?:\s|$)/i.test(text) &&
@@ -549,6 +567,21 @@ async function handleWebhook(req, res, dependencies = {}) {
   webhookDiagnostics.updatesReceived += 1;
   webhookDiagnostics.lastReceivedAt = new Date().toISOString();
   try {
+    if (update && update.pre_checkout_query) {
+      if (!textBot || typeof textBot.handlePreCheckoutQuery !== 'function') {
+        const error = new Error('Telegram pre-checkout handler is unavailable.');
+        error.status = 503; throw error;
+      }
+      try {
+        const approved = await textBot.handlePreCheckoutQuery(update.pre_checkout_query);
+        webhookDiagnostics.updatesProcessed += 1;
+        webhookDiagnostics.lastProcessedAt = new Date().toISOString();
+        return json(res, 200, { ok: true, preCheckoutAnswered: true, approved: Boolean(approved) });
+      } catch (error) {
+        if (!error.status) error.status = 503;
+        throw error;
+      }
+    }
     if (!textBot || typeof textBot.enqueueUpdate !== 'function') {
       const error = new Error('Telegram update queue is unavailable.');
       error.status = 503;
@@ -731,7 +764,7 @@ async function configureWebhook() {
     await telegramApi('setWebhook', {
       url: webhookUrl,
       secret_token: WEBHOOK_SECRET,
-      allowed_updates: ['message', 'callback_query']
+      allowed_updates: ['message', 'callback_query', 'pre_checkout_query']
     });
     webhookDiagnostics.configured = true;
 
