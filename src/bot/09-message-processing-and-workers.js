@@ -96,6 +96,10 @@
         '/test — проверить реальный запрос к API\n' +
         '/version — показать версию backend\n' +
         '/settings — показать настройки ИИ и открыть Mini App\n' +
+        '/pro — тарифы TG Nexus PRO\n' +
+        '/mypro — статус и срок PRO\n' +
+        '/promocode CODE — активировать промокод\n' +
+        '/paysupport — помощь с платежами\n' +
         '/cancel — отменить текущий ввод настройки\n\n' +
         'Created tet0r');
       return true;
@@ -104,7 +108,8 @@
       await handleKeyCommand(message, parsed.args);
       return true;
     }
-    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test'].includes(command)) {
+    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test',
+      'pro', 'mypro', 'promocode', 'paysupport', 'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -122,6 +127,29 @@
     }
 
     try {
+      if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
+      if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
+      if (command === 'promocode') {
+        if (!parsed.args) { await sendText(chatId, 'Использование: /promocode CODE'); return true; }
+        const result = store.redeemPromoCode(parsed.args, message.from.id);
+        const response = {
+          not_found: 'Промокод не найден.', disabled: 'Промокод отключён.',
+          expired: 'Срок действия промокода истёк.', already_used: 'Вы уже активировали этот промокод.',
+          limit: 'Лимит активаций промокода исчерпан.', invalid: 'Промокод имеет некорректные настройки.'
+        };
+        await sendText(chatId, result.ok
+          ? 'Промокод активирован: +' + result.days + ' дней PRO. Доступ до ' + formatProDate(result.expiresAt) + '.'
+          : (response[result.reason] || 'Не удалось активировать промокод.'));
+        return true;
+      }
+      if (command === 'paysupport') {
+        await sendText(chatId, 'Помощь с платежами TG Nexus: ' + TG_NEXUS_BILLING_SUPPORT_URL +
+          '\nНе отправляйте API-ключи или пароли. Для проверки платежа приложите чек Telegram и дату покупки.');
+        return true;
+      }
+      if (command === 'promo_create') return await handlePromoCreateCommand(chatId, message.from.id, parsed.args);
+      if (command === 'promo_disable') return await handlePromoDisableCommand(chatId, message.from.id, parsed.args);
+      if (command === 'promo_list') return await handlePromoListCommand(chatId, message.from.id);
       if (!command && await handlePendingModelCatalogReply(message, user, text)) return true;
       const timeoutInputKey = String(message.from.id);
       const pendingPrompt = user.pendingSystemPromptInput;
