@@ -38,6 +38,10 @@ const BOT_COMMANDS = [
   { command: 'test', description: 'Проверить реальный запрос к API' },
   { command: 'version', description: 'Показать версию backend' },
   { command: 'settings', description: 'Показать настройки ИИ' },
+  { command: 'pro', description: 'Посмотреть тарифы TG Nexus PRO' },
+  { command: 'mypro', description: 'Проверить статус PRO' },
+  { command: 'promocode', description: 'Активировать промокод' },
+  { command: 'paysupport', description: 'Помощь с платежами' },
   { command: 'cancel', description: 'Отменить текущий ввод настройки' }
 ];
 
@@ -88,6 +92,7 @@ function createEncryptedStore(options = {}) {
     if (!Array.isArray(decoded.queue)) decoded.queue = [];
     if (!Array.isArray(decoded.processedUpdateIds)) decoded.processedUpdateIds = [];
     if (!Array.isArray(decoded.deadLetterUpdates)) decoded.deadLetterUpdates = [];
+    if (!decoded.promocodes || typeof decoded.promocodes !== 'object' || Array.isArray(decoded.promocodes)) decoded.promocodes = {};
     return decoded;
   }
 
@@ -114,7 +119,8 @@ function createEncryptedStore(options = {}) {
       users: {},
       queue: [],
       processedUpdateIds: [],
-      deadLetterUpdates: []
+      deadLetterUpdates: [],
+      promocodes: {}
     };
     return state;
   }
@@ -423,6 +429,83 @@ function createEncryptedStore(options = {}) {
     return user;
   }
 
+  function createPromoCode(code, details = {}) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const days = Math.round(Number(details.days));
+    const maxUses = Math.round(Number(details.maxUses));
+    if (!/^[A-Z0-9_-]{4,32}$/.test(normalized)) return { ok: false, reason: 'invalid_code' };
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false, reason: 'invalid_days' };
+    if (!Number.isInteger(maxUses) || maxUses < 0 || maxUses > 100000) return { ok: false, reason: 'invalid_limit' };
+    const current = load();
+    if (current.promocodes[normalized]) return { ok: false, reason: 'exists' };
+    current.promocodes[normalized] = {
+      days, maxUses, enabled: true, createdAt: Number(details.createdAt) || Date.now(),
+      createdBy: String(details.createdBy || ''), redemptions: []
+    };
+    try { save(); } catch (error) { delete current.promocodes[normalized]; throw error; }
+    return { ok: true, code: normalized, days, maxUses };
+  }
+
+  function disablePromoCode(code) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const promo = load().promocodes[normalized];
+    if (!promo) return false;
+    const previous = promo.enabled;
+    const previousDisabledAt = promo.disabledAt;
+    promo.enabled = false;
+    promo.disabledAt = Date.now();
+    try { save(); } catch (error) {
+      promo.enabled = previous;
+      if (previousDisabledAt === undefined) delete promo.disabledAt;
+      else promo.disabledAt = previousDisabledAt;
+      throw error;
+    }
+    return true;
+  }
+
+  function listPromoCodes() {
+    const records = load().promocodes;
+    return Object.keys(records).sort().map((code) => ({
+      code, days: Number(records[code].days) || 0, maxUses: Number(records[code].maxUses) || 0,
+      enabled: records[code].enabled === true,
+      uses: Array.isArray(records[code].redemptions) ? records[code].redemptions.length : 0,
+      createdAt: Number(records[code].createdAt) || 0
+    }));
+  }
+
+  function redeemPromoCode(code, userId, now = Date.now()) {
+    const normalized = String(code || '').trim().toUpperCase();
+    const current = load();
+    const promo = current.promocodes[normalized];
+    if (!promo) return { ok: false, reason: 'not_found' };
+    if (promo.enabled !== true) return { ok: false, reason: 'disabled' };
+    const days = Number(promo.days);
+    if (!Number.isInteger(days) || days < 1 || days > 365) return { ok: false, reason: 'invalid' };
+    if (Number(promo.expiresAt) > 0 && Number(promo.expiresAt) <= now) {
+      promo.enabled = false; save(); return { ok: false, reason: 'expired' };
+    }
+    if (!Array.isArray(promo.redemptions)) promo.redemptions = [];
+    const id = String(userId);
+    if (promo.redemptions.some((item) => item && String(item.userId) === id)) {
+      return { ok: false, reason: 'already_used' };
+    }
+    const maxUses = Math.max(0, Number(promo.maxUses) || 0);
+    if (maxUses > 0 && promo.redemptions.length >= maxUses) return { ok: false, reason: 'limit' };
+    const user = getUser(id);
+    if (!user.pro || typeof user.pro !== 'object' || Array.isArray(user.pro)) user.pro = {};
+    if (!Array.isArray(user.pro.promoRedemptions)) user.pro.promoRedemptions = [];
+    const previousPro = JSON.parse(JSON.stringify(user.pro));
+    const previousRedemptions = promo.redemptions.slice();
+    const currentExpiry = Math.max(now, Number(user.pro.expiresAt) || 0);
+    user.pro.expiresAt = currentExpiry + days * 24 * 60 * 60 * 1000;
+    user.pro.promoRedemptions.push({ code: normalized, redeemedAt: now, days });
+    promo.redemptions.push({ userId: id, redeemedAt: now });
+    try { save(); } catch (error) {
+      user.pro = previousPro; promo.redemptions = previousRedemptions; throw error;
+    }
+    return { ok: true, code: normalized, days, expiresAt: user.pro.expiresAt };
+  }
+
   return {
     enabled: !!encryptionKey,
     filePath,
@@ -438,7 +521,11 @@ function createEncryptedStore(options = {}) {
     discardOutbox,
     completeUpdate,
     retryUpdate,
-    getQueueStats
+    getQueueStats,
+    createPromoCode,
+    disablePromoCode,
+    listPromoCodes,
+    redeemPromoCode
   };
 
 }function normalizeApiBase(value) {
@@ -750,13 +837,17 @@ function createBotChat(options = {}) {
   let globalRateStartedAt = lastRateSweep;
   let globalRateCount = 0;
 
-  async function telegramRequest(method, payload) {
+  async function telegramRequest(method, payload, requestOptions = {}) {
+    if (typeof options.telegramApiCall === 'function') {
+      return options.telegramApiCall(method, payload, requestOptions);
+    }
     if (!botToken) throw new Error('Telegram bot token is not configured.');
+    const timeoutMs = Math.max(1_000, Math.min(15_000, Number(requestOptions.timeoutMs) || 15_000));
     const response = await fetchImpl('https://api.telegram.org/bot' + botToken + '/' + method, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) {
@@ -1123,7 +1214,7 @@ function createBotChat(options = {}) {
     xhigh: 'Максимальный'
   };
 
-  const REQUIRED_TERMS_VERSION = '2026-11-25-v1';
+  const REQUIRED_TERMS_VERSION = '2026-11-26-v2';
 const TERMS_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
 
 function getTermsAcceptedAppUrl() {
@@ -1637,7 +1728,7 @@ function getSettingsUrl() {
   async function handleCallbackQuery(query) {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
         (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
-         !query.data.startsWith('terms:'))) return false;
+         !query.data.startsWith('terms:') && !query.data.startsWith('pro:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -1691,7 +1782,11 @@ function getSettingsUrl() {
         return true;
       }
 
-      await safeAnswerCallback(query.id, 'Acceptance saved.');
+      try { ensureProTrial(userId); } catch {
+        await safeAnswerCallback(query.id, 'Terms saved, but the free PRO trial could not be activated yet. Send /pro to retry.');
+        return true;
+      }
+      await safeAnswerCallback(query.id, 'Acceptance saved. Your 12-day PRO trial is active.');
       const rows = [];
       const appUrl = getTermsAcceptedAppUrl();
       if (appUrl) rows.push([{ text: 'Open TG Nexus', web_app: { url: appUrl } }]);
@@ -1714,6 +1809,7 @@ function getSettingsUrl() {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('pro:')) return await handleProCallback(query, user);
       if (data.startsWith('mc:')) {
         return await handleModelCatalogCallback(query, user, data);
       }
@@ -2259,6 +2355,387 @@ function getSettingsUrl() {
       'Подключение работает.\nПровайдер: ' + provider + '\nМодель: ' + result.model + '\nОтвет API: ' + result.answer);
   }
 
+const TG_NEXUS_PRO_DAY_MS = 24 * 60 * 60 * 1000;
+const TG_NEXUS_PRO_TRIAL_DAYS = 12;
+const TG_NEXUS_PRO_PLANS = Object.freeze({
+  7: { days: 7, stars: 49 },
+  14: { days: 14, stars: 89 },
+  21: { days: 21, stars: 119 },
+  30: { days: 30, stars: 149 }
+});
+const TG_NEXUS_BILLING_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
+const proCheckoutReservations = new Map();
+
+function normalizeProState(user) {
+  if (!user.pro || typeof user.pro !== 'object' || Array.isArray(user.pro)) user.pro = {};
+  const pro = user.pro;
+  if (!Number.isFinite(Number(pro.expiresAt))) pro.expiresAt = 0;
+  if (!Array.isArray(pro.payments)) pro.payments = [];
+  if (!Array.isArray(pro.promoRedemptions)) pro.promoRedemptions = [];
+  if (!Array.isArray(user.pendingStarPayments)) user.pendingStarPayments = [];
+  return pro;
+}
+
+function isProBillingEnabled() {
+  if (typeof options.proBillingEnabled === 'boolean') return options.proBillingEnabled;
+  return String(process.env.PRO_BILLING_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
+function ensureProTrial(userId, now = Date.now()) {
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  if (Number(pro.trialStartedAt) > 0) return getProStatus(userId, now);
+  const previous = {
+    trialStartedAt: pro.trialStartedAt,
+    trialExpiresAt: pro.trialExpiresAt,
+    expiresAt: pro.expiresAt
+  };
+  pro.trialStartedAt = now;
+  pro.trialExpiresAt = now + TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
+  pro.expiresAt = Math.max(now, Number(pro.expiresAt) || 0) +
+    TG_NEXUS_PRO_TRIAL_DAYS * TG_NEXUS_PRO_DAY_MS;
+  try {
+    store.save();
+  } catch (error) {
+    if (previous.trialStartedAt === undefined) delete pro.trialStartedAt;
+    else pro.trialStartedAt = previous.trialStartedAt;
+    if (previous.trialExpiresAt === undefined) delete pro.trialExpiresAt;
+    else pro.trialExpiresAt = previous.trialExpiresAt;
+    if (previous.expiresAt === undefined) delete pro.expiresAt;
+    else pro.expiresAt = previous.expiresAt;
+    throw error;
+  }
+  return getProStatus(userId, now);
+}
+
+function getProStatus(userId, now = Date.now()) {
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const expiresAt = Math.max(0, Number(pro.expiresAt) || 0);
+  const trialExpiresAt = Math.max(0, Number(pro.trialExpiresAt) || 0);
+  const payments = pro.payments;
+  const promoRedemptions = pro.promoRedemptions;
+  const active = expiresAt > now;
+  const trialActive = active && trialExpiresAt > now &&
+    payments.length === 0 && promoRedemptions.length === 0;
+  return {
+    active,
+    expiresAt,
+    remainingDays: active ? Math.ceil((expiresAt - now) / TG_NEXUS_PRO_DAY_MS) : 0,
+    trialStartedAt: Number(pro.trialStartedAt) || 0,
+    trialExpiresAt,
+    trialActive,
+    hasPaidPayments: payments.length > 0,
+    hasPromoRedemptions: promoRedemptions.length > 0
+  };
+}
+
+function formatProDate(timestamp) {
+  if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return 'не указана';
+  return new Date(Number(timestamp)).toLocaleString('ru-RU', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+}
+
+function isBillingAdmin(userId) {
+  const configured = String(process.env.BOT_ADMIN_IDS || '');
+  return configured.split(',').map((item) => item.trim()).filter(Boolean)
+    .includes(String(userId));
+}
+
+async function sendProMenu(chatId, userId) {
+  const status = getProStatus(userId);
+  const lines = [
+    '<b>TG Nexus PRO</b>',
+    '',
+    'Бесплатный пробный период: 12 дней на один Telegram-аккаунт.',
+    status.active
+      ? 'Доступ активен: до ' + formatProDate(status.expiresAt) +
+        ' (ещё ' + status.remainingDays + ' дн.).'
+      : 'Активного PRO-доступа сейчас нет.',
+    '',
+    'Тарифы:',
+    '• 7 дней — 49 ⭐',
+    '• 14 дней — 89 ⭐',
+    '• 21 день — 119 ⭐',
+    '• 30 дней — 149 ⭐',
+    '',
+    'Покупки разовые: автоматического списания нет.',
+    'Новые дни добавляются к текущему сроку доступа.',
+    'Расходы на API-провайдеров оплачиваются отдельно.'
+  ];
+  const optionsForMenu = { parse_mode: 'HTML' };
+  if (isProBillingEnabled()) {
+    optionsForMenu.reply_markup = {
+      inline_keyboard: [
+        [
+          { text: '7 дней · 49 ⭐', callback_data: 'pro:buy:7' },
+          { text: '14 дней · 89 ⭐', callback_data: 'pro:buy:14' }
+        ],
+        [
+          { text: '21 день · 119 ⭐', callback_data: 'pro:buy:21' },
+          { text: '30 дней · 149 ⭐', callback_data: 'pro:buy:30' }
+        ]
+      ]
+    };
+  } else {
+    lines.push('', 'Оплата пока отключена и не принимает Stars.');
+  }
+  await sendTelegramMessage(chatId, lines.join('\n'), optionsForMenu);
+}
+
+async function sendProStatus(chatId, userId) {
+  const status = getProStatus(userId);
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const lines = ['<b>Ваш TG Nexus PRO</b>', ''];
+  if (status.active) {
+    lines.push('Статус: активен', 'Действует до: ' + formatProDate(status.expiresAt),
+      'Осталось: ' + status.remainingDays + ' дн.');
+    if (status.trialActive) lines.push('Это ваш бесплатный 12-дневный период.');
+  } else {
+    lines.push('Статус: не активен', 'Используйте /pro, чтобы посмотреть тарифы.');
+  }
+  if (pro.payments.length) {
+    lines.push('', '<b>Последние покупки:</b>');
+    pro.payments.slice(-5).reverse().forEach((payment) => {
+      lines.push('• ' + payment.days + ' дн. · ' + payment.amount + ' ⭐ · ' +
+        formatProDate(payment.paidAt));
+    });
+  }
+  if (pro.promoRedemptions.length) {
+    lines.push('', 'Активировано промокодов: ' + pro.promoRedemptions.length + '.');
+  }
+  await sendTelegramMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
+
+async function createProInvoice(chatId, userId, days) {
+  const plan = TG_NEXUS_PRO_PLANS[Number(days)];
+  if (!plan) throw new Error('Unknown PRO plan.');
+  if (!isProBillingEnabled()) throw new Error('PRO billing is not enabled.');
+
+  const user = store.getUser(userId);
+  normalizeProState(user);
+  const now = Date.now();
+  user.pendingStarPayments = user.pendingStarPayments
+    .filter((item) => item && Number(item.expiresAt) > now)
+    .slice(-10);
+  const payload = 'tgnexuspro1_' + crypto.randomBytes(18).toString('hex');
+  user.pendingStarPayments.push({
+    payload,
+    days: plan.days,
+    amount: plan.stars,
+    currency: 'XTR',
+    createdAt: now,
+    expiresAt: now + 24 * 60 * 60 * 1000
+  });
+  store.save();
+
+  try {
+    await telegramRequest('sendInvoice', {
+      chat_id: chatId,
+      title: 'TG Nexus PRO',
+      description: 'Доступ к TG Nexus PRO на ' + plan.days + ' дней.',
+      payload,
+      currency: 'XTR',
+      prices: [{ label: 'TG Nexus PRO · ' + plan.days + ' дней', amount: plan.stars }]
+    });
+  } catch (error) {
+    user.pendingStarPayments = user.pendingStarPayments.filter((item) => item.payload !== payload);
+    store.save();
+    throw error;
+  }
+  return { payload, days: plan.days, amount: plan.stars };
+}
+
+async function handleProCallback(query, user) {
+  const match = String(query.data || '').match(/^pro:buy:(7|14|21|30)$/);
+  if (!match) {
+    await safeAnswerCallback(query.id, 'Эта кнопка тарифа устарела. Откройте /pro ещё раз.');
+    return true;
+  }
+  if (!isProBillingEnabled()) {
+    await safeAnswerCallback(query.id, 'Оплата пока отключена.');
+    return true;
+  }
+  try {
+    await createProInvoice(query.message.chat.id, query.from.id, Number(match[1]));
+    await safeAnswerCallback(query.id, 'Счёт отправлен. Завершите оплату в Telegram.');
+  } catch {
+    await safeAnswerCallback(query.id, 'Не удалось создать счёт. Попробуйте позже или обратитесь в /paysupport.');
+  }
+  return true;
+}
+
+async function handlePreCheckoutQuery(query) {
+  const queryId = String(query && query.id || '');
+  const userId = query && query.from && query.from.id;
+  const payload = String(query && query.invoice_payload || '');
+  let valid = false;
+  let user = null;
+  let pending = null;
+  let errorMessage = 'Счёт недействителен или устарел. Откройте /pro и создайте новый.';
+
+  if (queryId && userId != null && payload && isProBillingEnabled()) {
+    user = store.getUser(userId);
+    normalizeProState(user);
+    pending = user.pendingStarPayments.find((item) => item && item.payload === payload) || null;
+    const now = Date.now();
+    const reserved = proCheckoutReservations.get(String(userId));
+    const reservedStillActive = reserved && reserved.expiresAt > now;
+    const termsAccepted = user.termsAcceptedVersion === REQUIRED_TERMS_VERSION;
+    const fresh = pending && Number(pending.expiresAt) > now;
+    const correctAmount = pending && query.currency === 'XTR' &&
+      Number(query.total_amount) === Number(pending.amount);
+    const notReservedForAnotherInvoice = !reservedStillActive || reserved.payload === payload;
+
+    valid = Boolean(termsAccepted && fresh && correctAmount && notReservedForAnotherInvoice);
+    if (!termsAccepted) errorMessage = 'Сначала примите актуальные Terms of Service через /start.';
+    else if (reservedStillActive && reserved.payload !== payload) {
+      errorMessage = 'У вас уже есть оплата в процессе. Завершите её или попробуйте позже.';
+    } else if (fresh && !correctAmount) errorMessage = 'Сумма счёта не совпадает с тарифом.';
+  } else if (!isProBillingEnabled()) {
+    errorMessage = 'Оплата TG Nexus PRO временно отключена.';
+  }
+
+  await telegramRequest('answerPreCheckoutQuery', {
+    pre_checkout_query_id: queryId,
+    ok: valid,
+    ...(!valid ? { error_message: errorMessage } : {})
+  }, { timeoutMs: 8_000 });
+
+  if (valid) {
+    proCheckoutReservations.set(String(userId), {
+      payload,
+      expiresAt: Date.now() + 15 * 60 * 1000
+    });
+  }
+  return valid;
+}
+
+async function handleSuccessfulPayment(message) {
+  const userId = message && message.from && message.from.id;
+  const chatId = message && message.chat && message.chat.id;
+  const payment = message && message.successful_payment;
+  if (userId == null || chatId == null || !payment) return false;
+
+  const user = store.getUser(userId);
+  const pro = normalizeProState(user);
+  const chargeId = String(payment.telegram_payment_charge_id || '');
+  const alreadyApplied = chargeId && pro.payments.some((item) =>
+    item && item.telegramPaymentChargeId === chargeId);
+  if (alreadyApplied) {
+    await sendText(chatId, 'Эта оплата уже была учтена. Статус: /mypro');
+    return true;
+  }
+
+  const payload = String(payment.invoice_payload || '');
+  const pendingIndex = user.pendingStarPayments.findIndex((item) =>
+    item && item.payload === payload);
+  const pending = pendingIndex >= 0 ? user.pendingStarPayments[pendingIndex] : null;
+  if (!pending || payment.currency !== 'XTR' ||
+      Number(payment.total_amount) !== Number(pending.amount) || !chargeId) {
+    await sendText(chatId,
+      'Платёж получен, но не удалось сопоставить его с тарифом. Не оплачивайте повторно; обратитесь в /paysupport.');
+    return true;
+  }
+
+  const now = Date.now();
+  const previousExpiry = Number(pro.expiresAt) || 0;
+  const previousPayments = pro.payments.slice();
+  const previousPending = user.pendingStarPayments.slice();
+  const baseExpiry = Math.max(now, previousExpiry);
+  const nextExpiry = baseExpiry + Number(pending.days) * TG_NEXUS_PRO_DAY_MS;
+  pro.expiresAt = nextExpiry;
+  pro.payments.push({
+    telegramPaymentChargeId: chargeId,
+    amount: Number(pending.amount),
+    currency: 'XTR',
+    days: Number(pending.days),
+    paidAt: now,
+    expiresAt: nextExpiry
+  });
+  if (pro.payments.length > 100) pro.payments.splice(0, pro.payments.length - 100);
+  user.pendingStarPayments = [];
+  try {
+    store.save();
+  } catch (error) {
+    pro.expiresAt = previousExpiry;
+    pro.payments = previousPayments;
+    user.pendingStarPayments = previousPending;
+    throw error;
+  }
+  proCheckoutReservations.delete(String(userId));
+
+  await sendText(chatId, [
+    'TG Nexus PRO активирован!',
+    'Добавлено: ' + pending.days + ' дней.',
+    'Доступ действует до: ' + formatProDate(nextExpiry),
+    'Текущий статус: /mypro'
+  ].join('\n'));
+  return true;
+}
+
+async function handlePromoCreateCommand(chatId, userId, args) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const parts = String(args || '').trim().split(/\s+/);
+  const code = parts[0] || '';
+  const days = Number(parts[1]);
+  const maxUses = parts[2] === undefined ? 1 : Number(parts[2]);
+  const result = store.createPromoCode(code, { days, maxUses, createdBy: userId });
+  if (!result.ok) {
+    const messages = {
+      invalid_code: 'Код: 4–32 символа A–Z, 0–9, _ или -.',
+      invalid_days: 'Количество дней должно быть от 1 до 365.',
+      invalid_limit: 'Лимит должен быть от 0 до 100000; 0 означает без лимита.',
+      exists: 'Такой промокод уже существует.'
+    };
+    await sendText(chatId, messages[result.reason] || 'Не удалось создать промокод.');
+    return true;
+  }
+  await sendText(chatId, 'Промокод ' + result.code + ' создан: ' + result.days +
+    ' дней, использований: ' + (result.maxUses === 0 ? 'без лимита' : result.maxUses) + '.');
+  return true;
+}
+
+async function handlePromoDisableCommand(chatId, userId, args) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const code = String(args || '').trim();
+  if (!code) {
+    await sendText(chatId, 'Использование: /promo_disable CODE');
+    return true;
+  }
+  await sendText(chatId, store.disablePromoCode(code)
+    ? 'Промокод отключён.'
+    : 'Промокод не найден.');
+  return true;
+}
+
+async function handlePromoListCommand(chatId, userId) {
+  if (!isBillingAdmin(userId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+  const list = store.listPromoCodes().slice(-30);
+  if (!list.length) {
+    await sendText(chatId, 'Промокодов пока нет.');
+    return true;
+  }
+  await sendText(chatId, list.map((item) =>
+    item.code + ' — ' + item.days + ' дн. · ' +
+    (item.enabled ? 'активен' : 'отключён') + ' · ' +
+    item.uses + '/' + (item.maxUses || '∞')
+  ).join('\n'));
+  return true;
+}
+
   async function handleUserMessage(message, user, text) {
     let chat = activeChat(user);
     if (!chat) chat = createChat(user, nextChatTitle(user));
@@ -2357,6 +2834,10 @@ function getSettingsUrl() {
         '/test — проверить реальный запрос к API\n' +
         '/version — показать версию backend\n' +
         '/settings — показать настройки ИИ и открыть Mini App\n' +
+        '/pro — тарифы TG Nexus PRO\n' +
+        '/mypro — статус и срок PRO\n' +
+        '/promocode CODE — активировать промокод\n' +
+        '/paysupport — помощь с платежами\n' +
         '/cancel — отменить текущий ввод настройки\n\n' +
         'Created tet0r');
       return true;
@@ -2365,7 +2846,8 @@ function getSettingsUrl() {
       await handleKeyCommand(message, parsed.args);
       return true;
     }
-    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test'].includes(command)) {
+    if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test',
+      'pro', 'mypro', 'promocode', 'paysupport', 'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -2383,6 +2865,29 @@ function getSettingsUrl() {
     }
 
     try {
+      if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
+      if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
+      if (command === 'promocode') {
+        if (!parsed.args) { await sendText(chatId, 'Использование: /promocode CODE'); return true; }
+        const result = store.redeemPromoCode(parsed.args, message.from.id);
+        const response = {
+          not_found: 'Промокод не найден.', disabled: 'Промокод отключён.',
+          expired: 'Срок действия промокода истёк.', already_used: 'Вы уже активировали этот промокод.',
+          limit: 'Лимит активаций промокода исчерпан.', invalid: 'Промокод имеет некорректные настройки.'
+        };
+        await sendText(chatId, result.ok
+          ? 'Промокод активирован: +' + result.days + ' дней PRO. Доступ до ' + formatProDate(result.expiresAt) + '.'
+          : (response[result.reason] || 'Не удалось активировать промокод.'));
+        return true;
+      }
+      if (command === 'paysupport') {
+        await sendText(chatId, 'Помощь с платежами TG Nexus: ' + TG_NEXUS_BILLING_SUPPORT_URL +
+          '\nНе отправляйте API-ключи или пароли. Для проверки платежа приложите чек Telegram и дату покупки.');
+        return true;
+      }
+      if (command === 'promo_create') return await handlePromoCreateCommand(chatId, message.from.id, parsed.args);
+      if (command === 'promo_disable') return await handlePromoDisableCommand(chatId, message.from.id, parsed.args);
+      if (command === 'promo_list') return await handlePromoListCommand(chatId, message.from.id);
       if (!command && await handlePendingModelCatalogReply(message, user, text)) return true;
       const timeoutInputKey = String(message.from.id);
       const pendingPrompt = user.pendingSystemPromptInput;
@@ -3633,6 +4138,7 @@ async function handleModelCatalogCallback(query, user, data) {
       settings: user.settings || {},
       activeChatId: user.activeChatId || null,
       chats: user.chats || [],
+      pro: getProStatus(userId),
       initialized: !!(user.syncInitialized || user.apiKey || user.chats.length || Object.keys(user.settings || {}).length || user.modelExplicit || user.apiBaseUrlExplicit)
     };
   }
@@ -3774,6 +4280,10 @@ async function handleModelCatalogCallback(query, user, data) {
     applySyncState,
     setApiKey,
     clearApiKey,
+    ensureTrial: ensureProTrial,
+    getProStatus,
+    handlePreCheckoutQuery,
+    handleSuccessfulPayment,
     enqueueUpdate,
     startUpdateWorker,
     stopUpdateWorker,
