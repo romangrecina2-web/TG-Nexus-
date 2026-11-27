@@ -95,6 +95,8 @@ function load(){
   }catch(e){}
   return norm(s);
 }
+var ACCOUNT_PLAN={tier:'free',pro:false,admin:false,limits:null,expiresAt:0};
+function hasProPlan(){return ACCOUNT_PLAN.admin===true||(ACCOUNT_PLAN.pro===true&&(!ACCOUNT_PLAN.expiresAt||ACCOUNT_PLAN.expiresAt>Date.now()));}
 var S=load(),ACTIVE_KEY='',providerKeyMemory=Object.create(null),busy=false,ctrl=null,stuck=true,editIdx=null,errBox='',warned=false,pendingFiles=[],saveTimer=null;
 var BACKEND_API_BASE=String(window.APP_CONFIG&&window.APP_CONFIG.apiBaseUrl||'').replace(/\/+$/,'');
 var syncReady=false,syncApplying=false,syncBusy=false,syncAgain=false,syncTimer=null,syncPendingKey=false,syncPendingClear=false,syncRetryCount=0;

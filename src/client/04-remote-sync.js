@@ -95,7 +95,13 @@ function mergeRemoteChats(remoteChats,resetModels){
   S.chats.sort(function(a,b){return(Number(b.ts)||0)-(Number(a.ts)||0)});
 }
 async function applyRemoteSyncState(state){
-  if(!state||state.initialized!==true)return;
+  if(!state)return;
+  var plan=state.plan||null;
+  ACCOUNT_PLAN={tier:plan&&plan.tier==='pro'?'pro':(state.pro&&state.pro.active?'pro':'free'),
+    pro:!!(plan&&plan.tier==='pro')||!!(state.pro&&state.pro.active),
+    admin:!!(plan&&plan.admin),limits:plan&&plan.limits||null,
+    expiresAt:Number(plan&&plan.expiresAt)||0};
+  if(state.initialized!==true){if(typeof updatePlanUi==='function')updatePlanUi();return;}
   var previousBase=S.cfg.url;
   var previousCatalog=PROVIDER_CATALOG.find(function(item){return item.url===previousBase})||null;
   var previousProviderId=previousCatalog?previousCatalog.id:null;

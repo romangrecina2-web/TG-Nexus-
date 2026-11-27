@@ -7,6 +7,7 @@ function renderProviderCatalog(){
   });
 }
 function addCatalogProvider(){
+  if(!hasProPlan()){toast('Дополнительные API-профили доступны в TG Nexus PRO.');return}
   var id=$('#providerCatalog').value;
   var item=PROVIDER_CATALOG.find(function(provider){return provider.id===id});
   if(!item)return;
@@ -122,6 +123,7 @@ async function removeProviderProfile(){
   toast('Профиль удалён');
 }
 function switchProviderProfile(id){
+  if(!hasProPlan()&&id!==S.cfg.activeProviderId){toast('Переключение API-профилей доступно в TG Nexus PRO.');renderProviderProfiles();return}
   syncActiveProviderProfile();
   var profile=(S.cfg.providers||[]).find(function(item){return item.id===id});
   if(!profile)return;

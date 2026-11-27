@@ -66,6 +66,18 @@ function hint(){
     'Маршрут: '+(profile.chatPath||'/chat/completions')+'. ';
   el.textContent=(profile.notice?String(profile.notice)+' ':'')+mode+route+auth+models+'Для браузерного подключения провайдер должен разрешать CORS. Расходы и лимиты определяет сам провайдер.';
 }
+function updatePlanUi(){
+  var pro=hasProPlan(),info=$('#planStatus');
+  if(info)info.textContent=pro?'Тариф: PRO · все функции открыты.':'Тариф: FREE · 1 200 токенов, 1 API-профиль, без поиска, песочницы и мультиагентности.';
+  ['providerCatalog','providerAdd','providerSave','providerRemove','cInternet','cSandbox','cSandboxInternet','cMultiAgent','cSandboxTimeout','cReasoning'].forEach(function(id){var el=$('#'+id);if(el)el.disabled=!pro});
+  var profileSelect=$('#providerProfile');if(profileSelect)profileSelect.disabled=!pro;
+  var agent=$('#cAgentCount');if(agent)agent.disabled=!pro||!S.cfg.multiAgent;
+  var sandboxNet=$('#cSandboxInternet');if(sandboxNet)sandboxNet.disabled=!pro||!S.cfg.sandbox;
+  var timeout=$('#cRequestTimeout');if(timeout)timeout.max=pro?7200:120;
+  var tokens=$('#cMax');if(tokens)tokens.max=pro?32000:1200;
+  var prompt=$('#cSys');if(prompt)prompt.maxLength=pro?20000:2000;
+  var providerName=$('#providerName');if(providerName)providerName.disabled=!pro;
+}
 function fillSet(){
   renderProviderCatalog();renderProviderProfiles();
   $('#cUrl').value=S.cfg.url;$('#cKey').value='';updateKeyStorageUi();$('#cModel').value=S.cfg.model;renderSavedModels();refreshWallpaperPreview();
@@ -74,7 +86,7 @@ function fillSet(){
   Array.prototype.forEach.call(document.querySelectorAll('#presets button'),function(b){b.className=host(PRESETS[b.getAttribute('data-p')].url)===h?'on':''});
   $('#cSumAt').value=S.cfg.sumAt;$('#cKeep').value=S.cfg.keep;$('#cPinCap').value=S.cfg.pinCap;$('#cMinBal').value=S.cfg.minBal;
   $('#cAskCode').checked=!!S.cfg.askCode;$('#cBalOn').checked=!!S.cfg.balOn;$('#cBalMan').value=S.cfg.balBase===''?'':S.cfg.balBase;
-  hint();memList();
+  hint();memList();updatePlanUi();
 }
 function memList(){
   var u=$('#mem');u.innerHTML='';
@@ -109,6 +121,16 @@ $('#cUrl').addEventListener('change',function(){
   if(next!==S.cfg.url){
     if(ACTIVE_KEY&&!keyInputTouched)providerKeyMemory[S.cfg.url]=ACTIVE_KEY;
     var existing=(S.cfg.providers||[]).find(function(profile){return profile.url===next});
+    if(!hasProPlan()){
+      if(existing&&existing.id!==S.cfg.activeProviderId){this.value=S.cfg.url;toast('Переключение API-профилей доступно в PRO.');return}
+      var active=activeProviderProfile(),catalog=PROVIDER_CATALOG.find(function(item){return item.url===next})||null;
+      active.url=next;active.name=catalog?catalog.name:(host(next)||'Основной API');active.catalogId=catalog?catalog.id:undefined;
+      active.protocol=catalog?catalog.protocol||'openai':'openai';active.authType=catalog?catalog.authType||'bearer':'bearer';active.modelsEndpoint=catalog?catalog.modelsEndpoint!==false:true;
+      active.model=catalog?catalog.defaultModel||'':'';active.models=active.model?[active.model]:[];
+      S.cfg.url=next;S.cfg.model=active.model;S.cfg.models=active.models.slice();S.cfg.protocol=active.protocol;S.cfg.authType=active.authType;S.cfg.modelsEndpoint=active.modelsEndpoint;
+      ACTIVE_KEY=providerKeyMemory[next]||'';keyInputTouched=false;keyStorageStatus=ACTIVE_KEY?'session':'loading';$('#cKey').value='';
+      save();fillSet();keyRestorePromise=restoreSavedApiKey().then(function(restored){if(restored)queueRemoteSync(true,false);return restored});return;
+    }
     if(existing){applyProviderProfile(existing);return}
     if((S.cfg.providers||[]).length>=30){this.value=S.cfg.url;toast('Сначала удалите профиль: разрешено не больше 30.');return}
     syncActiveProviderProfile();
@@ -131,11 +153,20 @@ function renderSavedModels(){
 }
 $('#modelAdd').onclick=function(){var v=$('#modelNew').value.trim();if(!v||/\s/.test(v))return toast('Введите ID модели без пробелов');if(S.cfg.models.indexOf(v)>=0)return toast('Эта модель уже сохранена');addSavedModel(v);$('#modelNew').value='';saveNow();renderSavedModels();fillChatModel();toast('Модель добавлена в общий список')};
 $('#modelNew').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();$('#modelAdd').click()}});
-$('#cSys').addEventListener('input',function(){S.cfg.sys=this.value;save()});
+$('#cSys').addEventListener('input',function(){
+  var limit=hasProPlan()?20000:2000;
+  if(this.value.length>limit){this.value=this.value.slice(0,limit);toast('Лимит инструкции Free — 2 000 символов.')}
+  S.cfg.sys=this.value;save();
+});
 $('#cTemp').addEventListener('input',function(){S.cfg.temp=this.value.trim();save()});
-$('#cMax').addEventListener('input',function(){S.cfg.max=this.value.trim();save()});
-$('#cReasoning').addEventListener('change',function(){S.cfg.reasoning=this.value;save();toast('Уровень рассуждений: '+this.options[this.selectedIndex].text)});
+$('#cMax').addEventListener('input',function(){
+  var value=this.value.trim(),limit=hasProPlan()?32000:1200;
+  if(value&&Number(value)>limit){value=String(limit);this.value=value;toast('Лимит вашего тарифа — '+limit+' токенов.')}
+  S.cfg.max=value;save();
+});
+$('#cReasoning').addEventListener('change',function(){if(!hasProPlan()){this.value='auto';S.cfg.reasoning='auto';save();toast('Расширенные режимы рассуждений доступны в PRO.');return}S.cfg.reasoning=this.value;save();toast('Уровень рассуждений: '+this.options[this.selectedIndex].text)});
 $('#cInternet').addEventListener('change',function(){
+  if(!hasProPlan()){this.checked=false;S.cfg.internet=false;toast('Поиск в интернете доступен в TG Nexus PRO.');return}
   if(this.checked){
     if(host(S.cfg.url).indexOf('openrouter.ai')<0){this.checked=false;toast('Поиск в интернете сейчас поддерживается только через OpenRouter.');return}
     if(!confirm('Разрешить модели искать информацию в интернете через OpenRouter? Поиск может повлечь дополнительную плату, а запросы будут передаваться поисковому провайдеру.')){this.checked=false;return}
@@ -143,6 +174,7 @@ $('#cInternet').addEventListener('change',function(){
   S.cfg.internet=this.checked;save();toast(this.checked?'Интернет-поиск разрешён':'Интернет-поиск отключён');
 });
 $('#cSandbox').addEventListener('change',function(){
+  if(!hasProPlan()){this.checked=false;S.cfg.sandbox=false;S.cfg.sandboxInternet=false;toast('JavaScript-песочница доступна в TG Nexus PRO.');return}
   if(this.checked&&!confirm('Разрешить ИИ запускать JavaScript в изолированной песочнице браузера? Код может расходовать ресурсы устройства. Сетевой доступ включается отдельно. Файлы, хранилище и API-ключ недоступны.')){this.checked=false;return}
   S.cfg.sandbox=this.checked;
   if(!this.checked){S.cfg.sandboxInternet=false;$('#cSandboxInternet').checked=false}
@@ -150,15 +182,18 @@ $('#cSandbox').addEventListener('change',function(){
   save();toast(this.checked?'Доступ к песочнице разрешён':'Песочница отключена');
 });
 $('#cSandboxInternet').addEventListener('change',function(){
+  if(!hasProPlan()){this.checked=false;S.cfg.sandboxInternet=false;toast('Сетевой режим песочницы доступен в TG Nexus PRO.');return}
   if(this.checked&&!S.cfg.sandbox){this.checked=false;toast('Сначала включите запуск JavaScript в песочнице');return}
   if(this.checked&&!confirm('Разрешить выполняемому коду отправлять HTTPS-запросы к публичным доменам? Сайты увидят сетевые запросы с вашего устройства. Cookies, локальные адреса и API-ключ TG Shell не передаются. Действуют CORS и лимиты песочницы.')){this.checked=false;return}
   S.cfg.sandboxInternet=this.checked;save();toast(this.checked?'HTTPS-доступ в песочнице разрешён':'Интернет в песочнице отключён');
 });
 $('#cMultiAgent').addEventListener('change',function(){
+  if(!hasProPlan()){this.checked=false;S.cfg.multiAgent=false;toast('Мультиагентность доступна в TG Nexus PRO.');return}
   if(this.checked&&!confirm('Включить мультиагентный режим для задач с кодом? Будут отправляться дополнительные запросы к выбранной модели и сохранённым моделям. Это может увеличить расход токенов и стоимость.')){this.checked=false;return}
   S.cfg.multiAgent=this.checked;$('#cAgentCount').disabled=!this.checked;save();toast(this.checked?'Мультиагентная разработка включена':'Мультиагентная разработка отключена');
 });
 $('#cAgentCount').addEventListener('input',function(){
+  if(!hasProPlan()){this.value=1;S.cfg.agentCount=1;$('#agentCountValue').textContent='1';return}
   var value=Math.max(1,Math.min(20,Math.round(Number(this.value)||1)));
   this.value=value;$('#agentCountValue').textContent=value;S.cfg.agentCount=value;save();
 });
@@ -167,7 +202,7 @@ $('#cSandboxTimeout').addEventListener('change',function(){
   this.value=value;S.cfg.sandboxTimeout=value;save();toast('Тайм-аут песочницы: '+value+' сек.');
 });
 $('#cRequestTimeout').addEventListener('change',function(){
-  var value=Math.max(10,Math.min(7200,Math.round(Number(this.value)||120)));
+  var value=Math.max(10,Math.min(hasProPlan()?7200:120,Math.round(Number(this.value)||120)));
   this.value=value;S.cfg.requestTimeoutSeconds=value;save();toast('Тайм-аут ответа провайдера: '+value+' сек.');
 });
 $('#cAuto').addEventListener('change',function(){S.cfg.auto=this.checked;save()});
