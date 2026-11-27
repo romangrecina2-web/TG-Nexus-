@@ -2,6 +2,7 @@
  * Source: src/bot/*.js
  * Rebuild with: npm run build
  */
+
 'use strict';
 
 const crypto = require('node:crypto');
@@ -1502,11 +1503,13 @@ function getSettingsUrl() {
   }
 
   function currentTokenLimit(user) {
-    return Math.max(1, Math.min(32_000, Math.round(Number(user.settings && user.settings.maxTokens) || 1_200)));
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
+    return Math.max(1, Math.min(32_000, Math.round(Number(settings.maxTokens) || 1_200)));
   }
 
   function currentRequestTimeout(user) {
-    return Math.max(10, Math.min(7200, Math.round(Number(user.settings && user.settings.requestTimeoutSeconds) || 120)));
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
+    return Math.max(10, Math.min(7200, Math.round(Number(settings.requestTimeoutSeconds) || 120)));
   }
 
   function updatePendingSystemPromptInput(user, pending) {
@@ -1534,15 +1537,17 @@ function getSettingsUrl() {
   }
 
   function settingsMessageText(user, view = 'main') {
+    const promptSettings = getEffectiveUserSettings(user.id, user.settings || {});
+    const promptLimit = hasProAccess(user.id) ? MAX_SYSTEM_PROMPT_LENGTH : TG_NEXUS_FREE_PROMPT_LIMIT;
     if (view === 'system-prompt') {
-      const prompt = String(user.settings && user.settings.systemPrompt || '').trim();
+      const prompt = String(promptSettings.systemPrompt || '').trim();
       if (!prompt || prompt === systemPrompt) return 'Инструкция ИИ\n\nСейчас используется стандартная инструкция, заданная на сервере.\nВы можете задать собственную или оставить стандартную.';
       return 'Инструкция ИИ\n\nПользовательская инструкция активна (' + prompt.length + ' символов).\n\n' +
         prompt.slice(0, 600) + (prompt.length > 600 ? '…' : '') + '\n\nДля изменения нажмите кнопку ниже.';
     }
     if (view === 'system-prompt-input') {
       return 'Отправьте одним сообщением новую инструкцию для ИИ. Можно использовать несколько строк.\n\n' +
-        'Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH + ' символов. Это значение будет применяться ко всем новым запросам в Telegram и синхронизироваться с Mini App.\n\n' +
+        'Максимум — ' + promptLimit + ' символов. Это значение будет применяться ко всем новым запросам в Telegram и синхронизироваться с Mini App.\n\n' +
         'Для отмены отправьте /cancel. Чтобы вернуть стандартную инструкцию, используйте кнопку «Сбросить» в предыдущем меню.';
     }
     if (view === 'sandbox-confirm') {
@@ -1553,7 +1558,7 @@ function getSettingsUrl() {
     }
     if (view === 'tokens') return 'Выберите лимит ответа. Текущее значение: ' + currentTokenLimit(user) + ' токенов.';
     if (view === 'timeout') return 'Выберите время ожидания ответа провайдера. Текущее значение: ' + currentRequestTimeout(user) + ' секунд.';
-    if (view === 'timeout-input') return 'Отправьте одним сообщением целое число секунд от 10 до 7200. Максимум — 2 часа. Для отмены отправьте /cancel.';
+    if (view === 'timeout-input') return 'Отправьте одним сообщением целое число секунд от 10 до ' + (hasProAccess(user.id) ? 7200 : 120) + '. Для отмены отправьте /cancel.';
     if (view === 'reasoning') {
       const current = user.settings && user.settings.reasoning || 'auto';
       return 'Выберите уровень рассуждений. Текущее значение: ' + (reasoningLabels[current] || 'Авто') + '.';
@@ -1575,7 +1580,7 @@ function getSettingsUrl() {
         '. При смене старый ключ и модель отключаются.';
     }
 
-    const settings = user.settings || {};
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
     const customPrompt = typeof settings.systemPrompt === 'string' &&
       settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt;
     return [
@@ -1600,7 +1605,7 @@ function getSettingsUrl() {
   }
 
   function settingsRichMessage(user) {
-    const settings = user.settings || {};
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
     const customPrompt = typeof settings.systemPrompt === 'string' &&
       settings.systemPrompt.trim() && settings.systemPrompt !== systemPrompt;
     const model = currentUserModel(user);
@@ -1658,7 +1663,7 @@ function getSettingsUrl() {
   }
 
   function settingsSelectionRichMessage(user, view) {
-    const settings = user.settings || {};
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
     const blocks = [modelCatalogBlocksHeading('Настройки TG Nexus', 1)];
 
     const appendRows = (items, perRow, createButton) => {
@@ -1675,7 +1680,8 @@ function getSettingsUrl() {
 
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
-      const choices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
+      const allChoices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
+      const choices = hasProAccess(user.id) ? allChoices : allChoices.filter((value) => value <= 120);
       blocks.push(
         modelCatalogBlocksHeading('Параметры ответа', 2),
         modelCatalogBlocksParagraph('Время ожидания ответа провайдера'),
@@ -1699,7 +1705,7 @@ function getSettingsUrl() {
         modelCatalogBlocksParagraph('Текущее значение: ' + current.toLocaleString('ru-RU') + ' токенов'),
         modelCatalogBlocksHeading('Выберите лимит', 3)
       );
-      appendRows(tokenPresets, 3, (value) => modelCatalogButton(
+      appendRows(hasProAccess(user.id) ? tokenPresets : tokenPresets.filter((value) => value <= 1_200), 3, (value) => modelCatalogButton(
         (value === current ? '✓ ' : '') + value.toLocaleString('ru-RU'),
         'tn:t:' + value,
         value === current ? 'success' : undefined
@@ -1713,7 +1719,7 @@ function getSettingsUrl() {
         modelCatalogBlocksParagraph('Текущее значение: ' + (reasoningLabels[current] || 'Авто')),
         modelCatalogBlocksHeading('Выберите уровень', 3)
       );
-      appendRows(reasoningChoices, 2, (value) => modelCatalogButton(
+      appendRows(hasProAccess(user.id) ? reasoningChoices : ['auto'], 2, (value) => modelCatalogButton(
         (value === current ? '✓ ' : '') + reasoningLabels[value],
         'tn:r:' + value,
         value === current ? 'success' : undefined
@@ -1773,7 +1779,8 @@ function getSettingsUrl() {
     }
     if (view === 'timeout') {
       const current = currentRequestTimeout(user);
-      const choices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
+      const allChoices = [10, 30, 60, 120, 180, 300, 600, 1800, 3600, 7200];
+      const choices = hasProAccess(user.id) ? allChoices : allChoices.filter((value) => value <= 120);
       const rows = [];
       for (let i = 0; i < choices.length; i += 3) {
         rows.push(choices.slice(i, i + 3).map((value) => ({
@@ -1789,8 +1796,9 @@ function getSettingsUrl() {
     if (view === 'tokens') {
       const current = currentTokenLimit(user);
       const rows = [];
-      for (let i = 0; i < tokenPresets.length; i += 3) {
-        rows.push(tokenPresets.slice(i, i + 3).map((value) => ({
+      const availableTokens = hasProAccess(user.id) ? tokenPresets : tokenPresets.filter((value) => value <= 1_200);
+      for (let i = 0; i < availableTokens.length; i += 3) {
+        rows.push(availableTokens.slice(i, i + 3).map((value) => ({
           text: (value === current ? '✓ ' : '') + value.toLocaleString('ru-RU'),
           callback_data: 'tn:t:' + value
         })));
@@ -1801,8 +1809,9 @@ function getSettingsUrl() {
     if (view === 'reasoning') {
       const current = user.settings && user.settings.reasoning || 'auto';
       const rows = [];
-      for (let i = 0; i < reasoningChoices.length; i += 2) {
-        rows.push(reasoningChoices.slice(i, i + 2).map((value) => ({
+      const availableReasoning = hasProAccess(user.id) ? reasoningChoices : ['auto'];
+      for (let i = 0; i < availableReasoning.length; i += 2) {
+        rows.push(availableReasoning.slice(i, i + 2).map((value) => ({
           text: (value === current ? '✓ ' : '') + reasoningLabels[value],
           callback_data: 'tn:r:' + value
         })));
@@ -1843,7 +1852,7 @@ function getSettingsUrl() {
       return { inline_keyboard: rows };
     }
 
-    const settings = user.settings || {};
+    const settings = getEffectiveUserSettings(user.id, user.settings || {});
     const rows = [
       [
         { text: '🤖 Модель', callback_data: 'tn:model' },
@@ -2195,6 +2204,15 @@ function getSettingsUrl() {
     }
 
     const data = query.data;
+    const premiumCallback = data === 'tn:search' || data === 'tn:sandbox' ||
+      data === 'tn:sandbox:confirm' || data === 'tn:timeout:custom' ||
+      /^tn:t:(2000|4000|8000|16000|32000)$/.test(data) ||
+      /^tn:timeout:(180|300|600|1800|3600|7200)$/.test(data) ||
+      /^tn:r:(minimal|low|medium|high|xhigh)$/.test(data);
+    if (!hasProAccess(userId) && premiumCallback) {
+      await safeAnswerCallback(query.id, 'Эта возможность доступна только в TG Nexus PRO.');
+      return true;
+    }
     const termsMatch = data.match(/^terms:(accept|decline):([A-Za-z0-9._-]{1,40})$/);
     if (data.startsWith('terms:')) {
       if (!termsMatch || termsMatch[2] !== REQUIRED_TERMS_VERSION) {
@@ -2702,7 +2720,7 @@ function getSettingsUrl() {
       role: message.role,
       content: message.content
     }));
-    const userSettings = user.settings || {};
+    const userSettings = getEffectiveUserSettings(user.id, user.settings || {});
     const userPrompt = typeof userSettings.systemPrompt === 'string' && userSettings.systemPrompt.trim()
       ? userSettings.systemPrompt.trim()
       : systemPrompt;
@@ -2887,6 +2905,53 @@ function isBillingAdmin(userId) {
   const configured = String(options.adminIds == null ? (process.env.BOT_ADMIN_IDS || '') : options.adminIds);
   return configured.split(',').map((item) => item.trim()).filter(Boolean)
     .includes(String(userId));
+}
+
+const TG_NEXUS_FREE_PROMPT_LIMIT = 2_000;
+const TG_NEXUS_FREE_LIMITS = Object.freeze({
+  maxTokens: 1_200, maxRequestTimeoutSeconds: 120,
+  maxSystemPromptLength: TG_NEXUS_FREE_PROMPT_LIMIT,
+  maxProviderProfiles: 1, maxAgents: 1, maxSandboxTimeoutSeconds: 60,
+  reasoning: Object.freeze(['auto']),
+  internetSearch: false, sandbox: false, sandboxInternet: false, multiAgent: false
+});
+
+function hasProAccess(userId) {
+  return isBillingAdmin(userId) || getProStatus(userId).active;
+}
+
+function getPlanInfo(userId) {
+  const admin = isBillingAdmin(userId);
+  const status = getProStatus(userId);
+  const active = admin || status.active;
+  return {
+    tier: active ? 'pro' : 'free', admin, active: status.active,
+    trialActive: status.trialActive, expiresAt: status.expiresAt,
+    remainingDays: status.remainingDays,
+    limits: active ? {
+      maxTokens: 32_000, maxRequestTimeoutSeconds: 7_200,
+      maxSystemPromptLength: 20_000, maxProviderProfiles: 30,
+      maxAgents: 20, maxSandboxTimeoutSeconds: 3_600,
+      reasoning: ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+      internetSearch: true, sandbox: true, sandboxInternet: true, multiAgent: true
+    } : TG_NEXUS_FREE_LIMITS
+  };
+}
+
+function getEffectiveUserSettings(userId, settings = {}) {
+  const effective = Object.assign({}, settings || {});
+  if (hasProAccess(userId)) return effective;
+  effective.maxTokens = Math.min(1_200, Math.max(1, Math.round(Number(effective.maxTokens) || 1_200)));
+  effective.reasoning = 'auto';
+  effective.requestTimeoutSeconds = Math.min(120, Math.max(10, Math.round(Number(effective.requestTimeoutSeconds) || 120)));
+  if (typeof effective.systemPrompt === 'string') effective.systemPrompt = effective.systemPrompt.slice(0, 2_000);
+  effective.internetSearch = false;
+  effective.sandbox = false;
+  effective.sandboxInternet = false;
+  effective.multiAgent = false;
+  effective.agentCount = 1;
+  effective.sandboxTimeout = 60;
+  return effective;
 }
 
 async function sendProMenu(chatId, userId) {
@@ -3461,6 +3526,7 @@ async function handlePromoListCommand(chatId, userId) {
     let user;
     try {
       user = store.getUser(message.from.id);
+      user.id = String(message.from.id);
     } catch {
       await sendText(chatId, 'Не удалось открыть зашифрованное хранилище. Обратитесь к администратору.');
       return true;
@@ -3562,9 +3628,10 @@ async function handlePromoListCommand(chatId, userId) {
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
           return true;
         }
-        if (text.length > MAX_SYSTEM_PROMPT_LENGTH) {
-          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH +
-            ' символов. Отправьте сокращённый вариант или /cancel.');
+        const maxPromptLength = hasProAccess(message.from.id) ? MAX_SYSTEM_PROMPT_LENGTH : TG_NEXUS_FREE_PROMPT_LIMIT;
+        if (text.length > maxPromptLength) {
+          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + maxPromptLength +
+            ' символов для вашего тарифа. Отправьте сокращённый вариант или /cancel.');
           return true;
         }
         const previous = user.settings || {};
@@ -3593,13 +3660,14 @@ async function handlePromoListCommand(chatId, userId) {
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Тайм-аут» снова.');
           return true;
         }
+        const maxTimeout = hasProAccess(message.from.id) ? 7_200 : 120;
         if (!/^\d{1,4}$/.test(text)) {
-          await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до 7200. Например: 900. Для отмены — /cancel.');
+          await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до ' + maxTimeout + '. Для отмены — /cancel.');
           return true;
         }
         const seconds = Number(text);
-        if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 7200) {
-          await sendText(chatId, 'Значение должно быть от 10 до 7200 секунд. Текущее значение не изменено.');
+        if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > maxTimeout) {
+          await sendText(chatId, 'Значение должно быть от 10 до ' + maxTimeout + ' секунд. Текущее значение не изменено.');
           return true;
         }
         const previous = user.settings || {};
@@ -4795,7 +4863,8 @@ async function handleModelCatalogCallback(query, user, data) {
       modelsEndpoint: user.modelsEndpoint !== false,
       model: user.modelExplicit ? (user.model || '') : (user.model !== defaultModel ? (user.model || '') : ''),
       apiKey: user.apiKey || '',
-      settings: user.settings || {},
+      settings: getEffectiveUserSettings(userId, user.settings || {}),
+      plan: getPlanInfo(userId),
       activeChatId: user.activeChatId || null,
       chats: user.chats || [],
       pro: getProStatus(userId),
