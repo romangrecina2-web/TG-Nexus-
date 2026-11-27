@@ -274,7 +274,8 @@
       return true;
     }
     if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test',
-      'pro', 'mypro', 'promocode', 'paysupport', 'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
+      'terms', 'pro', 'mypro', 'promocode', 'paysupport', 'refund',
+      'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -351,6 +352,13 @@
           return true;
         }
       }
+      if (command === 'terms') {
+        const appBase = String(options.webAppUrl || process.env.WEB_APP_URL ||
+          'https://romangrecina2-web.github.io/TG-Nexus-/').replace(/\/+$/, '') + '/';
+        const termsUrl = new URL('terms.html', appBase).toString();
+        await sendText(chatId, 'Условия использования TG Nexus: ' + termsUrl);
+        return true;
+      }
       if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
       if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
       if (command === 'promocode') {
@@ -371,6 +379,7 @@
           '\nНе отправляйте API-ключи или пароли. Для проверки платежа приложите чек Telegram и дату покупки.');
         return true;
       }
+      if (command === 'refund') return await handleProRefundCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_create') return await handlePromoCreateCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_disable') return await handlePromoDisableCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_list') return await handlePromoListCommand(chatId, message.from.id);
