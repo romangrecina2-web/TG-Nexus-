@@ -1714,7 +1714,7 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
   const invoiceCall = apiCalls.find((item) => item.method === 'sendInvoice');
   assert.ok(invoiceCall);
   assert.equal(invoiceCall.payload.currency, 'XTR');
-  assert.equal(invoiceCall.payload.prices[0].amount, 49);
+  assert.equal(invoiceCall.payload.prices[0].amount, 70);
   assert.equal(Object.prototype.hasOwnProperty.call(invoiceCall.payload, 'provider_token'), false);
 
   const pendingPayments = ctx.bot.store.getUser(userId).pendingStarPayments;
@@ -1727,7 +1727,7 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
     from: { id: userId },
     invoice_payload: pending.payload,
     currency: 'XTR',
-    total_amount: 49
+    total_amount: 70
   });
   assert.equal(approved, true);
   assert.equal(apiCalls.at(-1).method, 'answerPreCheckoutQuery');
@@ -1741,7 +1741,7 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
     successful_payment: {
       invoice_payload: pending.payload,
       currency: 'XTR',
-      total_amount: 49,
+      total_amount: 70,
       telegram_payment_charge_id: 'telegram-charge-770002'
     }
   };
@@ -1771,7 +1771,7 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
     from: { id: userId },
     invoice_payload: secondPending.payload,
     currency: 'XTR',
-    total_amount: 89
+    total_amount: 110
   });
   assert.equal(secondApproved, true);
 
@@ -1782,7 +1782,7 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
     successful_payment: {
       invoice_payload: secondPending.payload,
       currency: 'XTR',
-      total_amount: 89,
+      total_amount: 110,
       telegram_payment_charge_id: 'telegram-charge-770002-second'
     }
   });
@@ -1797,11 +1797,11 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
 });
 
 
-test('PRO menu and Stars invoices use the same configurable prices', async () => {
+test('PRO menu buttons and Stars invoices use the same configurable prices and durations', async () => {
   const apiCalls = [];
   const ctx = makeBot({
     proBillingEnabled: true,
-    proPlanPrices: { 7: 77, 14: 111, 21: 155, 30: 199 },
+    proPlanPrices: { 7: 77, 14: 111, 21: 155, 31: 199 },
     telegramApiCall: async (method, payload) => {
       apiCalls.push({ method, payload });
       return method === 'sendInvoice' ? { message_id: 992 } : true;
@@ -1814,26 +1814,58 @@ test('PRO menu and Stars invoices use the same configurable prices', async () =>
 
   await ctx.bot.handleMessage(message('/pro', userId, 9920));
   const menu = ctx.sent.at(-1);
-  assert.match(menu.text, /7 дней — 77 ⭐/);
-  assert.match(menu.text, /14 дней — 111 ⭐/);
-  assert.match(menu.text, /21 день — 155 ⭐/);
-  assert.match(menu.text, /30 дней — 199 ⭐/);
+  assert.match(menu.text, /Время тарифа/);
+  assert.match(menu.text, /Осталось до окончания:/);
+  assert.deepEqual(menu.options.reply_markup.inline_keyboard.map((row) => row.length), [2, 1, 1]);
   const buttons = menu.options.reply_markup.inline_keyboard.flat();
-  assert.ok(buttons.some((button) => button.text === '7 дней · 77 ⭐'));
+  assert.deepEqual(buttons.map((button) => button.text), [
+    '7 дней · 77 ⭐',
+    '2 недели · 111 ⭐',
+    '3 недели · 155 ⭐',
+    '31 день · 199 ⭐'
+  ]);
+  assert.deepEqual(buttons.map((button) => button.callback_data), [
+    'pro:buy:7', 'pro:buy:14', 'pro:buy:21', 'pro:buy:31'
+  ]);
 
-  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:7', userId, 9921));
+  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:31', userId, 9921));
   const invoice = apiCalls.find((item) => item.method === 'sendInvoice');
-  assert.equal(invoice.payload.prices[0].amount, 77);
+  assert.equal(invoice.payload.prices[0].amount, 199);
+  assert.match(invoice.payload.description, /31 день/);
 
   const pending = ctx.bot.store.getUser(userId).pendingStarPayments[0];
+  assert.equal(pending.days, 31);
   const approved = await ctx.bot.handlePreCheckoutQuery({
     id: 'pre-checkout-770008',
     from: { id: userId },
     invoice_payload: pending.payload,
     currency: 'XTR',
-    total_amount: 77
+    total_amount: 199
   });
   assert.equal(approved, true);
+});
+
+
+test('PRO menu keeps tariff buttons visible while Stars billing is disabled', async () => {
+  const telegramCalls = [];
+  const ctx = makeBot({
+    telegramApiCall: async (method, payload) => {
+      telegramCalls.push({ method, payload });
+      return true;
+    }
+  });
+  const userId = 770010;
+  const user = ctx.bot.store.getUser(userId);
+  user.termsAcceptedVersion = '2026-11-26-v2';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/pro', userId, 9925));
+  const menu = ctx.sent.at(-1);
+  assert.match(menu.text, /Оплата сейчас отключена/);
+  assert.deepEqual(menu.options.reply_markup.inline_keyboard.map((row) => row.length), [2, 1, 1]);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:31', userId, 9926));
+  assert.equal(telegramCalls.some((item) => item.method === 'sendInvoice'), false);
 });
 
 

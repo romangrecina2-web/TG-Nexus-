@@ -3000,10 +3000,10 @@ function getSettingsUrl() {
 const TG_NEXUS_PRO_DAY_MS = 24 * 60 * 60 * 1000;
 const TG_NEXUS_PRO_TRIAL_DAYS = 12;
 const TG_NEXUS_PRO_DEFAULT_PLANS = Object.freeze({
-  7: { days: 7, stars: 49 },
-  14: { days: 14, stars: 89 },
-  21: { days: 21, stars: 119 },
-  30: { days: 30, stars: 149 }
+  7: { days: 7, stars: 70 },
+  14: { days: 14, stars: 110 },
+  21: { days: 21, stars: 150 },
+  31: { days: 31, stars: 199 }
 });
 function readProPlanPrice(days, fallback) {
   const key = 'PRO_PRICE_' + days + '_DAYS';
@@ -3102,6 +3102,20 @@ function formatProDate(timestamp) {
   });
 }
 
+function formatProRemainingTime(timestamp, now = Date.now()) {
+  const remainingMinutes = Math.max(0, Math.ceil((Number(timestamp) - now) / 60_000));
+  if (!remainingMinutes) return 'меньше минуты';
+
+  const days = Math.floor(remainingMinutes / (24 * 60));
+  const hours = Math.floor((remainingMinutes % (24 * 60)) / 60);
+  const minutes = remainingMinutes % 60;
+  const parts = [];
+  if (days) parts.push(days + ' дн.');
+  if (hours) parts.push(hours + ' ч.');
+  if (!days && minutes) parts.push(minutes + ' мин.');
+  return parts.join(' ') || 'меньше минуты';
+}
+
 function isBillingAdmin(userId) {
   const configured = String(options.adminIds == null ? (process.env.BOT_ADMIN_IDS || '') : options.adminIds);
   return configured.split(',').map((item) => item.trim()).filter(Boolean)
@@ -3156,46 +3170,55 @@ function getEffectiveUserSettings(userId, settings = {}) {
 }
 
 function proPlanDurationLabel(days) {
-  return days === 21 ? '21 день' : days + ' дней';
+  const labels = {
+    7: '7 дней',
+    14: '2 недели',
+    21: '3 недели',
+    31: '31 день'
+  };
+  return labels[days] || days + ' дней';
 }
 
 async function sendProMenu(chatId, userId) {
   const status = getProStatus(userId);
-  const lines = [
-    '<b>TG Nexus PRO</b>',
-    '',
-    'Бесплатный пробный период: 12 дней на один Telegram-аккаунт.',
-    status.active
-      ? 'Доступ активен: до ' + formatProDate(status.expiresAt) +
-        ' (ещё ' + status.remainingDays + ' дн.).'
-      : 'Активного PRO-доступа сейчас нет.',
-    '',
-    'Тарифы:',
-    ...Object.values(TG_NEXUS_PRO_PLANS).map((plan) =>
-      '• ' + proPlanDurationLabel(plan.days) + ' — ' + plan.stars + ' ⭐'),
-    '',
-    'Покупки разовые: автоматического списания нет.',
-    'Новые дни добавляются к текущему сроку доступа.',
-    'Расходы на API-провайдеров оплачиваются отдельно.'
-  ];
-  const optionsForMenu = { parse_mode: 'HTML' };
-  if (isProBillingEnabled()) {
-    optionsForMenu.reply_markup = {
-      inline_keyboard: [
-        Object.values(TG_NEXUS_PRO_PLANS).slice(0, 2).map((plan) => ({
-          text: proPlanDurationLabel(plan.days) + ' · ' + plan.stars + ' ⭐',
-          callback_data: 'pro:buy:' + plan.days
-        })),
-        Object.values(TG_NEXUS_PRO_PLANS).slice(2).map((plan) => ({
-          text: proPlanDurationLabel(plan.days) + ' · ' + plan.stars + ' ⭐',
-          callback_data: 'pro:buy:' + plan.days
-        }))
-      ]
-    };
+  const lines = ['<b>Время тарифа</b>', ''];
+
+  if (status.active) {
+    lines.push(
+      'Осталось до окончания: ' + formatProRemainingTime(status.expiresAt),
+      'Действует до: ' + formatProDate(status.expiresAt)
+    );
+    if (status.trialActive) {
+      lines.push('Сейчас действует бесплатный пробный период.');
+    }
   } else {
-    lines.push('', 'Оплата пока отключена и не принимает Stars.');
+    lines.push('Сейчас PRO не активен.', 'Выберите срок доступа ниже.');
   }
-  await sendTelegramMessage(chatId, lines.join('\n'), optionsForMenu);
+
+  lines.push(
+    '',
+    'Новые дни добавляются к текущему сроку доступа.',
+    'Покупка разовая. Автоматического продления нет.'
+  );
+  if (!isProBillingEnabled()) {
+    lines.push('', 'Оплата сейчас отключена. Счёт не будет создан.');
+  }
+
+  const plans = Object.values(TG_NEXUS_PRO_PLANS);
+  const planButtons = (items) => items.map((plan) => ({
+    text: proPlanDurationLabel(plan.days) + ' · ' + plan.stars + ' ⭐',
+    callback_data: 'pro:buy:' + plan.days
+  }));
+  await sendTelegramMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        planButtons(plans.slice(0, 2)),
+        planButtons(plans.slice(2, 3)),
+        planButtons(plans.slice(3, 4))
+      ]
+    }
+  });
 }
 
 async function sendProStatus(chatId, userId) {
@@ -3250,10 +3273,10 @@ async function createProInvoice(chatId, userId, days) {
     await telegramRequest('sendInvoice', {
       chat_id: chatId,
       title: 'TG Nexus PRO',
-      description: 'Доступ к TG Nexus PRO на ' + plan.days + ' дней.',
+      description: 'Доступ к TG Nexus PRO на ' + proPlanDurationLabel(plan.days) + '.',
       payload,
       currency: 'XTR',
-      prices: [{ label: 'TG Nexus PRO · ' + plan.days + ' дней', amount: plan.stars }]
+      prices: [{ label: 'TG Nexus PRO · ' + proPlanDurationLabel(plan.days), amount: plan.stars }]
     });
   } catch (error) {
     user.pendingStarPayments = user.pendingStarPayments.filter((item) => item.payload !== payload);
@@ -3264,7 +3287,7 @@ async function createProInvoice(chatId, userId, days) {
 }
 
 async function handleProCallback(query, user) {
-  const match = String(query.data || '').match(/^pro:buy:(7|14|21|30)$/);
+  const match = String(query.data || '').match(/^pro:buy:(7|14|21|31)$/);
   if (!match) {
     await safeAnswerCallback(query.id, 'Эта кнопка тарифа устарела. Откройте /pro ещё раз.');
     return true;

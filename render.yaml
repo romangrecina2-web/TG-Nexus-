@@ -13,13 +13,13 @@ services:
       - key: PRO_BILLING_ENABLED
         value: "false"
       - key: PRO_PRICE_7_DAYS
-        value: "49"
+        value: "70"
       - key: PRO_PRICE_14_DAYS
-        value: "89"
+        value: "110"
       - key: PRO_PRICE_21_DAYS
-        value: "119"
-      - key: PRO_PRICE_30_DAYS
-        value: "149"
+        value: "150"
+      - key: PRO_PRICE_31_DAYS
+        value: "199"
       - key: BOT_ADMIN_IDS
         sync: false
       - key: WEBHOOK_SECRET
