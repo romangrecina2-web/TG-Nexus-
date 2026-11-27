@@ -12,6 +12,14 @@ services:
         sync: false
       - key: PRO_BILLING_ENABLED
         value: "false"
+      - key: PRO_PRICE_7_DAYS
+        value: "49"
+      - key: PRO_PRICE_14_DAYS
+        value: "89"
+      - key: PRO_PRICE_21_DAYS
+        value: "119"
+      - key: PRO_PRICE_30_DAYS
+        value: "149"
       - key: BOT_ADMIN_IDS
         sync: false
       - key: WEBHOOK_SECRET
