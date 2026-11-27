@@ -296,6 +296,33 @@ test('sync endpoint returns only the authenticated user state and accepts valid 
   });
 });
 
+test('successful_payment message updates reach the PRO entitlement handler', async () => {
+  const received = [];
+  const user = { termsAcceptedVersion: '2026-11-26-v2' };
+  const fakeBot = {
+    store: {
+      enabled: true,
+      getUser() { return user; }
+    },
+    ensureTrial(userId) { assert.equal(userId, 123456); },
+    async handleSuccessfulPayment(message) { received.push(message); }
+  };
+  const paymentMessage = {
+    message_id: 12,
+    chat: { id: 123456, type: 'private' },
+    from: { id: 123456, is_bot: false },
+    successful_payment: {
+      invoice_payload: 'tgnexuspro1_test',
+      currency: 'XTR',
+      total_amount: 49,
+      telegram_payment_charge_id: 'telegram-charge-server-test'
+    }
+  };
+
+  await processTelegramUpdate({ update_id: 12, message: paymentMessage }, fakeBot);
+  assert.deepEqual(received, [paymentMessage]);
+});
+
 test('Telegram callback_query updates reach the bot settings handler', async () => {
   const received = [];
   const fakeBot = {

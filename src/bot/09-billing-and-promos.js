@@ -349,7 +349,7 @@ async function handleSuccessfulPayment(message) {
   const pendingIndex = user.pendingStarPayments.findIndex((item) =>
     item && item.payload === payload);
   const pending = pendingIndex >= 0 ? user.pendingStarPayments[pendingIndex] : null;
-  if (!pending || payment.currency !== 'XTR' ||
+  if (!pending || pending.currency !== 'XTR' || payment.currency !== 'XTR' ||
       Number(payment.total_amount) !== Number(pending.amount) || !chargeId) {
     await sendText(chatId,
       'Платёж получен, но не удалось сопоставить его с тарифом. Не оплачивайте повторно; обратитесь в /paysupport.');
@@ -372,7 +372,10 @@ async function handleSuccessfulPayment(message) {
     expiresAt: nextExpiry
   });
   if (pro.payments.length > 100) pro.payments.splice(0, pro.payments.length - 100);
-  user.pendingStarPayments = [];
+  // Remove only the invoice that was actually paid. A user may have another
+  // valid invoice waiting in Telegram, and clearing every pending item would
+  // make that second purchase impossible to complete.
+  user.pendingStarPayments.splice(pendingIndex, 1);
   try {
     store.save();
   } catch (error) {
@@ -381,7 +384,10 @@ async function handleSuccessfulPayment(message) {
     user.pendingStarPayments = previousPending;
     throw error;
   }
-  proCheckoutReservations.delete(String(userId));
+  const reservation = proCheckoutReservations.get(String(userId));
+  if (reservation && reservation.payload === payload) {
+    proCheckoutReservations.delete(String(userId));
+  }
 
   await sendText(chatId, [
     'TG Nexus PRO активирован!',
