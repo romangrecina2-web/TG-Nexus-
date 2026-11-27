@@ -393,7 +393,7 @@
           throw error;
         }
         await sendText(chatId, 'Инструкция ИИ сохранена (' + text.length + ' символов).');
-        await sendSettings(chatId, user);
+        await sendSettings(chatId, user, message.from.id);
         return true;
       }
       if (pendingPrompt && command) {
@@ -424,7 +424,7 @@
         try { store.save(); } catch (error) { user.settings = previous; throw error; }
         pendingTimeoutInput.delete(timeoutInputKey);
         await sendText(chatId, 'Тайм-аут ответа провайдера установлен: ' + seconds + ' секунд.');
-        await sendSettings(chatId, user);
+        await sendSettings(chatId, user, message.from.id);
         return true;
       }
       if (pendingTimeout && command) pendingTimeoutInput.delete(timeoutInputKey);
@@ -464,7 +464,7 @@
         return true;
       }
       if (command === 'settings') {
-        await sendSettings(chatId, user);
+        await sendSettings(chatId, user, message.from.id);
         return true;
       }
       if (parsed) {

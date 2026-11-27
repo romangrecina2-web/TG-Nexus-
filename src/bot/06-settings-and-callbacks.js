@@ -997,8 +997,8 @@ function getSettingsUrl() {
     }
   }
 
-  async function sendSettings(chatId, user) {
-    user.id = String(user.id || '');
+  async function sendSettings(chatId, user, userId) {
+    user.id = String(userId == null ? (user.id || '') : userId);
     const sent = await sendTelegramMessage(chatId, settingsMessageText(user), {
       reply_markup: settingsKeyboard(user)
     });
