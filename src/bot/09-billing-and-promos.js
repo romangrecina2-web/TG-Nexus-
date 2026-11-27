@@ -87,6 +87,53 @@ function isBillingAdmin(userId) {
     .includes(String(userId));
 }
 
+const TG_NEXUS_FREE_PROMPT_LIMIT = 2_000;
+const TG_NEXUS_FREE_LIMITS = Object.freeze({
+  maxTokens: 1_200, maxRequestTimeoutSeconds: 120,
+  maxSystemPromptLength: TG_NEXUS_FREE_PROMPT_LIMIT,
+  maxProviderProfiles: 1, maxAgents: 1, maxSandboxTimeoutSeconds: 60,
+  reasoning: Object.freeze(['auto']),
+  internetSearch: false, sandbox: false, sandboxInternet: false, multiAgent: false
+});
+
+function hasProAccess(userId) {
+  return isBillingAdmin(userId) || getProStatus(userId).active;
+}
+
+function getPlanInfo(userId) {
+  const admin = isBillingAdmin(userId);
+  const status = getProStatus(userId);
+  const active = admin || status.active;
+  return {
+    tier: active ? 'pro' : 'free', admin, active: status.active,
+    trialActive: status.trialActive, expiresAt: status.expiresAt,
+    remainingDays: status.remainingDays,
+    limits: active ? {
+      maxTokens: 32_000, maxRequestTimeoutSeconds: 7_200,
+      maxSystemPromptLength: 20_000, maxProviderProfiles: 30,
+      maxAgents: 20, maxSandboxTimeoutSeconds: 3_600,
+      reasoning: ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+      internetSearch: true, sandbox: true, sandboxInternet: true, multiAgent: true
+    } : TG_NEXUS_FREE_LIMITS
+  };
+}
+
+function getEffectiveUserSettings(userId, settings = {}) {
+  const effective = Object.assign({}, settings || {});
+  if (hasProAccess(userId)) return effective;
+  effective.maxTokens = Math.min(1_200, Math.max(1, Math.round(Number(effective.maxTokens) || 1_200)));
+  effective.reasoning = 'auto';
+  effective.requestTimeoutSeconds = Math.min(120, Math.max(10, Math.round(Number(effective.requestTimeoutSeconds) || 120)));
+  if (typeof effective.systemPrompt === 'string') effective.systemPrompt = effective.systemPrompt.slice(0, 2_000);
+  effective.internetSearch = false;
+  effective.sandbox = false;
+  effective.sandboxInternet = false;
+  effective.multiAgent = false;
+  effective.agentCount = 1;
+  effective.sandboxTimeout = 60;
+  return effective;
+}
+
 async function sendProMenu(chatId, userId) {
   const status = getProStatus(userId);
   const lines = [

@@ -854,6 +854,9 @@ test('Telegram settings command renders a compact rich panel with interactive co
 
 test('Telegram settings can edit, apply and reset the AI system prompt', async () => {
   const ctx = makeBot();
+  const entitledUser = ctx.bot.store.getUser(123456);
+  entitledUser.pro = { expiresAt: Date.now() + 60 * 60_000, trialExpiresAt: 0, payments: [{ id: 'test-payment' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   const userId = 123456;
   const prompt = 'Отвечай как наставник по программированию.\\nПоказывай короткие примеры.';
   await ctx.bot.setApiKey(userId, 'valid-key', 'https://provider.example/v1');
@@ -932,6 +935,9 @@ test('pending AI instruction survives a server restart and /cancel only reports 
 
 test('Telegram settings buttons toggle internet search and save the state', async () => {
   const ctx = makeBot();
+  const entitledUser = ctx.bot.store.getUser(123456);
+  entitledUser.pro = { expiresAt: Date.now() + 60 * 60_000, trialExpiresAt: 0, payments: [{ id: 'test-payment' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:search'));
   assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, true);
@@ -953,6 +959,9 @@ test('Telegram settings buttons toggle internet search and save the state', asyn
 
 test('Telegram sandbox switch requires consent, stays offline by default, persists, and clears network access when disabled', async () => {
   const ctx = makeBot();
+  const entitledUser = ctx.bot.store.getUser(123456);
+  entitledUser.pro = { expiresAt: Date.now() + 60 * 60_000, trialExpiresAt: 0, payments: [{ id: 'test-payment' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   const userId = 123456;
   const seeded = ctx.bot.store.getUser(userId);
   seeded.settings = { sandboxInternet: true };
@@ -1008,6 +1017,9 @@ test('Telegram sandbox switch requires consent, stays offline by default, persis
 
 test('Telegram settings token and reasoning menus render as rich selection cards', async () => {
   const ctx = makeBot();
+  const entitledUser = ctx.bot.store.getUser(123456);
+  entitledUser.pro = { expiresAt: Date.now() + 60 * 60_000, trialExpiresAt: 0, payments: [{ id: 'test-payment' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   await ctx.bot.handleMessage(message('/settings'));
 
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:tokens'));
@@ -1060,6 +1072,9 @@ test('Telegram provider chooser renders providers inside the rich settings card'
 
 test('Telegram timeout setting selects and persists the provider response wait', async () => {
   const ctx = makeBot();
+  const entitledUser = ctx.bot.store.getUser(123456);
+  entitledUser.pro = { expiresAt: Date.now() + 60 * 60_000, trialExpiresAt: 0, payments: [{ id: 'test-payment' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   await ctx.bot.handleMessage(message('/settings'));
   await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout'));
   const timeoutSelectionPanel = ctx.editedRichMessages.at(-1).richMessage;
@@ -1860,4 +1875,51 @@ test('admin user lookup and admin store snapshots never reveal provider API keys
   await ctx.bot.handleMessage(message('333333', 123456, 11009));
   assert.match(ctx.sent.at(-1).text, /333333/);
   assert.equal(ctx.sent.at(-1).text.includes('super-secret-key'), false);
+});
+
+test('Free plan settings are capped and PRO-only Telegram callbacks are blocked', async () => {
+  const ctx = makeBot();
+  const userId = 654987;
+  const user = ctx.bot.store.getUser(userId);
+  user.id = String(userId);
+  user.pro = { expiresAt: Date.now() - 1_000, payments: [], promoRedemptions: [] };
+  user.settings = {
+    maxTokens: 32_000, reasoning: 'high', requestTimeoutSeconds: 7_200,
+    systemPrompt: 'x'.repeat(4_000), internetSearch: true, sandbox: true,
+    sandboxInternet: true, multiAgent: true, agentCount: 20
+  };
+  ctx.bot.store.save();
+  const state = ctx.bot.getSyncState(userId);
+  assert.equal(state.plan.tier, 'free');
+  assert.equal(state.settings.maxTokens, 1_200);
+  assert.equal(state.settings.reasoning, 'auto');
+  assert.equal(state.settings.requestTimeoutSeconds, 120);
+  assert.equal(state.settings.systemPrompt.length, 2_000);
+  assert.equal(state.settings.internetSearch, false);
+  assert.equal(state.settings.sandbox, false);
+  assert.equal(state.settings.sandboxInternet, false);
+  assert.equal(state.settings.multiAgent, false);
+  assert.equal(state.settings.agentCount, 1);
+  assert.equal(ctx.bot.store.getUser(userId).settings.maxTokens, 32_000);
+  await ctx.bot.handleMessage(message('/settings', userId, 711));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:search', userId, 712));
+  assert.equal(ctx.bot.getSyncState(userId).settings.internetSearch, false);
+  assert.match(ctx.callbackAnswers.at(-1).text, /только в TG Nexus PRO/i);
+});
+
+test('PRO trial and administrators keep all features', async () => {
+  const ctx = makeBot({ adminIds: '654988' });
+  const trialId = 654987;
+  const trialUser = ctx.bot.store.getUser(trialId);
+  trialUser.pro = { expiresAt: Date.now() + 300_000, trialExpiresAt: Date.now() + 300_000, payments: [], promoRedemptions: [] };
+  trialUser.settings = { maxTokens: 32_000, reasoning: 'high', requestTimeoutSeconds: 7_200, internetSearch: true };
+  ctx.bot.store.save();
+  const trialState = ctx.bot.getSyncState(trialId);
+  assert.equal(trialState.plan.tier, 'pro');
+  assert.equal(trialState.settings.maxTokens, 32_000);
+  assert.equal(trialState.settings.reasoning, 'high');
+  assert.equal(trialState.settings.internetSearch, true);
+  const adminState = ctx.bot.getSyncState(654988);
+  assert.equal(adminState.plan.tier, 'pro');
+  assert.equal(adminState.plan.admin, true);
 });

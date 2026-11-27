@@ -278,6 +278,7 @@
     let user;
     try {
       user = store.getUser(message.from.id);
+      user.id = String(message.from.id);
     } catch {
       await sendText(chatId, 'Не удалось открыть зашифрованное хранилище. Обратитесь к администратору.');
       return true;
@@ -379,9 +380,10 @@
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Инструкция ИИ» снова.');
           return true;
         }
-        if (text.length > MAX_SYSTEM_PROMPT_LENGTH) {
-          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + MAX_SYSTEM_PROMPT_LENGTH +
-            ' символов. Отправьте сокращённый вариант или /cancel.');
+        const maxPromptLength = hasProAccess(message.from.id) ? MAX_SYSTEM_PROMPT_LENGTH : TG_NEXUS_FREE_PROMPT_LIMIT;
+        if (text.length > maxPromptLength) {
+          await sendText(chatId, 'Инструкция слишком длинная. Максимум — ' + maxPromptLength +
+            ' символов для вашего тарифа. Отправьте сокращённый вариант или /cancel.');
           return true;
         }
         const previous = user.settings || {};
@@ -410,13 +412,14 @@
           await sendText(chatId, 'Время ввода истекло. Откройте /settings и нажмите «Тайм-аут» снова.');
           return true;
         }
+        const maxTimeout = hasProAccess(message.from.id) ? 7_200 : 120;
         if (!/^\d{1,4}$/.test(text)) {
-          await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до 7200. Например: 900. Для отмены — /cancel.');
+          await sendText(chatId, 'Нужно отправить только целое число секунд от 10 до ' + maxTimeout + '. Для отмены — /cancel.');
           return true;
         }
         const seconds = Number(text);
-        if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 7200) {
-          await sendText(chatId, 'Значение должно быть от 10 до 7200 секунд. Текущее значение не изменено.');
+        if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > maxTimeout) {
+          await sendText(chatId, 'Значение должно быть от 10 до ' + maxTimeout + ' секунд. Текущее значение не изменено.');
           return true;
         }
         const previous = user.settings || {};

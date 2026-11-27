@@ -47,7 +47,7 @@
       role: message.role,
       content: message.content
     }));
-    const userSettings = user.settings || {};
+    const userSettings = getEffectiveUserSettings(user.id, user.settings || {});
     const userPrompt = typeof userSettings.systemPrompt === 'string' && userSettings.systemPrompt.trim()
       ? userSettings.systemPrompt.trim()
       : systemPrompt;
