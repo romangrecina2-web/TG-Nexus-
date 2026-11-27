@@ -3852,7 +3852,7 @@ async function handlePromoListCommand(chatId, userId) {
       return true;
     }
     if (command === 'version') {
-      await sendText(chatId, 'В1 Release');
+      await sendText(chatId, 'B2 Release');
       return true;
     }
     if (command === 'info') {

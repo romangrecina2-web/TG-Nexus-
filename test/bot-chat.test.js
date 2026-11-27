@@ -300,7 +300,7 @@ test('/chat reports empty state and /chat_equip reports an error with the chat l
 test('/version identifies the deployed Telegram backend build', async () => {
   const ctx = makeBot();
   await ctx.bot.handleMessage(message('/version'));
-  assert.equal(ctx.sent.at(-1).text, 'В1 Release');
+  assert.equal(ctx.sent.at(-1).text, 'B2 Release');
 });
 
 test('/model keeps manual ID selection and opens the shared model catalogue without dumping the ID list', async () => {
