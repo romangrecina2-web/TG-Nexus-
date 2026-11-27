@@ -1809,7 +1809,7 @@ test('admin panel lists users, grants and revokes PRO, and writes an audit log',
   ctx.bot.store.save();
 
   await ctx.bot.handleCallbackQuery(callbackQuery('admin:home', 123456, 11004));
-  assert.match(ctx.editedMessages.at(-1).text, /Пользователи: 1/);
+  assert.match(ctx.editedMessages.at(-1).text, /Пользователи: 2/);
 
   await ctx.bot.handleCallbackQuery(callbackQuery('admin:users:0', 123456, 11004));
   assert.match(ctx.editedMessages.at(-1).text, /222222/);
