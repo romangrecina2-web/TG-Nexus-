@@ -1820,7 +1820,7 @@ test('provider 429 errors identify an upstream limit and suppress immediate retr
       return {
         ok: false,
         status: 429,
-        headers: { get: (name) => name.toLowerCase() === 'retry-after' ? '90' : null },
+        headers: { get: (name) => name.toLowerCase() === 'retry-after' ? '45' : null },
         json: async () => ({
           error: {
             code: 429,
@@ -1865,7 +1865,7 @@ test('provider 429 errors identify an upstream limit and suppress immediate retr
 
 test('/test distinguishes OpenRouter free-model quota and reads X-RateLimit-Reset', async () => {
   let requestCount = 0;
-  const resetAt = Date.now() + 125_000;
+  const resetAt = Date.now() + 115_000;
   const ctx = makeBot({
     fetchImpl: async () => {
       requestCount += 1;

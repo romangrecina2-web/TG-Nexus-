@@ -141,7 +141,7 @@
       metadata: details.metadata,
       retryAfterSeconds: retryHeaderSeconds,
       cooldownSeconds,
-      message: providerErrorSummary(effectiveStatus, details.message, details.metadata, retryHeaderSeconds)
+      message: providerErrorSummary(effectiveStatus, details.message, details.metadata, cooldownSeconds)
     };
   }
 
