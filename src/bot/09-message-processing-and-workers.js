@@ -44,7 +44,8 @@
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
       const elapsed = indicator.elapsedSeconds();
-      const failureText = 'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason;
+      const elapsedLabel = elapsed < 1 ? 'меньше 1 сек.' : elapsed + ' сек.';
+      const failureText = 'Не удалось получить ответ от ИИ за ' + elapsedLabel + '\nПричина: ' + reason;
       await finishGenerationFailure(indicator, failureText, userMessage.id, '🔄 Повторить запрос');
       return;
     }
@@ -114,8 +115,10 @@
         answer = await requestAssistant(user, requestChat);
       } catch (error) {
         const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
-        const failureText = 'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
-          ' сек.\nПричина: ' + reason;
+        const elapsed = indicator.elapsedSeconds();
+        const elapsedLabel = elapsed < 1 ? 'меньше 1 сек.' : elapsed + ' сек.';
+        const failureText = 'Не удалось перегенерировать ответ за ' + elapsedLabel +
+          '\nПричина: ' + reason;
         await finishGenerationFailure(indicator, failureText, requestId, '🔄 Повторить запрос');
         return true;
       }

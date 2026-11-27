@@ -1812,47 +1812,101 @@ test('AI replies include an inline regenerate button and regenerate the matching
   assert.ok(editedReply.richMessage.markdown.includes('data="' + callbackData + '"'));
 });
 
-test('provider error messages also offer a button to retry the original request', async () => {
+test('provider 429 errors identify an upstream limit and suppress immediate retry attempts', async () => {
   let requestCount = 0;
   const ctx = makeBot({
     fetchImpl: async () => {
       requestCount += 1;
-      if (requestCount === 1) {
-        return {
-          ok: false,
-          status: 429,
-          json: async () => ({ error: { message: 'Provider returned error' } })
-        };
-      }
       return {
-        ok: true,
-        status: 200,
-        json: async () => ({ choices: [{ message: { content: 'Ответ после повтора' } }] })
+        ok: false,
+        status: 429,
+        headers: { get: (name) => name.toLowerCase() === 'retry-after' ? '45' : null },
+        json: async () => ({
+          error: {
+            code: 429,
+            message: 'Rate limit exceeded',
+            metadata: {
+              error_type: 'rate_limit_exceeded',
+              limit_source: 'upstream_provider_shared_pool',
+              provider_name: 'NVIDIA',
+              provider_code: 'rate_limited'
+            }
+          }
+        })
       };
     }
   });
   const userId = 780002;
   const user = ctx.bot.store.getUser(userId);
+  user.apiBaseUrl = 'https://openrouter.ai/api/v1';
+  user.apiProtocol = 'openai';
   user.apiKey = 'valid-test-key';
-  user.model = 'test/model-a';
+  user.model = 'nvidia/test-model:free';
   user.modelExplicit = true;
   ctx.bot.store.save();
 
   await ctx.bot.handleMessage(message('Повтори если ошибка', userId, 10002));
-  const errorMessage = ctx.editedRichMessages.find((item) => item.richMessage.markdown.includes('HTTP 429'));
+  const errorMessage = ctx.editedRichMessages.find((item) =>
+    item.richMessage.markdown.includes('HTTP 429'));
   assert.ok(errorMessage);
+  assert.match(errorMessage.richMessage.markdown, /поставщик выбранной модели ограничил частоту/i);
+  assert.match(errorMessage.richMessage.markdown, /NVIDIA/);
+  assert.match(errorMessage.richMessage.markdown, /45 сек\./);
   const callbackData = errorMessage.richMessage.markdown.match(/data="(regen:[0-9a-f-]{36})"/i)?.[1];
   assert.match(callbackData || '', /^regen:[0-9a-f-]{36}$/i);
-  assert.ok(errorMessage.richMessage.markdown.includes('🔄 Повторить запрос'));
 
   await ctx.bot.handleCallbackQuery(callbackQuery(callbackData, userId, errorMessage.messageId));
 
-  assert.equal(requestCount, 2);
-  const savedChat = ctx.bot.store.getUser(userId).chats[0];
-  assert.ok(savedChat.messages.some((item) =>
-    item.role === 'assistant' && item.content === 'Ответ после повтора'));
+  assert.equal(requestCount, 1, 'the bot must not retry before Retry-After expires');
   assert.ok(ctx.editedRichMessages.some((item) =>
-    item.messageId === errorMessage.messageId && item.richMessage.markdown.includes('Ответ после повтора')));
+    item.richMessage.markdown.includes('Повторный запрос к этой модели временно приостановлен')),
+  'the regeneration response should explain that the provider cooldown is still active');
+});
+
+test('/test distinguishes OpenRouter free-model quota and reads X-RateLimit-Reset', async () => {
+  let requestCount = 0;
+  const resetAt = Date.now() + 115_000;
+  const ctx = makeBot({
+    fetchImpl: async () => {
+      requestCount += 1;
+      return {
+        ok: false,
+        status: 429,
+        headers: {
+          get: (name) => {
+            if (name.toLowerCase() === 'x-ratelimit-reset') return String(resetAt);
+            if (name.toLowerCase() === 'x-ratelimit-limit') return '20';
+            if (name.toLowerCase() === 'x-ratelimit-remaining') return '0';
+            return null;
+          }
+        },
+        json: async () => ({
+          error: {
+            code: 429,
+            message: 'Rate limit exceeded',
+            metadata: { limit_source: 'openrouter_free_tier_per_minute' }
+          }
+        })
+      };
+    }
+  });
+  const userId = 780003;
+  const user = ctx.bot.store.getUser(userId);
+  user.apiBaseUrl = 'https://openrouter.ai/api/v1';
+  user.apiProtocol = 'openai';
+  user.apiKey = 'valid-test-key';
+  user.model = 'nvidia/test-model:free';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/test', userId, 10003));
+  assert.equal(requestCount, 1);
+  assert.match(ctx.sent.at(-1).text, /OpenRouter достиг минутного лимита запросов к бесплатным моделям/i);
+  assert.match(ctx.sent.at(-1).text, /2 мин\./);
+
+  await ctx.bot.handleMessage(message('/test', userId, 10004));
+  assert.equal(requestCount, 1, 'the provider test must respect the recorded cooldown');
+  assert.match(ctx.sent.at(-1).text, /Повторный запрос к этой модели временно приостановлен/i);
 });
 
 
