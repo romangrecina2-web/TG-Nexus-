@@ -1,5 +1,16 @@
   const pendingRegenerationRequests = new Set();
 
+  async function finishGenerationFailure(indicator, text, requestId, buttonText) {
+    try {
+      await indicator.finishRich(buildAssistantRichMessage(text, requestId, buttonText));
+    } catch {
+      // Rich message delivery may fail after an upstream timeout (for example,
+      // during a Telegram API outage or rate limit). Always try a plain-text
+      // completion so the user is not left with a permanent generation spinner.
+      await indicator.finish(text);
+    }
+  }
+
   async function handleUserMessage(message, user, text) {
     let chat = activeChat(user);
     if (!chat) chat = createChat(user, nextChatTitle(user));
@@ -33,11 +44,8 @@
     } catch (error) {
       const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
       const elapsed = indicator.elapsedSeconds();
-      await indicator.finishRich(buildAssistantRichMessage(
-        'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason,
-        userMessage.id,
-        '🔄 Повторить запрос'
-      ));
+      const failureText = 'Не удалось получить ответ от ИИ за ' + elapsed + ' сек.\nПричина: ' + reason;
+      await finishGenerationFailure(indicator, failureText, userMessage.id, '🔄 Повторить запрос');
       return;
     }
 
@@ -106,12 +114,9 @@
         answer = await requestAssistant(user, requestChat);
       } catch (error) {
         const reason = sanitizeProviderError(error && error.message || 'Неизвестная ошибка провайдера.');
-        await indicator.finishRich(buildAssistantRichMessage(
-          'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
-            ' сек.\nПричина: ' + reason,
-          requestId,
-          '🔄 Повторить запрос'
-        ));
+        const failureText = 'Не удалось перегенерировать ответ за ' + indicator.elapsedSeconds() +
+          ' сек.\nПричина: ' + reason;
+        await finishGenerationFailure(indicator, failureText, requestId, '🔄 Повторить запрос');
         return true;
       }
 
