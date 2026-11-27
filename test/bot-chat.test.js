@@ -131,6 +131,7 @@ function makeBot(options = {}) {
     },
     editTelegramRichMessage: async (chatId, messageId, richMessage, replyMarkup) => {
       editedRichMessages.push({ chatId, messageId, richMessage, replyMarkup });
+      if (options.failRichEdits) throw new Error('Telegram rich edit failed');
     }
   });
   return { bot, dir, sent, richMessages, documents, attempts, actions, providerCalls, events, callbackAnswers, editedMessages, editedRichMessages };
@@ -530,6 +531,31 @@ test('normal messages create a chat automatically and send the AI response', asy
   assert.ok(ctx.actions.some((item) => item.type === 'delete' && item.messageId === indicator.message_id));
   const completion = JSON.parse(ctx.providerCalls.at(-1).request.body);
   assert.match(completion.messages[0].content, /Отвечай без таблиц и заголовков #/);
+});
+
+test('provider errors fall back to a plain-text status when Rich message delivery fails', async () => {
+  const ctx = makeBot({
+    fetchImpl: async () => { throw new Error('Upstream request timed out'); },
+    failRichSends: true,
+    failRichEdits: true,
+    deleteTelegramMessageError: true
+  });
+  const user = ctx.bot.store.getUser(123456);
+  user.apiKey = 'valid-key';
+  user.model = 'test/model-a';
+  user.modelExplicit = true;
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('Привет'));
+
+  const indicator = ctx.sent.find((item) => item.text === 'Генерируем ответ... (0 сек.)');
+  assert.ok(indicator, 'the generation indicator should have been sent');
+  assert.ok(ctx.editedMessages.some((item) =>
+    item.messageId === indicator.message_id &&
+    item.text.includes('Не удалось получить ответ от ИИ') &&
+    item.text.includes('Upstream request timed out')
+  ), 'a plain-text failure should replace the generation indicator');
+  assert.equal(ctx.bot.store.getUser(123456).chats[0].messages.filter((item) => item.role === 'assistant').length, 0);
 });
 
 test('generation indicator updates its elapsed seconds and is removed after completion', async () => {
