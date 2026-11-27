@@ -6,7 +6,11 @@ const { URL } = require('node:url');
 const { createBotChat, BOT_COMMANDS } = require('./bot-chat');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
-const WEB_APP_URL = process.env.WEB_APP_URL || 'https://romangrecina2-web.github.io/TG-Nexus-/';
+const configuredWebAppUrl = String(process.env.WEB_APP_URL || '').trim();
+const WEB_APP_URL = configuredWebAppUrl &&
+  !/github\\.io\\/TG-test(?:-|\\/|$)/i.test(configuredWebAppUrl)
+  ? configuredWebAppUrl
+  : 'https://romangrecina2-web.github.io/TG-Nexus-/';
 const configuredWebhookSecret = String(process.env.WEBHOOK_SECRET || '');
 if (configuredWebhookSecret && Buffer.byteLength(configuredWebhookSecret, 'utf8') < 32) {
   throw new Error('WEBHOOK_SECRET must contain at least 32 bytes.');
