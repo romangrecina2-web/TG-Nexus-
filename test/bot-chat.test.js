@@ -1851,7 +1851,7 @@ test('provider 429 errors identify an upstream limit and suppress immediate retr
   assert.ok(errorMessage);
   assert.match(errorMessage.richMessage.markdown, /поставщик выбранной модели ограничил частоту/i);
   assert.match(errorMessage.richMessage.markdown, /NVIDIA/);
-  assert.match(errorMessage.richMessage.markdown, /90 сек\./);
+  assert.match(errorMessage.richMessage.markdown, /45 сек\./);
   const callbackData = errorMessage.richMessage.markdown.match(/data="(regen:[0-9a-f-]{36})"/i)?.[1];
   assert.match(callbackData || '', /^regen:[0-9a-f-]{36}$/i);
 

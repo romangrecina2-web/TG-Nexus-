@@ -2719,10 +2719,10 @@ function getSettingsUrl() {
 
   function formatProviderWait(seconds) {
     const safeSeconds = Math.max(1, Math.ceil(Number(seconds) || 1));
-    if (safeSeconds < 60) return safeSeconds + ' сек.';
-    if (safeSeconds < 3_600) return Math.ceil(safeSeconds / 60) + ' мин.';
-    if (safeSeconds < 86_400) return Math.ceil(safeSeconds / 3_600) + ' ч.';
-    return Math.ceil(safeSeconds / 86_400) + ' дн.';
+    if (safeSeconds < 60) return safeSeconds + ' сек';
+    if (safeSeconds < 3_600) return Math.ceil(safeSeconds / 60) + ' мин';
+    if (safeSeconds < 86_400) return Math.ceil(safeSeconds / 3_600) + ' ч';
+    return Math.ceil(safeSeconds / 86_400) + ' дн';
   }
 
   function getProviderRetryAfterSeconds(metadata, responseHeaders) {
