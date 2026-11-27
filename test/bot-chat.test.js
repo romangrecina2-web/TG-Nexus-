@@ -89,6 +89,7 @@ function makeBot(options = {}) {
     fetchImpl,
     telegramApiCall: options.telegramApiCall,
     proBillingEnabled: options.proBillingEnabled,
+    proPlanPrices: options.proPlanPrices,
     adminIds: options.adminIds,
     sendTelegramRichMessage: async (chatId, richMessage, sendOptions) => {
       const record = {
@@ -587,6 +588,12 @@ test('/info ends with the requested signature', async () => {
   assert.ok(ctx.sent.at(-1).text.trimEnd().endsWith('Created tet0r'));
   assert.ok(ctx.sent.at(-1).text.includes('/start'));
   assert.ok(ctx.sent.at(-1).text.includes('/help'));
+});
+
+test('/terms returns a direct Terms of Service link', async () => {
+  const ctx = makeBot();
+  await ctx.bot.handleMessage(message('/terms'));
+  assert.match(ctx.sent.at(-1).text, /terms\.html/);
 });
 
 test('long Telegram responses are split below the message-size limit', () => {
@@ -1742,6 +1749,93 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
   await ctx.bot.handleSuccessfulPayment(paidMessage);
   assert.equal(ctx.bot.getProStatus(userId).expiresAt, afterPayment.expiresAt);
   assert.equal(ctx.bot.store.getUser(userId).pro.payments.length, 1);
+});
+
+
+test('PRO menu and Stars invoices use the same configurable prices', async () => {
+  const apiCalls = [];
+  const ctx = makeBot({
+    proBillingEnabled: true,
+    proPlanPrices: { 7: 77, 14: 111, 21: 155, 30: 199 },
+    telegramApiCall: async (method, payload) => {
+      apiCalls.push({ method, payload });
+      return method === 'sendInvoice' ? { message_id: 992 } : true;
+    }
+  });
+  const userId = 770008;
+  const user = ctx.bot.store.getUser(userId);
+  user.termsAcceptedVersion = '2026-11-26-v2';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/pro', userId, 9920));
+  const menu = ctx.sent.at(-1);
+  assert.match(menu.text, /7 дней — 77 ⭐/);
+  assert.match(menu.text, /14 дней — 111 ⭐/);
+  assert.match(menu.text, /21 день — 155 ⭐/);
+  assert.match(menu.text, /30 дней — 199 ⭐/);
+  const buttons = menu.options.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((button) => button.text === '7 дней · 77 ⭐'));
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:7', userId, 9921));
+  const invoice = apiCalls.find((item) => item.method === 'sendInvoice');
+  assert.equal(invoice.payload.prices[0].amount, 77);
+
+  const pending = ctx.bot.store.getUser(userId).pendingStarPayments[0];
+  const approved = await ctx.bot.handlePreCheckoutQuery({
+    id: 'pre-checkout-770008',
+    from: { id: userId },
+    invoice_payload: pending.payload,
+    currency: 'XTR',
+    total_amount: 77
+  });
+  assert.equal(approved, true);
+});
+
+
+test('admin refund returns Stars, revokes the purchased days, and is idempotent', async () => {
+  const apiCalls = [];
+  const ctx = makeBot({
+    adminIds: '123456',
+    telegramApiCall: async (method, payload) => {
+      apiCalls.push({ method, payload });
+      if (method === 'refundStarPayment') return true;
+      throw new Error('Unexpected Telegram API method: ' + method);
+    }
+  });
+  const targetId = 770009;
+  const target = ctx.bot.store.getUser(targetId);
+  const beforeExpiry = Date.now() + 20 * 24 * 60 * 60 * 1000;
+  target.pro = {
+    expiresAt: beforeExpiry,
+    payments: [{
+      telegramPaymentChargeId: 'refund-charge-770009',
+      amount: 49,
+      currency: 'XTR',
+      days: 7,
+      paidAt: Date.now(),
+      expiresAt: beforeExpiry
+    }],
+    promoRedemptions: []
+  };
+  ctx.bot.store.save();
+
+  await ctx.bot.handleMessage(message('/refund ' + targetId + ' refund-charge-770009', 123456, 9930));
+  assert.equal(apiCalls.length, 0);
+  assert.match(ctx.sent.at(-1).text, /CONFIRM/);
+
+  await ctx.bot.handleMessage(message('/refund ' + targetId + ' refund-charge-770009 CONFIRM', 123456, 9931));
+  assert.equal(apiCalls.length, 1);
+  assert.equal(apiCalls[0].method, 'refundStarPayment');
+  assert.equal(apiCalls[0].payload.user_id, targetId);
+  assert.equal(apiCalls[0].payload.telegram_payment_charge_id, 'refund-charge-770009');
+  const refunded = ctx.bot.store.getUser(targetId);
+  assert.equal(refunded.pro.payments[0].refundStatus, 'refunded');
+  assert.ok(refunded.pro.payments[0].refundedAt > 0);
+  assert.equal(refunded.pro.expiresAt, beforeExpiry - 7 * 24 * 60 * 60 * 1000);
+  assert.equal(ctx.bot.store.listAdminLogs(10).some((item) => item.action === 'pro_refund'), true);
+
+  await ctx.bot.handleMessage(message('/refund ' + targetId + ' refund-charge-770009 CONFIRM', 123456, 9932));
+  assert.equal(apiCalls.length, 1, 'a completed refund must not be sent to Telegram twice');
 });
 
 test('promo codes grant days once per user and respect the global usage limit', async () => {
