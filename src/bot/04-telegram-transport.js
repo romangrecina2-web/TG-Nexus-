@@ -135,7 +135,8 @@ function createBotChat(options = {}) {
   const answerCallbackQuery = options.answerCallbackQuery || ((callbackQueryId, text = '') =>
     telegramRequest('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
-      ...(text ? { text } : {})
+      ...(text ? { text } : {}),
+      show_alert: false
     }));
   const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
     telegramRequest('editMessageText', {

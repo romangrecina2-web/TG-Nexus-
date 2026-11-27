@@ -1942,9 +1942,25 @@ test('Free plan settings are capped and PRO-only Telegram callbacks are blocked'
   assert.equal(state.settings.agentCount, 1);
   assert.equal(ctx.bot.store.getUser(userId).settings.maxTokens, 32_000);
   await ctx.bot.handleMessage(message('/settings', userId, 711));
-  await ctx.bot.handleCallbackQuery(callbackQuery('tn:search', userId, 712));
+
+  // Every Premium-only Telegram callback, including stale/forged payloads,
+  // must show a Toast and must never mutate the user's settings.
+  const premiumCallbacks = [
+    'tn:search', 'tn:sandbox', 'tn:sandbox:confirm', 'tn:timeout:custom',
+    'tn:t:2000', 'tn:t:4000', 'tn:t:8000', 'tn:t:16000', 'tn:t:32000',
+    'tn:timeout:180', 'tn:timeout:300', 'tn:timeout:600',
+    'tn:timeout:1800', 'tn:timeout:3600', 'tn:timeout:7200',
+    'tn:r:minimal', 'tn:r:low', 'tn:r:medium', 'tn:r:high', 'tn:r:xhigh'
+  ];
+  const rawSettingsBefore = JSON.parse(JSON.stringify(ctx.bot.store.getUser(userId).settings));
+  const sentBefore = ctx.sent.length;
+  for (const [index, data] of premiumCallbacks.entries()) {
+    await ctx.bot.handleCallbackQuery(callbackQuery(data, userId, 712 + index));
+    assert.match(ctx.callbackAnswers.at(-1).text, /Купите TG Nexus PRO/i, data);
+    assert.equal(ctx.sent.length, sentBefore, data + ' must not send a new chat message');
+    assert.deepEqual(ctx.bot.store.getUser(userId).settings, rawSettingsBefore, data + ' must not mutate settings');
+  }
   assert.equal(ctx.bot.getSyncState(userId).settings.internetSearch, false);
-  assert.match(ctx.callbackAnswers.at(-1).text, /только в TG Nexus PRO/i);
 });
 
 test('PRO trial and administrators keep all features', async () => {
@@ -1952,13 +1968,30 @@ test('PRO trial and administrators keep all features', async () => {
   const trialId = 654987;
   const trialUser = ctx.bot.store.getUser(trialId);
   trialUser.pro = { expiresAt: Date.now() + 300_000, trialExpiresAt: Date.now() + 300_000, payments: [], promoRedemptions: [] };
-  trialUser.settings = { maxTokens: 32_000, reasoning: 'high', requestTimeoutSeconds: 7_200, internetSearch: true };
+  trialUser.settings = { maxTokens: 1_200, reasoning: 'auto', requestTimeoutSeconds: 120, internetSearch: false, sandbox: false };
   ctx.bot.store.save();
   const trialState = ctx.bot.getSyncState(trialId);
   assert.equal(trialState.plan.tier, 'pro');
-  assert.equal(trialState.settings.maxTokens, 32_000);
-  assert.equal(trialState.settings.reasoning, 'high');
-  assert.equal(trialState.settings.internetSearch, true);
+  assert.equal(trialState.settings.maxTokens, 1_200);
+  assert.equal(trialState.settings.reasoning, 'auto');
+  assert.equal(trialState.settings.requestTimeoutSeconds, 120);
+  assert.equal(trialState.settings.internetSearch, false);
+
+  // An active trial must be able to enable and use every advanced bot setting.
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:r:high', trialId, 1966));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:t:32000', trialId, 1967));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:timeout:7200', trialId, 1968));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:search', trialId, 1969));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox', trialId, 1970));
+  await ctx.bot.handleCallbackQuery(callbackQuery('tn:sandbox:confirm', trialId, 1971));
+  const updatedTrial = ctx.bot.getSyncState(trialId);
+  assert.equal(updatedTrial.settings.maxTokens, 32_000);
+  assert.equal(updatedTrial.settings.reasoning, 'high');
+  assert.equal(updatedTrial.settings.requestTimeoutSeconds, 7_200);
+  assert.equal(updatedTrial.settings.internetSearch, true);
+  assert.equal(updatedTrial.settings.sandbox, true);
+  assert.doesNotMatch(ctx.callbackAnswers.at(-1).text, /Купите TG Nexus PRO/i);
+
   const adminState = ctx.bot.getSyncState(654988);
   assert.equal(adminState.plan.tier, 'pro');
   assert.equal(adminState.plan.admin, true);

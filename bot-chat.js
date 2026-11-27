@@ -1019,7 +1019,8 @@ function createBotChat(options = {}) {
   const answerCallbackQuery = options.answerCallbackQuery || ((callbackQueryId, text = '') =>
     telegramRequest('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
-      ...(text ? { text } : {})
+      ...(text ? { text } : {}),
+      show_alert: false
     }));
   const editTelegramMessage = options.editTelegramMessage || ((chatId, messageId, text, replyMarkup) =>
     telegramRequest('editMessageText', {
@@ -2209,7 +2210,7 @@ function getSettingsUrl() {
       /^tn:timeout:(180|300|600|1800|3600|7200)$/.test(data) ||
       /^tn:r:(minimal|low|medium|high|xhigh)$/.test(data);
     if (!hasProAccess(userId) && premiumCallback) {
-      await safeAnswerCallback(query.id, 'Эта возможность доступна только в TG Nexus PRO.');
+      await safeAnswerCallback(query.id, 'Купите TG Nexus PRO, чтобы использовать эту функцию.');
       return true;
     }
     const termsMatch = data.match(/^terms:(accept|decline):([A-Za-z0-9._-]{1,40})$/);
