@@ -2,7 +2,6 @@
  * Source: src/client/*.js
  * Rebuild with: npm run build
  */
-
 (function(){
 'use strict';
 var $=function(s){return document.querySelector(s)};
