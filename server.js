@@ -803,6 +803,46 @@ async function configureWebhook() {
   }
 }
 
+async function configureWebAppMenuButton() {
+  if (!BOT_TOKEN) return false;
+
+  const menuButton = {
+    type: 'web_app',
+    text: 'Сюда',
+    web_app: { url: WEB_APP_URL }
+  };
+
+  try {
+    await telegramApi('setChatMenuButton', { menu_button: menuButton });
+
+    const current = await telegramApi('getChatMenuButton', {});
+    const configured = Boolean(
+      current &&
+      current.type === menuButton.type &&
+      current.text === menuButton.text &&
+      current.web_app &&
+      current.web_app.url === WEB_APP_URL
+    );
+
+    if (!configured) {
+      console.error('Telegram Mini App menu button verification failed.', {
+        type: current && current.type ? current.type : null,
+        text: current && current.text ? current.text : null
+      });
+      return false;
+    }
+
+    console.log('Telegram Mini App menu button configured and verified.');
+    return true;
+  } catch (error) {
+    console.error('Could not configure Telegram Mini App menu button.', {
+      errorName: error && error.name ? error.name : 'Error',
+      telegramErrorCode: Number(error && error.telegramErrorCode) || null
+    });
+    return false;
+  }
+}
+
 function scheduleWebhookMaintenance(attempt = 0) {
   const delay = attempt === 0 ? 5_000 : Math.min(5 * 60_000, 5_000 * (2 ** Math.min(attempt, 6)));
   const timer = setTimeout(async () => {
@@ -888,8 +928,10 @@ if (require.main === module) {
   });
   server.listen(PORT, '0.0.0.0', () => {
     console.log('Bot API listening on port ' + PORT);
-    configureWebhook().then((ok) => scheduleWebhookMaintenance(ok ? 5 : 0))
-      .catch(() => scheduleWebhookMaintenance(0));
+    configureWebhook().then(async (ok) => {
+      await configureWebAppMenuButton();
+      scheduleWebhookMaintenance(ok ? 5 : 0);
+    }).catch(() => scheduleWebhookMaintenance(0));
   });
   async function shutdown(signal) {
     if (shuttingDown) return;
