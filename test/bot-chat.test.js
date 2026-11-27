@@ -1710,14 +1710,18 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
     .some((button) => button.callback_data === 'pro:buy:7'));
 
   await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:7', userId, 9911));
+  await ctx.bot.handleCallbackQuery(callbackQuery('pro:buy:14', userId, 9912));
   const invoiceCall = apiCalls.find((item) => item.method === 'sendInvoice');
   assert.ok(invoiceCall);
   assert.equal(invoiceCall.payload.currency, 'XTR');
   assert.equal(invoiceCall.payload.prices[0].amount, 49);
   assert.equal(Object.prototype.hasOwnProperty.call(invoiceCall.payload, 'provider_token'), false);
 
-  const pending = ctx.bot.store.getUser(userId).pendingStarPayments[0];
+  const pendingPayments = ctx.bot.store.getUser(userId).pendingStarPayments;
+  const pending = pendingPayments.find((item) => item.days === 7);
+  const secondPending = pendingPayments.find((item) => item.days === 14);
   assert.ok(pending);
+  assert.ok(secondPending);
   const approved = await ctx.bot.handlePreCheckoutQuery({
     id: 'pre-checkout-770002',
     from: { id: userId },
@@ -1745,10 +1749,51 @@ test('Telegram Stars invoice is XTR and payment adds purchased days exactly once
   const afterPayment = ctx.bot.getProStatus(userId);
   assert.equal(afterPayment.expiresAt, trial.expiresAt + 7 * 24 * 60 * 60 * 1000);
   assert.equal(ctx.bot.store.getUser(userId).pro.payments.length, 1);
+  assert.deepEqual(
+    ctx.bot.store.getUser(userId).pendingStarPayments.map((item) => item.payload),
+    [secondPending.payload],
+    'paying one invoice must not delete other pending invoices'
+  );
 
-  await ctx.bot.handleSuccessfulPayment(paidMessage);
-  assert.equal(ctx.bot.getProStatus(userId).expiresAt, afterPayment.expiresAt);
-  assert.equal(ctx.bot.store.getUser(userId).pro.payments.length, 1);
+  const restarted = makeBot({
+    dir: ctx.dir,
+    proBillingEnabled: true,
+    telegramApiCall: async (method, payload, requestOptions) => {
+      apiCalls.push({ method, payload, requestOptions });
+      return true;
+    }
+  });
+  assert.equal(restarted.bot.getProStatus(userId).active, true);
+  assert.equal(restarted.bot.getProStatus(userId).expiresAt, afterPayment.expiresAt);
+
+  const secondApproved = await restarted.bot.handlePreCheckoutQuery({
+    id: 'pre-checkout-770002-second',
+    from: { id: userId },
+    invoice_payload: secondPending.payload,
+    currency: 'XTR',
+    total_amount: 89
+  });
+  assert.equal(secondApproved, true);
+
+  await restarted.bot.handleSuccessfulPayment({
+    message_id: 9913,
+    chat: { id: userId, type: 'private' },
+    from: { id: userId, is_bot: false },
+    successful_payment: {
+      invoice_payload: secondPending.payload,
+      currency: 'XTR',
+      total_amount: 89,
+      telegram_payment_charge_id: 'telegram-charge-770002-second'
+    }
+  });
+  const afterSecondPayment = restarted.bot.getProStatus(userId);
+  assert.equal(afterSecondPayment.expiresAt, trial.expiresAt + 21 * 24 * 60 * 60 * 1000);
+  assert.equal(restarted.bot.store.getUser(userId).pro.payments.length, 2);
+  assert.equal(restarted.bot.store.getUser(userId).pendingStarPayments.length, 0);
+
+  await restarted.bot.handleSuccessfulPayment(paidMessage);
+  assert.equal(restarted.bot.getProStatus(userId).expiresAt, afterSecondPayment.expiresAt);
+  assert.equal(restarted.bot.store.getUser(userId).pro.payments.length, 2);
 });
 
 
