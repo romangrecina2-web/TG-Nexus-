@@ -767,6 +767,9 @@ test('queued assistant output is delivered as a rich message with its in-message
 
 test('synced state merges text history into the encrypted Telegram chat store', async () => {
   const ctx = makeBot();
+  const entitled = ctx.bot.store.getUser(7654321);
+  entitled.pro = { expiresAt: Date.now() + 60 * 60_000, payments: [{ id: 'test' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   const userId = 7654321;
   const now = Date.now();
   const state = ctx.bot.applySyncState(userId, {
@@ -1312,13 +1315,16 @@ test('Telegram settings callbacks cannot be used from another user identity', as
     ...callbackQuery('tn:search'),
     from: { id: 999999, is_bot: false }
   });
-  assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, undefined);
-  assert.equal(ctx.bot.getSyncState(999999).settings.internetSearch, undefined);
+  assert.equal(ctx.bot.getSyncState(123456).settings.internetSearch, false);
+  assert.equal(ctx.bot.getSyncState(999999).settings.internetSearch, false);
   assert.equal(ctx.editedMessages.length, 0);
 });
 
 test('per-user system prompt, token limit, temperature, and OpenRouter web search reach the model request', async () => {
   const ctx = makeBot();
+  const entitled = ctx.bot.store.getUser(123456);
+  entitled.pro = { expiresAt: Date.now() + 60 * 60_000, payments: [{ id: 'test' }], promoRedemptions: [] };
+  ctx.bot.store.save();
   const userId = 123456;
   await ctx.bot.setApiKey(userId, 'valid-key', 'https://openrouter.ai/api/v1');
   ctx.bot.applySyncState(userId, {
