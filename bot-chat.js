@@ -28,6 +28,7 @@ const DEFAULT_MAX_UPDATE_ATTEMPTS = 8;
 const BOT_COMMANDS = [
   { command: 'start', description: 'Открыть мини-приложение' },
   { command: 'help', description: 'Краткая справка' },
+  { command: 'terms', description: 'Условия использования TG Nexus' },
   { command: 'chat', description: 'Показать список чатов' },
   { command: 'add_chat', description: 'Создать чат: /add_chat [название]' },
   { command: 'chat_equip', description: 'Выбрать чат: /chat_equip [название]' },
@@ -2998,14 +2999,36 @@ function getSettingsUrl() {
 
 const TG_NEXUS_PRO_DAY_MS = 24 * 60 * 60 * 1000;
 const TG_NEXUS_PRO_TRIAL_DAYS = 12;
-const TG_NEXUS_PRO_PLANS = Object.freeze({
+const TG_NEXUS_PRO_DEFAULT_PLANS = Object.freeze({
   7: { days: 7, stars: 49 },
   14: { days: 14, stars: 89 },
   21: { days: 21, stars: 119 },
   30: { days: 30, stars: 149 }
 });
+function readProPlanPrice(days, fallback) {
+  const key = 'PRO_PRICE_' + days + '_DAYS';
+  const configured = options.proPlanPrices && options.proPlanPrices[days] != null
+    ? options.proPlanPrices[days]
+    : process.env[key];
+  if (configured == null || String(configured).trim() === '') return fallback;
+  const amount = Number(configured);
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 100_000) {
+    throw new Error(key + ' must be a whole number between 1 and 100000.');
+  }
+  return amount;
+}
+const TG_NEXUS_PRO_PLANS = Object.freeze(Object.fromEntries(
+  Object.values(TG_NEXUS_PRO_DEFAULT_PLANS).map((plan) => [
+    plan.days,
+    Object.freeze({
+      days: plan.days,
+      stars: readProPlanPrice(plan.days, plan.stars)
+    })
+  ])
+));
 const TG_NEXUS_BILLING_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
 const proCheckoutReservations = new Map();
+const proRefundReservations = new Set();
 
 function normalizeProState(user) {
   if (!user.pro || typeof user.pro !== 'object' || Array.isArray(user.pro)) user.pro = {};
@@ -3132,6 +3155,10 @@ function getEffectiveUserSettings(userId, settings = {}) {
   return effective;
 }
 
+function proPlanDurationLabel(days) {
+  return days === 21 ? '21 день' : days + ' дней';
+}
+
 async function sendProMenu(chatId, userId) {
   const status = getProStatus(userId);
   const lines = [
@@ -3144,10 +3171,8 @@ async function sendProMenu(chatId, userId) {
       : 'Активного PRO-доступа сейчас нет.',
     '',
     'Тарифы:',
-    '• 7 дней — 49 ⭐',
-    '• 14 дней — 89 ⭐',
-    '• 21 день — 119 ⭐',
-    '• 30 дней — 149 ⭐',
+    ...Object.values(TG_NEXUS_PRO_PLANS).map((plan) =>
+      '• ' + proPlanDurationLabel(plan.days) + ' — ' + plan.stars + ' ⭐'),
     '',
     'Покупки разовые: автоматического списания нет.',
     'Новые дни добавляются к текущему сроку доступа.',
@@ -3157,14 +3182,14 @@ async function sendProMenu(chatId, userId) {
   if (isProBillingEnabled()) {
     optionsForMenu.reply_markup = {
       inline_keyboard: [
-        [
-          { text: '7 дней · 49 ⭐', callback_data: 'pro:buy:7' },
-          { text: '14 дней · 89 ⭐', callback_data: 'pro:buy:14' }
-        ],
-        [
-          { text: '21 день · 119 ⭐', callback_data: 'pro:buy:21' },
-          { text: '30 дней · 149 ⭐', callback_data: 'pro:buy:30' }
-        ]
+        Object.values(TG_NEXUS_PRO_PLANS).slice(0, 2).map((plan) => ({
+          text: proPlanDurationLabel(plan.days) + ' · ' + plan.stars + ' ⭐',
+          callback_data: 'pro:buy:' + plan.days
+        })),
+        Object.values(TG_NEXUS_PRO_PLANS).slice(2).map((plan) => ({
+          text: proPlanDurationLabel(plan.days) + ' · ' + plan.stars + ' ⭐',
+          callback_data: 'pro:buy:' + plan.days
+        }))
       ]
     };
   } else {
@@ -3188,7 +3213,8 @@ async function sendProStatus(chatId, userId) {
   if (pro.payments.length) {
     lines.push('', '<b>Последние покупки:</b>');
     pro.payments.slice(-5).reverse().forEach((payment) => {
-      lines.push('• ' + payment.days + ' дн. · ' + payment.amount + ' ⭐ · ' +
+      const statusLabel = payment.refundedAt ? ' · возврат' : '';
+      lines.push('• ' + payment.days + ' дн. · ' + payment.amount + ' ⭐' + statusLabel + ' · ' +
         formatProDate(payment.paidAt));
     });
   }
@@ -3364,6 +3390,133 @@ async function handleSuccessfulPayment(message) {
   ].join('\n'));
   return true;
 }
+
+
+async function handleProRefundCommand(chatId, actorId, args) {
+  if (!isBillingAdmin(actorId)) {
+    await sendText(chatId, 'Эта команда доступна только администратору.');
+    return true;
+  }
+
+  const parts = String(args || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 3 || parts[2] !== 'CONFIRM') {
+    await sendText(chatId,
+      'Использование: /refund USER_ID CHARGE_ID CONFIRM\n' +
+      'Команда возвращает Stars и отменяет купленные дни PRO. Сначала проверьте пользователя и платёж.');
+    return true;
+  }
+
+  const targetId = parts[0];
+  const numericUserId = Number(targetId);
+  const chargeId = parts[1];
+  if (!/^\d{1,24}$/.test(targetId) || !Number.isSafeInteger(numericUserId) ||
+      numericUserId <= 0 || chargeId.length < 8 || chargeId.length > 256 ||
+      /\s/.test(chargeId)) {
+    await sendText(chatId, 'Некорректный Telegram ID или идентификатор платежа.');
+    return true;
+  }
+
+  const lockKey = targetId + ':' + chargeId;
+  if (proRefundReservations.has(lockKey)) {
+    await sendText(chatId, 'Возврат этого платежа уже выполняется.');
+    return true;
+  }
+
+  if (!store.getAdminUser(targetId)) {
+    await sendText(chatId, 'Пользователь не найден.');
+    return true;
+  }
+  const target = store.getUser(targetId);
+  const pro = normalizeProState(target);
+  const payment = pro.payments.find((item) =>
+    item && item.telegramPaymentChargeId === chargeId);
+  if (!payment) {
+    await sendText(chatId, 'Платёж не найден в истории TG Nexus этого пользователя.');
+    return true;
+  }
+  if (payment.refundedAt) {
+    await sendText(chatId, 'Этот платёж уже отмечен как возвращённый. Повторный возврат не требуется.');
+    return true;
+  }
+  const days = Number(payment.days);
+  if (!Number.isSafeInteger(days) || days < 1 || days > 365) {
+    await sendText(chatId, 'У платежа некорректно записан срок. Нужна ручная проверка.');
+    return true;
+  }
+
+  proRefundReservations.add(lockKey);
+  try {
+    if (!payment.refundPendingAt) {
+      payment.refundPendingAt = Date.now();
+      store.save();
+    }
+
+    let alreadyRefunded = false;
+    try {
+      await telegramRequest('refundStarPayment', {
+        user_id: numericUserId,
+        telegram_payment_charge_id: chargeId
+      });
+    } catch (error) {
+      const description = String(error && (error.telegramDescription || error.message) || '');
+      if (!/CHARGE_ALREADY_REFUNDED/i.test(description)) {
+        await sendText(chatId,
+          'Telegram не подтвердил возврат. Запись оставлена для безопасной повторной проверки; попробуйте позже.');
+        return true;
+      }
+      alreadyRefunded = true;
+    }
+
+    const previousExpiry = Number(pro.expiresAt) || 0;
+    const previousRefundedAt = payment.refundedAt;
+    const previousStatus = payment.refundStatus;
+    const previousRevokedAt = payment.accessRevokedAt;
+    const now = Date.now();
+    pro.expiresAt = Math.max(0, previousExpiry - days * TG_NEXUS_PRO_DAY_MS);
+    payment.refundedAt = now;
+    payment.refundStatus = 'refunded';
+    payment.accessRevokedAt = now;
+
+    try {
+      store.save();
+    } catch (error) {
+      pro.expiresAt = previousExpiry;
+      if (previousRefundedAt === undefined) delete payment.refundedAt;
+      else payment.refundedAt = previousRefundedAt;
+      if (previousStatus === undefined) delete payment.refundStatus;
+      else payment.refundStatus = previousStatus;
+      if (previousRevokedAt === undefined) delete payment.accessRevokedAt;
+      else payment.accessRevokedAt = previousRevokedAt;
+      throw error;
+    }
+
+    proCheckoutReservations.delete(targetId);
+    try {
+      store.appendAdminLog({
+        actorId,
+        action: 'pro_refund',
+        summary: 'Возврат Stars для Telegram ID ' + targetId + ': ' + days + ' дн.'
+      });
+    } catch {}
+
+    try {
+      await sendText(numericUserId,
+        'Возврат ' + payment.amount + ' ⭐ за TG Nexus PRO выполнен. Купленный срок ' +
+        days + ' дн. отменён.');
+    } catch {}
+
+    await sendText(chatId,
+      'Возврат выполнен и сохранён.' + (alreadyRefunded
+        ? ' Telegram сообщил, что платёж уже был возвращён ранее.'
+        : '') + '\nПользователь: ' + targetId +
+      '\nСумма: ' + payment.amount + ' ⭐' +
+      '\nОтменено дней PRO: ' + days + '.');
+    return true;
+  } finally {
+    proRefundReservations.delete(lockKey);
+  }
+}
+
 
 async function handlePromoCreateCommand(chatId, userId, args) {
   if (!isBillingAdmin(userId)) {
@@ -3700,7 +3853,8 @@ async function handlePromoListCommand(chatId, userId) {
       return true;
     }
     if (command && !['chat', 'add_chat', 'chat_equip', 'model', 'settings', 'provider', 'test',
-      'pro', 'mypro', 'promocode', 'paysupport', 'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
+      'terms', 'pro', 'mypro', 'promocode', 'paysupport', 'refund',
+      'promo_create', 'promo_disable', 'promo_list'].includes(command)) {
       await sendText(chatId, 'Неизвестная команда. Используйте /info для списка команд.');
       return true;
     }
@@ -3777,6 +3931,13 @@ async function handlePromoListCommand(chatId, userId) {
           return true;
         }
       }
+      if (command === 'terms') {
+        const appBase = String(options.webAppUrl || process.env.WEB_APP_URL ||
+          'https://romangrecina2-web.github.io/TG-Nexus-/').replace(/\/+$/, '') + '/';
+        const termsUrl = new URL('terms.html', appBase).toString();
+        await sendText(chatId, 'Условия использования TG Nexus: ' + termsUrl);
+        return true;
+      }
       if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
       if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
       if (command === 'promocode') {
@@ -3797,6 +3958,7 @@ async function handlePromoListCommand(chatId, userId) {
           '\nНе отправляйте API-ключи или пароли. Для проверки платежа приложите чек Telegram и дату покупки.');
         return true;
       }
+      if (command === 'refund') return await handleProRefundCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_create') return await handlePromoCreateCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_disable') return await handlePromoDisableCommand(chatId, message.from.id, parsed.args);
       if (command === 'promo_list') return await handlePromoListCommand(chatId, message.from.id);
