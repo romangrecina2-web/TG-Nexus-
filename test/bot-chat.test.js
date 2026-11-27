@@ -1811,6 +1811,7 @@ test('PRO menu buttons and Stars invoices use the same configurable prices and d
   const user = ctx.bot.store.getUser(userId);
   user.termsAcceptedVersion = '2026-11-26-v2';
   ctx.bot.store.save();
+  ctx.bot.ensureTrial(userId);
 
   await ctx.bot.handleMessage(message('/pro', userId, 9920));
   const menu = ctx.sent.at(-1);
