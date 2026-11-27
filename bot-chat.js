@@ -2,7 +2,6 @@
  * Source: src/bot/*.js
  * Rebuild with: npm run build
  */
-
 'use strict';
 
 const crypto = require('node:crypto');
