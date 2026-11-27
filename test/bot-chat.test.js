@@ -807,6 +807,40 @@ test('synced state merges text history into the encrypted Telegram chat store', 
   assert.ok(chat.messages.some((item) => item.role === 'assistant' && item.content === 'Ответ ИИ'));
 });
 
+test('Mini App sync can clear the previously active chat when starting a new chat', async () => {
+  const ctx = makeBot();
+  const userId = 7654322;
+  const now = Date.now();
+
+  ctx.bot.applySyncState(userId, {
+    chats: [{
+      id: 'chat-one',
+      title: 'Чат 1',
+      model: 'test/model',
+      createdAt: now,
+      updatedAt: now,
+      messages: []
+    }],
+    activeChatId: 'chat-one'
+  });
+  assert.equal(ctx.bot.getSyncState(userId).activeChatId, 'chat-one');
+
+  const cleared = ctx.bot.applySyncState(userId, {
+    chats: [{
+      id: 'chat-one',
+      title: 'Чат 1',
+      model: 'test/model',
+      createdAt: now,
+      updatedAt: now,
+      messages: []
+    }],
+    activeChatId: null
+  });
+
+  assert.equal(cleared.activeChatId, null);
+  assert.equal(cleared.chats.some((chat) => chat.id === 'chat-one'), true);
+});
+
 test('Telegram settings command renders a compact rich panel with interactive controls and the Mini App deep link', async () => {
   const ctx = makeBot({ webAppUrl: 'https://example.com/app' });
   await ctx.bot.handleMessage(message('/settings'));
