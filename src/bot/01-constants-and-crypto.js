@@ -24,6 +24,7 @@ const DEFAULT_MAX_UPDATE_ATTEMPTS = 8;
 const BOT_COMMANDS = [
   { command: 'start', description: 'Открыть мини-приложение' },
   { command: 'help', description: 'Краткая справка' },
+  { command: 'terms', description: 'Условия использования TG Nexus' },
   { command: 'chat', description: 'Показать список чатов' },
   { command: 'add_chat', description: 'Создать чат: /add_chat [название]' },
   { command: 'chat_equip', description: 'Выбрать чат: /chat_equip [название]' },
