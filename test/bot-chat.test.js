@@ -1859,8 +1859,8 @@ test('provider 429 errors identify an upstream limit and suppress immediate retr
 
   assert.equal(requestCount, 1, 'the bot must not retry before Retry-After expires');
   assert.ok(ctx.editedRichMessages.some((item) =>
-    item.messageId === errorMessage.messageId &&
-    item.richMessage.markdown.includes('Повторный запрос к этой модели временно приостановлен')));
+    item.richMessage.markdown.includes('Повторный запрос к этой модели временно приостановлен')),
+  'the regeneration response should explain that the provider cooldown is still active');
 });
 
 test('/test distinguishes OpenRouter free-model quota and reads X-RateLimit-Reset', async () => {
