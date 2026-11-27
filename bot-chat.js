@@ -4962,7 +4962,9 @@ async function handleModelCatalogCallback(query, user, data) {
       }
       user.chats = [...byId.values()].sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0)).slice(0, MAX_CHATS_PER_USER);
     }
-    if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
+    if (input.activeChatId === null) {
+      user.activeChatId = null;
+    } else if (typeof input.activeChatId === 'string' && user.chats.some((chat) => chat.id === input.activeChatId)) {
       user.activeChatId = input.activeChatId;
     }
     user.apiProviderId = findProviderByUrl(user.apiBaseUrl || apiBaseUrl)?.id || user.apiProviderId || 'custom';
