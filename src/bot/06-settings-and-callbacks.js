@@ -1,5 +1,6 @@
   const REQUIRED_TERMS_VERSION = '2026-11-26-v2';
 const TERMS_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
+const pendingAdminInput = new Map();
 
 function getTermsAcceptedAppUrl() {
   const value = String(options.webAppUrl || process.env.WEB_APP_URL || '');
@@ -203,7 +204,7 @@ function getSettingsUrl() {
     const modelLabel = model.length > 76 ? model.slice(0, 73) + '…' : model;
     const searchEnabled = settings.internetSearch === true;
     const sandboxEnabled = settings.sandbox === true;
-    return modelCatalogRich([
+    const blocks = [
       modelCatalogBlocksHeading('Настройки TG Nexus', 1),
       modelCatalogBlocksHeading('Подключение', 2),
       modelCatalogBlocksParagraph('Провайдер: ' + currentProviderName(user)),
@@ -238,7 +239,13 @@ function getSettingsUrl() {
         modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search', searchEnabled ? 'success' : 'danger'),
         modelCatalogButton('🧪 Песочница: ' + (sandboxEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:sandbox', sandboxEnabled ? 'success' : 'danger')
       ])
-    ]);
+    ];
+    if (isBillingAdmin(user.id)) {
+      blocks.push(modelCatalogBlocksButtons([
+        modelCatalogButton('🛡️ Админ-панель', 'admin:home', 'primary')
+      ]));
+    }
+    return modelCatalogRich(blocks);
   }
 
 
@@ -453,6 +460,7 @@ function getSettingsUrl() {
       ],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
+    if (isBillingAdmin(user.id)) rows.push([{ text: '🛡️ Админ-панель', callback_data: 'admin:home' }]);
     const url = getSettingsUrl();
     if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
     return { inline_keyboard: rows };
@@ -468,6 +476,253 @@ function getSettingsUrl() {
   async function safeAnswerCallback(queryId, text = '') {
     try { await answerCallbackQuery(queryId, text); } catch {}
   }
+
+
+  function adminFormatDate(timestamp) {
+    const value = Number(timestamp) || 0;
+    return value > 0 ? new Date(value).toLocaleString('ru-RU', {
+      dateStyle: 'medium', timeStyle: 'short'
+    }) : 'не указана';
+  }
+
+  function buildAdminPanel(userId, view = 'home', page = 0, targetId = '') {
+    const homeButton = { text: '← Админ-панель', callback_data: 'admin:home' };
+    const settingsButton = { text: '← Настройки', callback_data: 'tn:back' };
+    const rows = [];
+    let text = 'TG Nexus · Админ-панель';
+
+    if (view === 'home') {
+      const stats = store.getAdminOverview();
+      const queue = stats.queue || {};
+      const worker = getWorkerStats();
+      text = [
+        '🛡 TG NEXUS · АДМИН-ПАНЕЛЬ',
+        '',
+        'Пользователи: ' + stats.totalUsers,
+        'Активные PRO: ' + stats.activePro,
+        'Из них пробный период: ' + stats.activeTrials,
+        'Промокоды: ' + stats.enabledPromoCodes + '/' + stats.promoCodes + ' активны',
+        '',
+        'Очередь: ' + (queue.pending || 0) + ' ожидают · ' +
+          (queue.processing || 0) + ' обрабатываются',
+        'Воркеры: ' + (worker.running ? 'работают' : 'остановлены')
+      ].join('\n');
+      rows.push([
+        { text: '👥 Пользователи', callback_data: 'admin:users:0' },
+        { text: '💎 Подписки', callback_data: 'admin:subs:0' }
+      ]);
+      rows.push([
+        { text: '🎟 Промокоды', callback_data: 'admin:promos' },
+        { text: '⚙️ Система', callback_data: 'admin:system' }
+      ]);
+      rows.push([{ text: '📋 Журнал действий', callback_data: 'admin:logs' }]);
+      rows.push([settingsButton]);
+    } else if (view === 'users' || view === 'subs') {
+      const onlyPro = view === 'subs';
+      const result = store.listAdminUsers({ page, pageSize: 8, onlyPro });
+      text = (onlyPro ? '💎 АКТИВНЫЕ PRO-ПОДПИСКИ' : '👥 ПОЛЬЗОВАТЕЛИ') +
+        '\nВсего: ' + result.total + '\nСтраница: ' + (result.page + 1) + '/' + result.pageCount;
+      if (!result.users.length) text += '\n\nСписок пока пуст.';
+      for (const item of result.users) {
+        const status = item.proActive
+          ? 'PRO до ' + adminFormatDate(item.proExpiresAt)
+          : (item.hasApiKey ? 'API подключён' : 'без API-ключа');
+        text += '\n\n' + item.id + ' · ' + status + ' · чатов: ' + item.chatCount;
+        rows.push([{ text: '👤 ' + item.id + (item.proActive ? ' · PRO' : ''), callback_data: 'admin:user:' + item.id }]);
+      }
+      if (!onlyPro) rows.push([{ text: '🔎 Найти по Telegram ID', callback_data: 'admin:users:search' }]);
+      const navigation = [];
+      if (result.hasPrevious) navigation.push({ text: '← Назад', callback_data: 'admin:' + (onlyPro ? 'subs:' : 'users:') + (result.page - 1) });
+      if (result.hasNext) navigation.push({ text: 'Далее →', callback_data: 'admin:' + (onlyPro ? 'subs:' : 'users:') + (result.page + 1) });
+      if (navigation.length) rows.push(navigation);
+      rows.push([homeButton]);
+    } else if (view === 'user') {
+      const item = store.getAdminUser(targetId);
+      if (!item) {
+        text = 'Пользователь ' + targetId + ' не найден.';
+        rows.push([{ text: '← К пользователям', callback_data: 'admin:users:0' }], [homeButton]);
+      } else {
+        text = [
+          '👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ',
+          '',
+          'Telegram ID: ' + item.id,
+          'PRO: ' + (item.proActive ? 'активен' : 'не активен'),
+          'Действует до: ' + adminFormatDate(item.proExpiresAt),
+          'Осталось дней: ' + item.remainingDays,
+          'Пробный период: ' + (item.trialActive ? 'да' : 'нет'),
+          'Платежей: ' + item.paymentCount,
+          'Активаций промокодов: ' + item.promoRedemptionCount,
+          '',
+          'API-ключ: ' + (item.hasApiKey ? 'сохранён' : 'не добавлен'),
+          'Провайдер: ' + item.providerId,
+          'Модель: ' + (item.model || 'не выбрана'),
+          'Чатов: ' + item.chatCount,
+          'Условия приняты: ' + (item.termsAccepted ? 'да' : 'нет')
+        ].join('\n');
+        rows.push([
+          { text: '+7 дней PRO', callback_data: 'admin:userpro:' + item.id + ':7' },
+          { text: '+30 дней PRO', callback_data: 'admin:userpro:' + item.id + ':30' }
+        ]);
+        rows.push([{ text: 'Отозвать PRO', callback_data: 'admin:userpro:' + item.id + ':revoke' }]);
+        rows.push([{ text: '← К пользователям', callback_data: 'admin:users:0' }, homeButton]);
+      }
+    } else if (view === 'promos') {
+      const list = store.listPromoCodes().slice(-12).reverse();
+      text = '🎟 ПРОМОКОДЫ\nВсего: ' + store.listPromoCodes().length;
+      if (!list.length) text += '\n\nПромокодов пока нет.';
+      for (const promo of list) {
+        text += '\n\n' + promo.code + ' · +' + promo.days + ' дн. · ' +
+          (promo.enabled ? 'активен' : 'отключён') + ' · ' +
+          promo.uses + '/' + (promo.maxUses || '∞');
+        if (promo.enabled) rows.push([{ text: 'Отключить ' + promo.code, callback_data: 'admin:promo:off:' + promo.code }]);
+      }
+      rows.push([{ text: '➕ Создать промокод', callback_data: 'admin:promo:new' }]);
+      rows.push([homeButton]);
+    } else if (view === 'system') {
+      const queue = store.getQueueStats();
+      const worker = getWorkerStats();
+      text = [
+        '⚙️ СОСТОЯНИЕ СИСТЕМЫ',
+        '',
+        'Зашифрованное хранилище: ' + (store.enabled ? 'доступно' : 'недоступно'),
+        'Время работы процесса: ' + Math.floor(process.uptime() / 60) + ' мин.',
+        'Telegram worker: ' + (worker.running ? 'работает' : 'остановлен'),
+        'Активных worker: ' + worker.activeWorkers + '/' + worker.concurrency,
+        'Очередь: ' + queue.total + '/' + queue.capacity,
+        'Ожидают: ' + queue.pending,
+        'Обрабатываются: ' + queue.processing,
+        'Отложенные ошибки: ' + queue.deadLettered,
+        'Старейшая задача: ' + Math.round((queue.oldestPendingAgeMs || 0) / 1000) + ' сек.',
+        'Восстановлено из резервной копии: ' + (queue.recoveredFromBackup ? 'да' : 'нет')
+      ].join('\n');
+      rows.push([{ text: '↻ Обновить', callback_data: 'admin:system' }], [homeButton]);
+    } else if (view === 'logs') {
+      const logs = store.listAdminLogs(15);
+      text = '📋 ЖУРНАЛ ДЕЙСТВИЙ\nПоследние записи: ' + logs.length;
+      if (!logs.length) text += '\n\nДействий пока нет.';
+      for (const entry of logs) {
+        text += '\n\n' + adminFormatDate(entry.at) + '\n' +
+          entry.action + (entry.targetId ? ' · пользователь ' + entry.targetId : '') +
+          '\n' + entry.summary + '\nАдминистратор: ' + (entry.actorId || 'неизвестен');
+      }
+      rows.push([{ text: '↻ Обновить', callback_data: 'admin:logs' }], [homeButton]);
+    } else if (view === 'input-promo') {
+      text = '➕ СОЗДАНИЕ ПРОМОКОДА\n\nОтправьте одним сообщением: CODE DAYS MAX_USES\nНапример: NEXUS7 7 10\n\nMAX_USES = 0 означает без ограничения. Для отмены нажмите кнопку ниже или отправьте /cancel.';
+      rows.push([{ text: 'Отмена', callback_data: 'admin:input:cancel' }]);
+    } else if (view === 'input-search') {
+      text = '🔎 ПОИСК ПОЛЬЗОВАТЕЛЯ\n\nОтправьте Telegram ID пользователя. Поиск выполняется только по точному числовому ID.';
+      rows.push([{ text: 'Отмена', callback_data: 'admin:input:cancel' }]);
+    } else {
+      text = 'Раздел не найден.';
+      rows.push([homeButton]);
+    }
+
+    return { text, replyMarkup: { inline_keyboard: rows } };
+  }
+
+  async function sendAdminPanel(chatId, userId, view = 'home', page = 0, targetId = '') {
+    if (!isBillingAdmin(userId)) return false;
+    const panel = buildAdminPanel(userId, view, page, targetId);
+    await sendTelegramMessage(chatId, panel.text, { reply_markup: panel.replyMarkup });
+    return true;
+  }
+
+  async function renderAdminPanel(query, userId, view = 'home', page = 0, targetId = '', notice = 'Админ-панель обновлена.') {
+    const message = query && query.message;
+    if (!message || !message.chat || !Number.isSafeInteger(Number(message.message_id))) {
+      await safeAnswerCallback(query.id, 'Сообщение панели недоступно. Откройте настройки ещё раз.');
+      return false;
+    }
+    const panel = buildAdminPanel(userId, view, page, targetId);
+    try {
+      await editTelegramMessage(message.chat.id, message.message_id, panel.text, panel.replyMarkup);
+    } catch (error) {
+      const description = String(error && (error.telegramDescription || error.message) || '');
+      if (!/message is not modified/i.test(description)) {
+        await safeAnswerCallback(query.id, 'Не удалось обновить админ-панель.');
+        return false;
+      }
+    }
+    await safeAnswerCallback(query.id, notice);
+    return true;
+  }
+
+  async function handleAdminCallback(query, userId, data) {
+    if (!isBillingAdmin(userId)) {
+      await safeAnswerCallback(query.id, 'Доступ запрещён.');
+      return true;
+    }
+    if (data === 'admin:home') return renderAdminPanel(query, userId, 'home');
+    if (data === 'admin:users:search') {
+      pendingAdminInput.set(String(userId), { type: 'user_search', createdAt: Date.now() });
+      return renderAdminPanel(query, userId, 'input-search', 0, '', 'Отправьте Telegram ID.');
+    }
+    if (data === 'admin:promo:new') {
+      pendingAdminInput.set(String(userId), { type: 'promo_create', createdAt: Date.now() });
+      return renderAdminPanel(query, userId, 'input-promo', 0, '', 'Отправьте параметры промокода.');
+    }
+    if (data === 'admin:input:cancel') {
+      pendingAdminInput.delete(String(userId));
+      return renderAdminPanel(query, userId, 'home', 0, '', 'Ввод отменён.');
+    }
+    const pageMatch = data.match(/^admin:(users|subs):(\d{1,4})$/);
+    if (pageMatch) return renderAdminPanel(query, userId, pageMatch[1], Number(pageMatch[2]));
+    if (data === 'admin:promos') return renderAdminPanel(query, userId, 'promos');
+    if (data === 'admin:system') return renderAdminPanel(query, userId, 'system');
+    if (data === 'admin:logs') return renderAdminPanel(query, userId, 'logs');
+    const userMatch = data.match(/^admin:user:(\d{1,24})$/);
+    if (userMatch) return renderAdminPanel(query, userId, 'user', 0, userMatch[1]);
+
+    const proMatch = data.match(/^admin:userpro:(\d{1,24}):(7|30|revoke)$/);
+    if (proMatch) {
+      const targetId = proMatch[1];
+      const action = proMatch[2];
+      if (!store.getAdminUser(targetId)) {
+        await safeAnswerCallback(query.id, 'Пользователь не найден.');
+        return true;
+      }
+      const target = store.getUser(targetId);
+      const previous = target.pro ? JSON.parse(JSON.stringify(target.pro)) : null;
+      const pro = normalizeProState(target);
+      const now = Date.now();
+      if (action === 'revoke') {
+        pro.expiresAt = 0;
+        pro.revokedAt = now;
+      } else {
+        pro.expiresAt = Math.max(now, Number(pro.expiresAt) || 0) + Number(action) * 86_400_000;
+      }
+      try {
+        store.save();
+        store.appendAdminLog({
+          actorId: userId,
+          action: action === 'revoke' ? 'pro_revoke' : 'pro_grant',
+          targetId,
+          summary: action === 'revoke' ? 'PRO-доступ отозван' : 'Выдано +' + action + ' дней PRO'
+        });
+      } catch {
+        if (previous) target.pro = previous;
+        else delete target.pro;
+        await safeAnswerCallback(query.id, 'Не удалось сохранить изменение подписки.');
+        return true;
+      }
+      return renderAdminPanel(query, userId, 'user', 0, targetId,
+        action === 'revoke' ? 'PRO-доступ отозван.' : 'PRO продлён на ' + action + ' дней.');
+    }
+
+    const promoMatch = data.match(/^admin:promo:off:([A-Z0-9_-]{4,32})$/);
+    if (promoMatch) {
+      const code = promoMatch[1];
+      const disabled = store.disablePromoCode(code);
+      if (disabled) {
+        store.appendAdminLog({ actorId: userId, action: 'promo_disable', summary: 'Отключён промокод ' + code });
+      }
+      return renderAdminPanel(query, userId, 'promos', 0, '', disabled ? 'Промокод отключён.' : 'Промокод не найден.');
+    }
+
+    await safeAnswerCallback(query.id, 'Эта кнопка админ-панели устарела.');
+    return true;
+  }
+
 
   async function renderSettingsCallback(query, user, view = 'main', answerText = 'Настройки обновлены.') {
     const message = query && query.message;
@@ -513,7 +768,7 @@ function getSettingsUrl() {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
         (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
          !query.data.startsWith('terms:') && !query.data.startsWith('pro:') &&
-         !query.data.startsWith('regen:'))) return false;
+         !query.data.startsWith('regen:') && !query.data.startsWith('admin:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -594,6 +849,7 @@ function getSettingsUrl() {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('admin:')) return await handleAdminCallback(query, userId, data);
       if (data.startsWith('regen:')) return await handleRegenerateCallback(query, user, data);
       if (data.startsWith('pro:')) return await handleProCallback(query, user);
       if (data.startsWith('mc:')) {

@@ -207,6 +207,8 @@
       const timeoutPending = pendingTimeoutInput.has(inputKey);
       const modelSearchPending = pendingModelCatalogSearches.has(inputKey) ||
         !!(user && user.pendingModelCatalogSearch);
+      const adminInputPending = pendingAdminInput.has(inputKey);
+      if (adminInputPending) pendingAdminInput.delete(inputKey);
       pendingModelCatalogSearches.delete(inputKey);
       const previousPrompt = user && user.pendingSystemPromptInput;
       const previousModelSearch = user && user.pendingModelCatalogSearch;
@@ -221,7 +223,9 @@
         }
       }
       pendingTimeoutInput.delete(inputKey);
-      const notice = promptPending
+      const notice = adminInputPending
+        ? 'Ввод админ-панели отменён.'
+        : promptPending
         ? 'Ввод инструкции ИИ отменён.'
         : timeoutPending
           ? 'Ввод тайм-аута отменён.'
@@ -280,6 +284,64 @@
     }
 
     try {
+
+      const pendingAdmin = pendingAdminInput.get(String(message.from.id));
+      if (pendingAdmin) {
+        if (!isBillingAdmin(message.from.id)) {
+          pendingAdminInput.delete(String(message.from.id));
+          await sendText(chatId, 'Доступ к этому действию отозван.');
+          return true;
+        }
+        if (!Number.isFinite(Number(pendingAdmin.createdAt)) ||
+            Date.now() - Number(pendingAdmin.createdAt) > 10 * 60_000) {
+          pendingAdminInput.delete(String(message.from.id));
+          await sendText(chatId, 'Время ввода истекло. Откройте админ-панель снова.');
+          return true;
+        }
+        if (command) {
+          pendingAdminInput.delete(String(message.from.id));
+        } else if (pendingAdmin.type === 'promo_create') {
+          const parts = text.trim().split(/\s+/);
+          const code = parts[0] || '';
+          const days = Number(parts[1]);
+          const maxUses = parts[2] === undefined ? 1 : Number(parts[2]);
+          const result = store.createPromoCode(code, {
+            days, maxUses, createdBy: message.from.id
+          });
+          if (!result.ok) {
+            const errors = {
+              invalid_code: 'Код должен содержать 4–32 символа A–Z, 0–9, _ или -.',
+              invalid_days: 'Срок должен быть целым числом от 1 до 365 дней.',
+              invalid_limit: 'Лимит должен быть от 0 до 100000. Ноль означает без лимита.',
+              exists: 'Такой промокод уже существует.'
+            };
+            await sendText(chatId, errors[result.reason] || 'Не удалось создать промокод.');
+            return true;
+          }
+          pendingAdminInput.delete(String(message.from.id));
+          store.appendAdminLog({
+            actorId: message.from.id,
+            action: 'promo_create',
+            summary: 'Создан промокод ' + result.code + ' на ' + result.days + ' дн.'
+          });
+          await sendAdminPanel(chatId, message.from.id, 'promos');
+          return true;
+        } else if (pendingAdmin.type === 'user_search') {
+          const targetId = text.trim();
+          if (!/^\d{1,24}$/.test(targetId)) {
+            await sendText(chatId, 'Telegram ID должен содержать только цифры. Повторите ввод или отправьте /cancel.');
+            return true;
+          }
+          pendingAdminInput.delete(String(message.from.id));
+          if (!store.getAdminUser(targetId)) {
+            await sendText(chatId, 'Пользователь не найден.');
+            await sendAdminPanel(chatId, message.from.id, 'users', 0);
+            return true;
+          }
+          await sendAdminPanel(chatId, message.from.id, 'user', 0, targetId);
+          return true;
+        }
+      }
       if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
       if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
       if (command === 'promocode') {

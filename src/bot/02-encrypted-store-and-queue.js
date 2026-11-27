@@ -34,6 +34,7 @@ function createEncryptedStore(options = {}) {
     if (!Array.isArray(decoded.processedUpdateIds)) decoded.processedUpdateIds = [];
     if (!Array.isArray(decoded.deadLetterUpdates)) decoded.deadLetterUpdates = [];
     if (!decoded.promocodes || typeof decoded.promocodes !== 'object' || Array.isArray(decoded.promocodes)) decoded.promocodes = {};
+    if (!Array.isArray(decoded.adminLogs)) decoded.adminLogs = [];
     return decoded;
   }
 
@@ -61,7 +62,8 @@ function createEncryptedStore(options = {}) {
       queue: [],
       processedUpdateIds: [],
       deadLetterUpdates: [],
-      promocodes: {}
+      promocodes: {},
+      adminLogs: []
     };
     return state;
   }
@@ -370,6 +372,116 @@ function createEncryptedStore(options = {}) {
     return user;
   }
 
+
+  function adminUserSnapshot(userId, raw, now = Date.now()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const pro = raw.pro && typeof raw.pro === 'object' && !Array.isArray(raw.pro) ? raw.pro : {};
+    const expiresAt = Math.max(0, Number(pro.expiresAt) || 0);
+    const trialExpiresAt = Math.max(0, Number(pro.trialExpiresAt) || 0);
+    const payments = Array.isArray(pro.payments) ? pro.payments : [];
+    const promoRedemptions = Array.isArray(pro.promoRedemptions) ? pro.promoRedemptions : [];
+    return {
+      id: String(userId),
+      hasApiKey: typeof raw.apiKey === 'string' && raw.apiKey.length > 0,
+      providerId: String(raw.apiProviderId || 'custom').slice(0, 40),
+      model: String(raw.model || '').slice(0, 100),
+      chatCount: Array.isArray(raw.chats) ? raw.chats.length : 0,
+      termsAccepted: typeof raw.termsAcceptedVersion === 'string' && raw.termsAcceptedVersion.length > 0,
+      proExpiresAt: expiresAt,
+      proActive: expiresAt > now,
+      remainingDays: expiresAt > now ? Math.ceil((expiresAt - now) / 86_400_000) : 0,
+      trialActive: expiresAt > now && trialExpiresAt > now && payments.length === 0 && promoRedemptions.length === 0,
+      paymentCount: payments.length,
+      promoRedemptionCount: promoRedemptions.length
+    };
+  }
+
+  function getAdminOverview(now = Date.now()) {
+    const current = load();
+    const users = Object.entries(current.users);
+    let activePro = 0;
+    let activeTrials = 0;
+    for (const [id, raw] of users) {
+      const item = adminUserSnapshot(id, raw, now);
+      if (!item) continue;
+      if (item.proActive) activePro += 1;
+      if (item.trialActive) activeTrials += 1;
+    }
+    const promoCodes = Object.values(current.promocodes);
+    return {
+      totalUsers: users.length,
+      activePro,
+      activeTrials,
+      promoCodes: promoCodes.length,
+      enabledPromoCodes: promoCodes.filter((item) => item && item.enabled === true).length,
+      queue: getQueueStats()
+    };
+  }
+
+  function getAdminUser(userId, now = Date.now()) {
+    const current = load();
+    const id = String(userId);
+    if (!Object.prototype.hasOwnProperty.call(current.users, id)) return null;
+    return adminUserSnapshot(id, current.users[id], now);
+  }
+
+  function listAdminUsers(options = {}) {
+    const current = load();
+    const now = Number(options.now) || Date.now();
+    const pageSize = Math.max(1, Math.min(20, Math.round(Number(options.pageSize) || 8)));
+    const page = Math.max(0, Math.round(Number(options.page) || 0));
+    const query = String(options.query || '').trim();
+    let users = Object.entries(current.users)
+      .map(([id, raw]) => adminUserSnapshot(id, raw, now))
+      .filter(Boolean);
+    if (query) users = users.filter((item) => item.id.includes(query));
+    if (options.onlyPro === true) users = users.filter((item) => item.proActive);
+    users.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
+    const total = users.length;
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pageCount - 1);
+    return {
+      users: users.slice(safePage * pageSize, (safePage + 1) * pageSize),
+      total,
+      page: safePage,
+      pageSize,
+      pageCount,
+      hasPrevious: safePage > 0,
+      hasNext: safePage + 1 < pageCount
+    };
+  }
+
+  function appendAdminLog(entry = {}) {
+    const current = load();
+    if (!Array.isArray(current.adminLogs)) current.adminLogs = [];
+    const record = {
+      at: Date.now(),
+      actorId: String(entry.actorId || '').slice(0, 32),
+      action: String(entry.action || 'unknown').slice(0, 48),
+      targetId: entry.targetId == null ? '' : String(entry.targetId).slice(0, 32),
+      summary: String(entry.summary || '').replace(/[\r\n\t]+/g, ' ').slice(0, 180)
+    };
+    current.adminLogs.push(record);
+    if (current.adminLogs.length > 300) {
+      current.adminLogs.splice(0, current.adminLogs.length - 300);
+    }
+    save();
+    return { ...record };
+  }
+
+  function listAdminLogs(limit = 10) {
+    const current = load();
+    const safeLimit = Math.max(1, Math.min(50, Math.round(Number(limit) || 10)));
+    return (Array.isArray(current.adminLogs) ? current.adminLogs : [])
+      .slice(-safeLimit).reverse().map((item) => ({
+        at: Number(item.at) || 0,
+        actorId: String(item.actorId || ''),
+        action: String(item.action || ''),
+        targetId: String(item.targetId || ''),
+        summary: String(item.summary || '')
+      }));
+  }
+
   function createPromoCode(code, details = {}) {
     const normalized = String(code || '').trim().toUpperCase();
     const days = Math.round(Number(details.days));
@@ -463,6 +575,11 @@ function createEncryptedStore(options = {}) {
     completeUpdate,
     retryUpdate,
     getQueueStats,
+    getAdminOverview,
+    getAdminUser,
+    listAdminUsers,
+    appendAdminLog,
+    listAdminLogs,
     createPromoCode,
     disablePromoCode,
     listPromoCodes,

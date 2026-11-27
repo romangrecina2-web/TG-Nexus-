@@ -2,7 +2,6 @@
  * Source: src/bot/*.js
  * Rebuild with: npm run build
  */
-
 'use strict';
 
 const crypto = require('node:crypto');
@@ -94,6 +93,7 @@ function createEncryptedStore(options = {}) {
     if (!Array.isArray(decoded.processedUpdateIds)) decoded.processedUpdateIds = [];
     if (!Array.isArray(decoded.deadLetterUpdates)) decoded.deadLetterUpdates = [];
     if (!decoded.promocodes || typeof decoded.promocodes !== 'object' || Array.isArray(decoded.promocodes)) decoded.promocodes = {};
+    if (!Array.isArray(decoded.adminLogs)) decoded.adminLogs = [];
     return decoded;
   }
 
@@ -121,7 +121,8 @@ function createEncryptedStore(options = {}) {
       queue: [],
       processedUpdateIds: [],
       deadLetterUpdates: [],
-      promocodes: {}
+      promocodes: {},
+      adminLogs: []
     };
     return state;
   }
@@ -430,6 +431,116 @@ function createEncryptedStore(options = {}) {
     return user;
   }
 
+
+  function adminUserSnapshot(userId, raw, now = Date.now()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const pro = raw.pro && typeof raw.pro === 'object' && !Array.isArray(raw.pro) ? raw.pro : {};
+    const expiresAt = Math.max(0, Number(pro.expiresAt) || 0);
+    const trialExpiresAt = Math.max(0, Number(pro.trialExpiresAt) || 0);
+    const payments = Array.isArray(pro.payments) ? pro.payments : [];
+    const promoRedemptions = Array.isArray(pro.promoRedemptions) ? pro.promoRedemptions : [];
+    return {
+      id: String(userId),
+      hasApiKey: typeof raw.apiKey === 'string' && raw.apiKey.length > 0,
+      providerId: String(raw.apiProviderId || 'custom').slice(0, 40),
+      model: String(raw.model || '').slice(0, 100),
+      chatCount: Array.isArray(raw.chats) ? raw.chats.length : 0,
+      termsAccepted: typeof raw.termsAcceptedVersion === 'string' && raw.termsAcceptedVersion.length > 0,
+      proExpiresAt: expiresAt,
+      proActive: expiresAt > now,
+      remainingDays: expiresAt > now ? Math.ceil((expiresAt - now) / 86_400_000) : 0,
+      trialActive: expiresAt > now && trialExpiresAt > now && payments.length === 0 && promoRedemptions.length === 0,
+      paymentCount: payments.length,
+      promoRedemptionCount: promoRedemptions.length
+    };
+  }
+
+  function getAdminOverview(now = Date.now()) {
+    const current = load();
+    const users = Object.entries(current.users);
+    let activePro = 0;
+    let activeTrials = 0;
+    for (const [id, raw] of users) {
+      const item = adminUserSnapshot(id, raw, now);
+      if (!item) continue;
+      if (item.proActive) activePro += 1;
+      if (item.trialActive) activeTrials += 1;
+    }
+    const promoCodes = Object.values(current.promocodes);
+    return {
+      totalUsers: users.length,
+      activePro,
+      activeTrials,
+      promoCodes: promoCodes.length,
+      enabledPromoCodes: promoCodes.filter((item) => item && item.enabled === true).length,
+      queue: getQueueStats()
+    };
+  }
+
+  function getAdminUser(userId, now = Date.now()) {
+    const current = load();
+    const id = String(userId);
+    if (!Object.prototype.hasOwnProperty.call(current.users, id)) return null;
+    return adminUserSnapshot(id, current.users[id], now);
+  }
+
+  function listAdminUsers(options = {}) {
+    const current = load();
+    const now = Number(options.now) || Date.now();
+    const pageSize = Math.max(1, Math.min(20, Math.round(Number(options.pageSize) || 8)));
+    const page = Math.max(0, Math.round(Number(options.page) || 0));
+    const query = String(options.query || '').trim();
+    let users = Object.entries(current.users)
+      .map(([id, raw]) => adminUserSnapshot(id, raw, now))
+      .filter(Boolean);
+    if (query) users = users.filter((item) => item.id.includes(query));
+    if (options.onlyPro === true) users = users.filter((item) => item.proActive);
+    users.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
+    const total = users.length;
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pageCount - 1);
+    return {
+      users: users.slice(safePage * pageSize, (safePage + 1) * pageSize),
+      total,
+      page: safePage,
+      pageSize,
+      pageCount,
+      hasPrevious: safePage > 0,
+      hasNext: safePage + 1 < pageCount
+    };
+  }
+
+  function appendAdminLog(entry = {}) {
+    const current = load();
+    if (!Array.isArray(current.adminLogs)) current.adminLogs = [];
+    const record = {
+      at: Date.now(),
+      actorId: String(entry.actorId || '').slice(0, 32),
+      action: String(entry.action || 'unknown').slice(0, 48),
+      targetId: entry.targetId == null ? '' : String(entry.targetId).slice(0, 32),
+      summary: String(entry.summary || '').replace(/[\r\n\t]+/g, ' ').slice(0, 180)
+    };
+    current.adminLogs.push(record);
+    if (current.adminLogs.length > 300) {
+      current.adminLogs.splice(0, current.adminLogs.length - 300);
+    }
+    save();
+    return { ...record };
+  }
+
+  function listAdminLogs(limit = 10) {
+    const current = load();
+    const safeLimit = Math.max(1, Math.min(50, Math.round(Number(limit) || 10)));
+    return (Array.isArray(current.adminLogs) ? current.adminLogs : [])
+      .slice(-safeLimit).reverse().map((item) => ({
+        at: Number(item.at) || 0,
+        actorId: String(item.actorId || ''),
+        action: String(item.action || ''),
+        targetId: String(item.targetId || ''),
+        summary: String(item.summary || '')
+      }));
+  }
+
   function createPromoCode(code, details = {}) {
     const normalized = String(code || '').trim().toUpperCase();
     const days = Math.round(Number(details.days));
@@ -523,6 +634,11 @@ function createEncryptedStore(options = {}) {
     completeUpdate,
     retryUpdate,
     getQueueStats,
+    getAdminOverview,
+    getAdminUser,
+    listAdminUsers,
+    appendAdminLog,
+    listAdminLogs,
     createPromoCode,
     disablePromoCode,
     listPromoCodes,
@@ -1287,6 +1403,7 @@ function createBotChat(options = {}) {
 
   const REQUIRED_TERMS_VERSION = '2026-11-26-v2';
 const TERMS_SUPPORT_URL = 'https://t.me/TG_Nexus_official';
+const pendingAdminInput = new Map();
 
 function getTermsAcceptedAppUrl() {
   const value = String(options.webAppUrl || process.env.WEB_APP_URL || '');
@@ -1490,7 +1607,7 @@ function getSettingsUrl() {
     const modelLabel = model.length > 76 ? model.slice(0, 73) + '…' : model;
     const searchEnabled = settings.internetSearch === true;
     const sandboxEnabled = settings.sandbox === true;
-    return modelCatalogRich([
+    const blocks = [
       modelCatalogBlocksHeading('Настройки TG Nexus', 1),
       modelCatalogBlocksHeading('Подключение', 2),
       modelCatalogBlocksParagraph('Провайдер: ' + currentProviderName(user)),
@@ -1525,7 +1642,13 @@ function getSettingsUrl() {
         modelCatalogButton('🌐 Поиск: ' + (searchEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:search', searchEnabled ? 'success' : 'danger'),
         modelCatalogButton('🧪 Песочница: ' + (sandboxEnabled ? 'ВКЛ' : 'ВЫКЛ'), 'tn:sandbox', sandboxEnabled ? 'success' : 'danger')
       ])
-    ]);
+    ];
+    if (isBillingAdmin(user.id)) {
+      blocks.push(modelCatalogBlocksButtons([
+        modelCatalogButton('🛡️ Админ-панель', 'admin:home', 'primary')
+      ]));
+    }
+    return modelCatalogRich(blocks);
   }
 
 
@@ -1740,6 +1863,7 @@ function getSettingsUrl() {
       ],
       [{ text: '↻ Обновить', callback_data: 'tn:refresh' }]
     ];
+    if (isBillingAdmin(user.id)) rows.push([{ text: '🛡️ Админ-панель', callback_data: 'admin:home' }]);
     const url = getSettingsUrl();
     if (url) rows.push([{ text: 'Открыть все настройки', web_app: { url } }]);
     return { inline_keyboard: rows };
@@ -1755,6 +1879,253 @@ function getSettingsUrl() {
   async function safeAnswerCallback(queryId, text = '') {
     try { await answerCallbackQuery(queryId, text); } catch {}
   }
+
+
+  function adminFormatDate(timestamp) {
+    const value = Number(timestamp) || 0;
+    return value > 0 ? new Date(value).toLocaleString('ru-RU', {
+      dateStyle: 'medium', timeStyle: 'short'
+    }) : 'не указана';
+  }
+
+  function buildAdminPanel(userId, view = 'home', page = 0, targetId = '') {
+    const homeButton = { text: '← Админ-панель', callback_data: 'admin:home' };
+    const settingsButton = { text: '← Настройки', callback_data: 'tn:back' };
+    const rows = [];
+    let text = 'TG Nexus · Админ-панель';
+
+    if (view === 'home') {
+      const stats = store.getAdminOverview();
+      const queue = stats.queue || {};
+      const worker = getWorkerStats();
+      text = [
+        '🛡 TG NEXUS · АДМИН-ПАНЕЛЬ',
+        '',
+        'Пользователи: ' + stats.totalUsers,
+        'Активные PRO: ' + stats.activePro,
+        'Из них пробный период: ' + stats.activeTrials,
+        'Промокоды: ' + stats.enabledPromoCodes + '/' + stats.promoCodes + ' активны',
+        '',
+        'Очередь: ' + (queue.pending || 0) + ' ожидают · ' +
+          (queue.processing || 0) + ' обрабатываются',
+        'Воркеры: ' + (worker.running ? 'работают' : 'остановлены')
+      ].join('\n');
+      rows.push([
+        { text: '👥 Пользователи', callback_data: 'admin:users:0' },
+        { text: '💎 Подписки', callback_data: 'admin:subs:0' }
+      ]);
+      rows.push([
+        { text: '🎟 Промокоды', callback_data: 'admin:promos' },
+        { text: '⚙️ Система', callback_data: 'admin:system' }
+      ]);
+      rows.push([{ text: '📋 Журнал действий', callback_data: 'admin:logs' }]);
+      rows.push([settingsButton]);
+    } else if (view === 'users' || view === 'subs') {
+      const onlyPro = view === 'subs';
+      const result = store.listAdminUsers({ page, pageSize: 8, onlyPro });
+      text = (onlyPro ? '💎 АКТИВНЫЕ PRO-ПОДПИСКИ' : '👥 ПОЛЬЗОВАТЕЛИ') +
+        '\nВсего: ' + result.total + '\nСтраница: ' + (result.page + 1) + '/' + result.pageCount;
+      if (!result.users.length) text += '\n\nСписок пока пуст.';
+      for (const item of result.users) {
+        const status = item.proActive
+          ? 'PRO до ' + adminFormatDate(item.proExpiresAt)
+          : (item.hasApiKey ? 'API подключён' : 'без API-ключа');
+        text += '\n\n' + item.id + ' · ' + status + ' · чатов: ' + item.chatCount;
+        rows.push([{ text: '👤 ' + item.id + (item.proActive ? ' · PRO' : ''), callback_data: 'admin:user:' + item.id }]);
+      }
+      if (!onlyPro) rows.push([{ text: '🔎 Найти по Telegram ID', callback_data: 'admin:users:search' }]);
+      const navigation = [];
+      if (result.hasPrevious) navigation.push({ text: '← Назад', callback_data: 'admin:' + (onlyPro ? 'subs:' : 'users:') + (result.page - 1) });
+      if (result.hasNext) navigation.push({ text: 'Далее →', callback_data: 'admin:' + (onlyPro ? 'subs:' : 'users:') + (result.page + 1) });
+      if (navigation.length) rows.push(navigation);
+      rows.push([homeButton]);
+    } else if (view === 'user') {
+      const item = store.getAdminUser(targetId);
+      if (!item) {
+        text = 'Пользователь ' + targetId + ' не найден.';
+        rows.push([{ text: '← К пользователям', callback_data: 'admin:users:0' }], [homeButton]);
+      } else {
+        text = [
+          '👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ',
+          '',
+          'Telegram ID: ' + item.id,
+          'PRO: ' + (item.proActive ? 'активен' : 'не активен'),
+          'Действует до: ' + adminFormatDate(item.proExpiresAt),
+          'Осталось дней: ' + item.remainingDays,
+          'Пробный период: ' + (item.trialActive ? 'да' : 'нет'),
+          'Платежей: ' + item.paymentCount,
+          'Активаций промокодов: ' + item.promoRedemptionCount,
+          '',
+          'API-ключ: ' + (item.hasApiKey ? 'сохранён' : 'не добавлен'),
+          'Провайдер: ' + item.providerId,
+          'Модель: ' + (item.model || 'не выбрана'),
+          'Чатов: ' + item.chatCount,
+          'Условия приняты: ' + (item.termsAccepted ? 'да' : 'нет')
+        ].join('\n');
+        rows.push([
+          { text: '+7 дней PRO', callback_data: 'admin:userpro:' + item.id + ':7' },
+          { text: '+30 дней PRO', callback_data: 'admin:userpro:' + item.id + ':30' }
+        ]);
+        rows.push([{ text: 'Отозвать PRO', callback_data: 'admin:userpro:' + item.id + ':revoke' }]);
+        rows.push([{ text: '← К пользователям', callback_data: 'admin:users:0' }, homeButton]);
+      }
+    } else if (view === 'promos') {
+      const list = store.listPromoCodes().slice(-12).reverse();
+      text = '🎟 ПРОМОКОДЫ\nВсего: ' + store.listPromoCodes().length;
+      if (!list.length) text += '\n\nПромокодов пока нет.';
+      for (const promo of list) {
+        text += '\n\n' + promo.code + ' · +' + promo.days + ' дн. · ' +
+          (promo.enabled ? 'активен' : 'отключён') + ' · ' +
+          promo.uses + '/' + (promo.maxUses || '∞');
+        if (promo.enabled) rows.push([{ text: 'Отключить ' + promo.code, callback_data: 'admin:promo:off:' + promo.code }]);
+      }
+      rows.push([{ text: '➕ Создать промокод', callback_data: 'admin:promo:new' }]);
+      rows.push([homeButton]);
+    } else if (view === 'system') {
+      const queue = store.getQueueStats();
+      const worker = getWorkerStats();
+      text = [
+        '⚙️ СОСТОЯНИЕ СИСТЕМЫ',
+        '',
+        'Зашифрованное хранилище: ' + (store.enabled ? 'доступно' : 'недоступно'),
+        'Время работы процесса: ' + Math.floor(process.uptime() / 60) + ' мин.',
+        'Telegram worker: ' + (worker.running ? 'работает' : 'остановлен'),
+        'Активных worker: ' + worker.activeWorkers + '/' + worker.concurrency,
+        'Очередь: ' + queue.total + '/' + queue.capacity,
+        'Ожидают: ' + queue.pending,
+        'Обрабатываются: ' + queue.processing,
+        'Отложенные ошибки: ' + queue.deadLettered,
+        'Старейшая задача: ' + Math.round((queue.oldestPendingAgeMs || 0) / 1000) + ' сек.',
+        'Восстановлено из резервной копии: ' + (queue.recoveredFromBackup ? 'да' : 'нет')
+      ].join('\n');
+      rows.push([{ text: '↻ Обновить', callback_data: 'admin:system' }], [homeButton]);
+    } else if (view === 'logs') {
+      const logs = store.listAdminLogs(15);
+      text = '📋 ЖУРНАЛ ДЕЙСТВИЙ\nПоследние записи: ' + logs.length;
+      if (!logs.length) text += '\n\nДействий пока нет.';
+      for (const entry of logs) {
+        text += '\n\n' + adminFormatDate(entry.at) + '\n' +
+          entry.action + (entry.targetId ? ' · пользователь ' + entry.targetId : '') +
+          '\n' + entry.summary + '\nАдминистратор: ' + (entry.actorId || 'неизвестен');
+      }
+      rows.push([{ text: '↻ Обновить', callback_data: 'admin:logs' }], [homeButton]);
+    } else if (view === 'input-promo') {
+      text = '➕ СОЗДАНИЕ ПРОМОКОДА\n\nОтправьте одним сообщением: CODE DAYS MAX_USES\nНапример: NEXUS7 7 10\n\nMAX_USES = 0 означает без ограничения. Для отмены нажмите кнопку ниже или отправьте /cancel.';
+      rows.push([{ text: 'Отмена', callback_data: 'admin:input:cancel' }]);
+    } else if (view === 'input-search') {
+      text = '🔎 ПОИСК ПОЛЬЗОВАТЕЛЯ\n\nОтправьте Telegram ID пользователя. Поиск выполняется только по точному числовому ID.';
+      rows.push([{ text: 'Отмена', callback_data: 'admin:input:cancel' }]);
+    } else {
+      text = 'Раздел не найден.';
+      rows.push([homeButton]);
+    }
+
+    return { text, replyMarkup: { inline_keyboard: rows } };
+  }
+
+  async function sendAdminPanel(chatId, userId, view = 'home', page = 0, targetId = '') {
+    if (!isBillingAdmin(userId)) return false;
+    const panel = buildAdminPanel(userId, view, page, targetId);
+    await sendTelegramMessage(chatId, panel.text, { reply_markup: panel.replyMarkup });
+    return true;
+  }
+
+  async function renderAdminPanel(query, userId, view = 'home', page = 0, targetId = '', notice = 'Админ-панель обновлена.') {
+    const message = query && query.message;
+    if (!message || !message.chat || !Number.isSafeInteger(Number(message.message_id))) {
+      await safeAnswerCallback(query.id, 'Сообщение панели недоступно. Откройте настройки ещё раз.');
+      return false;
+    }
+    const panel = buildAdminPanel(userId, view, page, targetId);
+    try {
+      await editTelegramMessage(message.chat.id, message.message_id, panel.text, panel.replyMarkup);
+    } catch (error) {
+      const description = String(error && (error.telegramDescription || error.message) || '');
+      if (!/message is not modified/i.test(description)) {
+        await safeAnswerCallback(query.id, 'Не удалось обновить админ-панель.');
+        return false;
+      }
+    }
+    await safeAnswerCallback(query.id, notice);
+    return true;
+  }
+
+  async function handleAdminCallback(query, userId, data) {
+    if (!isBillingAdmin(userId)) {
+      await safeAnswerCallback(query.id, 'Доступ запрещён.');
+      return true;
+    }
+    if (data === 'admin:home') return renderAdminPanel(query, userId, 'home');
+    if (data === 'admin:users:search') {
+      pendingAdminInput.set(String(userId), { type: 'user_search', createdAt: Date.now() });
+      return renderAdminPanel(query, userId, 'input-search', 0, '', 'Отправьте Telegram ID.');
+    }
+    if (data === 'admin:promo:new') {
+      pendingAdminInput.set(String(userId), { type: 'promo_create', createdAt: Date.now() });
+      return renderAdminPanel(query, userId, 'input-promo', 0, '', 'Отправьте параметры промокода.');
+    }
+    if (data === 'admin:input:cancel') {
+      pendingAdminInput.delete(String(userId));
+      return renderAdminPanel(query, userId, 'home', 0, '', 'Ввод отменён.');
+    }
+    const pageMatch = data.match(/^admin:(users|subs):(\d{1,4})$/);
+    if (pageMatch) return renderAdminPanel(query, userId, pageMatch[1], Number(pageMatch[2]));
+    if (data === 'admin:promos') return renderAdminPanel(query, userId, 'promos');
+    if (data === 'admin:system') return renderAdminPanel(query, userId, 'system');
+    if (data === 'admin:logs') return renderAdminPanel(query, userId, 'logs');
+    const userMatch = data.match(/^admin:user:(\d{1,24})$/);
+    if (userMatch) return renderAdminPanel(query, userId, 'user', 0, userMatch[1]);
+
+    const proMatch = data.match(/^admin:userpro:(\d{1,24}):(7|30|revoke)$/);
+    if (proMatch) {
+      const targetId = proMatch[1];
+      const action = proMatch[2];
+      if (!store.getAdminUser(targetId)) {
+        await safeAnswerCallback(query.id, 'Пользователь не найден.');
+        return true;
+      }
+      const target = store.getUser(targetId);
+      const previous = target.pro ? JSON.parse(JSON.stringify(target.pro)) : null;
+      const pro = normalizeProState(target);
+      const now = Date.now();
+      if (action === 'revoke') {
+        pro.expiresAt = 0;
+        pro.revokedAt = now;
+      } else {
+        pro.expiresAt = Math.max(now, Number(pro.expiresAt) || 0) + Number(action) * 86_400_000;
+      }
+      try {
+        store.save();
+        store.appendAdminLog({
+          actorId: userId,
+          action: action === 'revoke' ? 'pro_revoke' : 'pro_grant',
+          targetId,
+          summary: action === 'revoke' ? 'PRO-доступ отозван' : 'Выдано +' + action + ' дней PRO'
+        });
+      } catch {
+        if (previous) target.pro = previous;
+        else delete target.pro;
+        await safeAnswerCallback(query.id, 'Не удалось сохранить изменение подписки.');
+        return true;
+      }
+      return renderAdminPanel(query, userId, 'user', 0, targetId,
+        action === 'revoke' ? 'PRO-доступ отозван.' : 'PRO продлён на ' + action + ' дней.');
+    }
+
+    const promoMatch = data.match(/^admin:promo:off:([A-Z0-9_-]{4,32})$/);
+    if (promoMatch) {
+      const code = promoMatch[1];
+      const disabled = store.disablePromoCode(code);
+      if (disabled) {
+        store.appendAdminLog({ actorId: userId, action: 'promo_disable', summary: 'Отключён промокод ' + code });
+      }
+      return renderAdminPanel(query, userId, 'promos', 0, '', disabled ? 'Промокод отключён.' : 'Промокод не найден.');
+    }
+
+    await safeAnswerCallback(query.id, 'Эта кнопка админ-панели устарела.');
+    return true;
+  }
+
 
   async function renderSettingsCallback(query, user, view = 'main', answerText = 'Настройки обновлены.') {
     const message = query && query.message;
@@ -1800,7 +2171,7 @@ function getSettingsUrl() {
     if (!query || typeof query.id !== 'string' || typeof query.data !== 'string' ||
         (!query.data.startsWith('tn:') && !query.data.startsWith('mc:') &&
          !query.data.startsWith('terms:') && !query.data.startsWith('pro:') &&
-         !query.data.startsWith('regen:'))) return false;
+         !query.data.startsWith('regen:') && !query.data.startsWith('admin:'))) return false;
 
     const message = query.message;
     const userId = query.from && query.from.id;
@@ -1881,6 +2252,7 @@ function getSettingsUrl() {
     let view = 'main';
     let notice = 'Настройки обновлены.';
     try {
+      if (data.startsWith('admin:')) return await handleAdminCallback(query, userId, data);
       if (data.startsWith('regen:')) return await handleRegenerateCallback(query, user, data);
       if (data.startsWith('pro:')) return await handleProCallback(query, user);
       if (data.startsWith('mc:')) {
@@ -2512,7 +2884,7 @@ function formatProDate(timestamp) {
 }
 
 function isBillingAdmin(userId) {
-  const configured = String(process.env.BOT_ADMIN_IDS || '');
+  const configured = String(options.adminIds == null ? (process.env.BOT_ADMIN_IDS || '') : options.adminIds);
   return configured.split(',').map((item) => item.trim()).filter(Boolean)
     .includes(String(userId));
 }
@@ -3018,6 +3390,8 @@ async function handlePromoListCommand(chatId, userId) {
       const timeoutPending = pendingTimeoutInput.has(inputKey);
       const modelSearchPending = pendingModelCatalogSearches.has(inputKey) ||
         !!(user && user.pendingModelCatalogSearch);
+      const adminInputPending = pendingAdminInput.has(inputKey);
+      if (adminInputPending) pendingAdminInput.delete(inputKey);
       pendingModelCatalogSearches.delete(inputKey);
       const previousPrompt = user && user.pendingSystemPromptInput;
       const previousModelSearch = user && user.pendingModelCatalogSearch;
@@ -3032,7 +3406,9 @@ async function handlePromoListCommand(chatId, userId) {
         }
       }
       pendingTimeoutInput.delete(inputKey);
-      const notice = promptPending
+      const notice = adminInputPending
+        ? 'Ввод админ-панели отменён.'
+        : promptPending
         ? 'Ввод инструкции ИИ отменён.'
         : timeoutPending
           ? 'Ввод тайм-аута отменён.'
@@ -3091,6 +3467,64 @@ async function handlePromoListCommand(chatId, userId) {
     }
 
     try {
+
+      const pendingAdmin = pendingAdminInput.get(String(message.from.id));
+      if (pendingAdmin) {
+        if (!isBillingAdmin(message.from.id)) {
+          pendingAdminInput.delete(String(message.from.id));
+          await sendText(chatId, 'Доступ к этому действию отозван.');
+          return true;
+        }
+        if (!Number.isFinite(Number(pendingAdmin.createdAt)) ||
+            Date.now() - Number(pendingAdmin.createdAt) > 10 * 60_000) {
+          pendingAdminInput.delete(String(message.from.id));
+          await sendText(chatId, 'Время ввода истекло. Откройте админ-панель снова.');
+          return true;
+        }
+        if (command) {
+          pendingAdminInput.delete(String(message.from.id));
+        } else if (pendingAdmin.type === 'promo_create') {
+          const parts = text.trim().split(/\s+/);
+          const code = parts[0] || '';
+          const days = Number(parts[1]);
+          const maxUses = parts[2] === undefined ? 1 : Number(parts[2]);
+          const result = store.createPromoCode(code, {
+            days, maxUses, createdBy: message.from.id
+          });
+          if (!result.ok) {
+            const errors = {
+              invalid_code: 'Код должен содержать 4–32 символа A–Z, 0–9, _ или -.',
+              invalid_days: 'Срок должен быть целым числом от 1 до 365 дней.',
+              invalid_limit: 'Лимит должен быть от 0 до 100000. Ноль означает без лимита.',
+              exists: 'Такой промокод уже существует.'
+            };
+            await sendText(chatId, errors[result.reason] || 'Не удалось создать промокод.');
+            return true;
+          }
+          pendingAdminInput.delete(String(message.from.id));
+          store.appendAdminLog({
+            actorId: message.from.id,
+            action: 'promo_create',
+            summary: 'Создан промокод ' + result.code + ' на ' + result.days + ' дн.'
+          });
+          await sendAdminPanel(chatId, message.from.id, 'promos');
+          return true;
+        } else if (pendingAdmin.type === 'user_search') {
+          const targetId = text.trim();
+          if (!/^\d{1,24}$/.test(targetId)) {
+            await sendText(chatId, 'Telegram ID должен содержать только цифры. Повторите ввод или отправьте /cancel.');
+            return true;
+          }
+          pendingAdminInput.delete(String(message.from.id));
+          if (!store.getAdminUser(targetId)) {
+            await sendText(chatId, 'Пользователь не найден.');
+            await sendAdminPanel(chatId, message.from.id, 'users', 0);
+            return true;
+          }
+          await sendAdminPanel(chatId, message.from.id, 'user', 0, targetId);
+          return true;
+        }
+      }
       if (command === 'pro') { await sendProMenu(chatId, message.from.id); return true; }
       if (command === 'mypro') { await sendProStatus(chatId, message.from.id); return true; }
       if (command === 'promocode') {

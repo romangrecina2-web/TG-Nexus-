@@ -89,6 +89,7 @@ function makeBot(options = {}) {
     fetchImpl,
     telegramApiCall: options.telegramApiCall,
     proBillingEnabled: options.proBillingEnabled,
+    adminIds: options.adminIds,
     sendTelegramRichMessage: async (chatId, richMessage, sendOptions) => {
       const record = {
         chatId,
@@ -1771,4 +1772,92 @@ test('provider error messages also offer a button to retry the original request'
     item.role === 'assistant' && item.content === 'Ответ после повтора'));
   assert.ok(ctx.editedRichMessages.some((item) =>
     item.messageId === errorMessage.messageId && item.richMessage.markdown.includes('Ответ после повтора')));
+});
+
+
+test('admin button is shown only to configured administrators in settings', async () => {
+  const owner = makeBot({ adminIds: '123456' });
+  await owner.bot.handleMessage(message('/settings', 123456, 11001));
+  const rich = owner.editedRichMessages.at(-1);
+  assert.ok(rich);
+  const buttons = rich.richMessage.blocks
+    .filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons || []);
+  assert.ok(buttons.some((button) => button.callback_data === 'admin:home'));
+
+  const regular = makeBot({ adminIds: '999999' });
+  await regular.bot.handleMessage(message('/settings', 123456, 11002));
+  const regularRich = regular.editedRichMessages.at(-1);
+  const regularButtons = regularRich.richMessage.blocks
+    .filter((block) => block.type === 'buttons')
+    .flatMap((block) => block.buttons || []);
+  assert.equal(regularButtons.some((button) => button.callback_data === 'admin:home'), false);
+});
+
+test('admin panel rejects non-admin callback attempts', async () => {
+  const ctx = makeBot({ adminIds: '999999' });
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:home', 123456, 11003));
+  assert.equal(ctx.editedMessages.length, 0);
+  assert.equal(ctx.callbackAnswers.at(-1).text, 'Доступ запрещён.');
+});
+
+test('admin panel lists users, grants and revokes PRO, and writes an audit log', async () => {
+  const ctx = makeBot({ adminIds: '123456' });
+  const target = ctx.bot.store.getUser(222222);
+  target.apiKey = 'must-never-be-exposed';
+  target.model = 'test/model-a';
+  ctx.bot.store.save();
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:home', 123456, 11004));
+  assert.match(ctx.editedMessages.at(-1).text, /Пользователи: 1/);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:users:0', 123456, 11004));
+  assert.match(ctx.editedMessages.at(-1).text, /222222/);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:user:222222', 123456, 11004));
+  assert.match(ctx.editedMessages.at(-1).text, /API-ключ: сохранён/);
+  assert.equal(ctx.editedMessages.at(-1).text.includes('must-never-be-exposed'), false);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:userpro:222222:7', 123456, 11004));
+  assert.equal(ctx.bot.getProStatus(222222).active, true);
+  assert.equal(ctx.bot.store.listAdminLogs(10).some((item) => item.action === 'pro_grant'), true);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:userpro:222222:revoke', 123456, 11004));
+  assert.equal(ctx.bot.getProStatus(222222).active, false);
+  assert.equal(ctx.bot.store.listAdminLogs(10).some((item) => item.action === 'pro_revoke'), true);
+});
+
+test('admin panel creates and disables promo codes through inline controls', async () => {
+  const ctx = makeBot({ adminIds: '123456' });
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:promo:new', 123456, 11005));
+  assert.match(ctx.editedMessages.at(-1).text, /CODE DAYS MAX_USES/);
+
+  await ctx.bot.handleMessage(message('NEXUS7 7 3', 123456, 11006));
+  assert.equal(ctx.bot.store.listPromoCodes()[0].code, 'NEXUS7');
+  assert.equal(ctx.bot.store.listPromoCodes()[0].enabled, true);
+  assert.equal(ctx.bot.store.listAdminLogs(10).some((item) => item.action === 'promo_create'), true);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:promo:off:NEXUS7', 123456, 11007));
+  assert.equal(ctx.bot.store.listPromoCodes()[0].enabled, false);
+  assert.equal(ctx.bot.store.listAdminLogs(10).some((item) => item.action === 'promo_disable'), true);
+});
+
+test('admin user lookup and admin store snapshots never reveal provider API keys or chat content', async () => {
+  const ctx = makeBot({ adminIds: '123456' });
+  const user = ctx.bot.store.getUser(333333);
+  user.apiKey = 'super-secret-key';
+  user.chats.push({ id: 'private-chat', title: 'private title', messages: [{ role: 'user', content: 'private prompt' }] });
+  ctx.bot.store.save();
+
+  const snapshot = ctx.bot.store.getAdminUser(333333);
+  assert.equal(snapshot.id, '333333');
+  assert.equal(snapshot.hasApiKey, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(snapshot, 'apiKey'), false);
+  assert.equal(JSON.stringify(snapshot).includes('super-secret-key'), false);
+  assert.equal(JSON.stringify(snapshot).includes('private prompt'), false);
+
+  await ctx.bot.handleCallbackQuery(callbackQuery('admin:users:search', 123456, 11008));
+  await ctx.bot.handleMessage(message('333333', 123456, 11009));
+  assert.match(ctx.sent.at(-1).text, /333333/);
+  assert.equal(ctx.sent.at(-1).text.includes('super-secret-key'), false);
 });

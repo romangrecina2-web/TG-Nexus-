@@ -82,7 +82,7 @@ function formatProDate(timestamp) {
 }
 
 function isBillingAdmin(userId) {
-  const configured = String(process.env.BOT_ADMIN_IDS || '');
+  const configured = String(options.adminIds == null ? (process.env.BOT_ADMIN_IDS || '') : options.adminIds);
   return configured.split(',').map((item) => item.trim()).filter(Boolean)
     .includes(String(userId));
 }
